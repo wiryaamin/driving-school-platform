@@ -1,0 +1,16 @@
+{
+  "name": "@platform/types",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared TypeScript types for the entire platform",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

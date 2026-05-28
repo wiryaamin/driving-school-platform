@@ -1,0 +1,10 @@
+{
+  "title": "Dashboard",
+  "subtitle": "Welcome back, {{name}}",
+  "stat": {
+    "active_students": "Active students",
+    "lessons_today": "Lessons today",
+    "pending_invoices": "Pending invoices",
+    "monthly_revenue": "Monthly revenue"
+  }
+}

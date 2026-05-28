@@ -1,0 +1,49 @@
+{
+  "boundary": {
+    "title": "Något gick fel",
+    "message": "Ett oväntat fel uppstod. Vi ber om ursäkt för besväret.",
+    "retry": "Försök igen",
+    "go_home": "Gå till startsidan",
+    "error_id": "Fel-ID: {{traceId}}"
+  },
+  "not_found": {
+    "title": "Sidan hittades inte",
+    "message": "Sidan du letar efter finns inte eller har flyttats.",
+    "go_home": "Gå till startsidan"
+  },
+  "forbidden": {
+    "title": "Åtkomst nekad",
+    "message": "Du har inte behörighet att se den här sidan. Kontakta din administratör om du anser att detta är felaktigt.",
+    "go_back": "Gå tillbaka"
+  },
+  "api": {
+    "UNAUTHORIZED": "Du är inte inloggad. Logga in och försök igen.",
+    "FORBIDDEN": "Du har inte behörighet att utföra denna åtgärd.",
+    "SESSION_EXPIRED": "Din session har gått ut. Logga in igen.",
+    "NOT_FOUND": "Resursen hittades inte.",
+    "CONFLICT": "Resursen existerar redan.",
+    "VALIDATION_ERROR": "Kontrollera dina uppgifter och försök igen.",
+    "SLOT_UNAVAILABLE": "Den valda lektionstiden är inte längre tillgänglig.",
+    "BOOKING_WINDOW_EXCEEDED": "Det är för sent att boka den här lektionen.",
+    "INSUFFICIENT_CREDITS": "Eleven har inga fler körlektioner kvar i sitt paket.",
+    "DUPLICATE_PERSONAL_NUMBER": "Det finns redan ett konto med detta personnummer.",
+    "INVOICE_ALREADY_PAID": "Den här fakturan är redan betald.",
+    "SUBSCRIPTION_LIMIT_EXCEEDED": "Du har nått gränsen för ditt abonnemang. Uppgradera för att fortsätta.",
+    "RATE_LIMIT_EXCEEDED": "För många förfrågningar. Vänta en stund och försök igen.",
+    "INTERNAL_ERROR": "Något gick fel hos oss. Kontakta support om problemet kvarstår.",
+    "EXTERNAL_SERVICE_ERROR": "En extern tjänst är tillfälligt otillgänglig. Försök igen om en stund."
+  },
+  "validation": {
+    "required": "Fältet är obligatoriskt",
+    "email_invalid": "Ange en giltig e-postadress",
+    "personal_number_invalid": "Ange ett giltigt personnummer (YYYYMMDD-XXXX)",
+    "org_number_invalid": "Ange ett giltigt organisationsnummer (XXXXXX-XXXX)",
+    "postal_code_invalid": "Ange ett giltigt postnummer (5 siffror)",
+    "phone_invalid": "Ange ett giltigt telefonnummer",
+    "min_length": "Måste vara minst {{min}} tecken",
+    "max_length": "Får vara högst {{max}} tecken",
+    "min_value": "Värdet måste vara minst {{min}}",
+    "max_value": "Värdet får vara högst {{max}}",
+    "passwords_no_match": "Lösenorden stämmer inte överens"
+  }
+}

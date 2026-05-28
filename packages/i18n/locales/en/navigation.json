@@ -1,0 +1,16 @@
+{
+  "item": {
+    "dashboard": "Dashboard",
+    "lessons": "My Lessons",
+    "progress": "My Progress",
+    "documents": "Documents",
+    "messages": "Messages",
+    "profile": "Profile"
+  },
+  "topbar": {
+    "notifications_title": "Notifications",
+    "notifications_empty": "No unread notifications",
+    "profile_menu": "My profile",
+    "logout": "Sign out"
+  }
+}

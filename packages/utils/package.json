@@ -1,0 +1,26 @@
+{
+  "name": "@platform/utils",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared utilities — formatters, validators, logger, constants",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./formatters": "./src/formatters/index.ts",
+    "./validators": "./src/validators/index.ts",
+    "./constants": "./src/constants/index.ts",
+    "./logger": "./src/logger/index.ts",
+    "./errors": "./src/errors/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@platform/types": "workspace:*"
+  }
+}

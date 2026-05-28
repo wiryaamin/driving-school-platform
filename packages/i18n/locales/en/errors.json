@@ -1,0 +1,47 @@
+{
+  "boundary": {
+    "title": "Something went wrong",
+    "message": "An unexpected error occurred. We apologize for the inconvenience.",
+    "retry": "Try again",
+    "go_home": "Go to homepage",
+    "error_id": "Error ID: {{traceId}}"
+  },
+  "not_found": {
+    "title": "Page not found",
+    "message": "The page you're looking for doesn't exist or has been moved.",
+    "go_home": "Go to homepage"
+  },
+  "forbidden": {
+    "title": "Access denied",
+    "message": "You don't have permission to view this page.",
+    "go_back": "Go back"
+  },
+  "api": {
+    "UNAUTHORIZED": "You are not signed in. Please sign in and try again.",
+    "FORBIDDEN": "You don't have permission to perform this action.",
+    "SESSION_EXPIRED": "Your session has expired. Please sign in again.",
+    "NOT_FOUND": "The requested resource was not found.",
+    "CONFLICT": "This resource already exists.",
+    "VALIDATION_ERROR": "Please check your input and try again.",
+    "SLOT_UNAVAILABLE": "The selected lesson time is no longer available.",
+    "BOOKING_WINDOW_EXCEEDED": "It's too late to book this lesson.",
+    "INSUFFICIENT_CREDITS": "You don't have any lessons remaining in your package.",
+    "DUPLICATE_PERSONAL_NUMBER": "An account with this personal number already exists.",
+    "INVOICE_ALREADY_PAID": "This invoice has already been paid.",
+    "SUBSCRIPTION_LIMIT_EXCEEDED": "You've reached your plan limit. Upgrade to continue.",
+    "RATE_LIMIT_EXCEEDED": "Too many requests. Please wait a moment and try again.",
+    "INTERNAL_ERROR": "Something went wrong. Please contact support if the issue persists.",
+    "EXTERNAL_SERVICE_ERROR": "An external service is temporarily unavailable. Please try again."
+  },
+  "validation": {
+    "required": "This field is required",
+    "email_invalid": "Please enter a valid email address",
+    "postal_code_invalid": "Please enter a valid postal code",
+    "phone_invalid": "Please enter a valid phone number",
+    "min_length": "Must be at least {{min}} characters",
+    "max_length": "Must be at most {{max}} characters",
+    "min_value": "Value must be at least {{min}}",
+    "max_value": "Value must be at most {{max}}",
+    "passwords_no_match": "Passwords do not match"
+  }
+}

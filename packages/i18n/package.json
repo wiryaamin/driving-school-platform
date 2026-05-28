@@ -1,0 +1,26 @@
+{
+  "name": "@platform/i18n",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Localization — Swedish (primary) and English translations with i18next",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./admin": "./src/admin.ts",
+    "./student": "./src/student.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "i18next": "^24.2.0",
+    "react-i18next": "^15.4.0",
+    "i18next-browser-languagedetector": "^8.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@platform/config",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared configuration — ESLint, Prettier, TypeScript base configs",
+  "exports": {
+    "./tsconfig-base": "./tsconfig.base.json",
+    "./eslint-base": "./eslint.config.base.js",
+    "./prettier": "./prettier.config.js",
+    "./tailwind-base": "./tailwind.config.base.js"
+  }
+}

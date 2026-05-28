@@ -1,0 +1,46 @@
+{
+  "title": "Instrumentpanel",
+  "subtitle": "Välkommen tillbaka, {{name}}",
+  "organization_greeting": "{{organization}}",
+  "period": {
+    "today": "Idag",
+    "this_week": "Denna vecka",
+    "this_month": "Denna månad",
+    "last_30_days": "Senaste 30 dagarna"
+  },
+  "stat": {
+    "active_students": "Aktiva elever",
+    "active_students_description": "Elever med pågående utbildning",
+    "lessons_today": "Lektioner idag",
+    "lessons_today_description": "Bokade lektioner för idag",
+    "pending_invoices": "Obetalda fakturor",
+    "pending_invoices_description": "Fakturor som väntar på betalning",
+    "monthly_revenue": "Månadens intäkt",
+    "monthly_revenue_description": "Totala intäkter denna månad",
+    "lessons_this_week": "Lektioner denna vecka",
+    "new_students_this_month": "Nya elever denna månad",
+    "pass_rate": "Godkännandegrad",
+    "pass_rate_description": "Elever som godkänts på körprov"
+  },
+  "section": {
+    "upcoming_lessons": "Kommande lektioner",
+    "recent_activity": "Senaste aktivitet",
+    "alerts": "Varningar",
+    "quick_actions": "Snabbåtgärder"
+  },
+  "quick_action": {
+    "book_lesson": "Boka lektion",
+    "add_student": "Ny elev",
+    "create_invoice": "Ny faktura",
+    "send_message": "Skicka meddelande"
+  },
+  "alert": {
+    "expiring_licenses": "{{count}} lärartillstånd löper ut inom 30 dagar",
+    "overdue_invoices": "{{count}} fakturor är förfallna",
+    "unread_messages": "{{count}} olästa meddelanden"
+  },
+  "empty": {
+    "no_lessons_today": "Inga lektioner bokade för idag",
+    "no_recent_activity": "Ingen ny aktivitet"
+  }
+}

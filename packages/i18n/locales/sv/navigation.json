@@ -1,0 +1,52 @@
+{
+  "section": {
+    "overview": "Översikt",
+    "students_education": "Elever & Utbildning",
+    "finance": "Ekonomi",
+    "communication": "Kommunikation",
+    "administration": "Administration",
+    "settings": "Inställningar"
+  },
+  "item": {
+    "dashboard": "Instrumentpanel",
+    "students": "Elever",
+    "student_progress": "Framsteg",
+    "instructors": "Lärare",
+    "scheduling": "Schema",
+    "curriculum": "Kursinnehåll",
+    "vehicles": "Fordon",
+    "invoices": "Fakturor",
+    "payments": "Betalningar",
+    "packages": "Paket",
+    "corporate": "Företagskunder",
+    "messages": "Meddelanden",
+    "notifications": "Notiser",
+    "documents": "Dokument",
+    "reports": "Rapporter",
+    "users": "Användare",
+    "roles": "Roller & Behörigheter",
+    "locations": "Platser",
+    "organization": "Organisation",
+    "settings": "Inställningar",
+    "billing": "Prenumeration",
+    "audit_log": "Granskningslogg",
+    "support": "Support"
+  },
+  "topbar": {
+    "organization_selector_placeholder": "Välj organisation",
+    "location_selector_placeholder": "Alla platser",
+    "notifications_title": "Notiser",
+    "notifications_empty": "Inga olästa notiser",
+    "profile_menu": "Min profil",
+    "profile_settings": "Inställningar",
+    "switch_organization": "Byt organisation",
+    "logout": "Logga ut"
+  },
+  "breadcrumb": {
+    "home": "Hem"
+  },
+  "sidebar": {
+    "collapse": "Minimera meny",
+    "expand": "Expandera meny"
+  }
+}
