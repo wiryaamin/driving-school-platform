@@ -33,7 +33,15 @@ export type PermissionDomain =
   | 'administration'
   | 'corporate';
 
-export type PermissionAction = 'create' | 'read' | 'update' | 'delete' | 'export' | 'approve' | 'assign' | 'void';
+export type PermissionAction =
+  | 'create' | 'read' | 'update' | 'delete'
+  | 'export' | 'import'
+  | 'approve' | 'void'
+  | 'assign' | 'advance' | 'archive'
+  | 'run'
+  | 'manage'
+  | 'configure'
+  | 'send';
 
 export type PermissionCode = `${PermissionDomain}:${string}:${PermissionAction}`;
 

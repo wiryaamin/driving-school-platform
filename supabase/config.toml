@@ -79,7 +79,7 @@ enable_signup = false
 enabled = false
 
 [auth.hook.custom_access_token]
-enabled = true
+enabled = false
 # For local dev: Supabase routes this to the running Edge Function runtime.
 # For production: replace with https://<project-ref>.supabase.co/functions/v1/auth-hook
 uri = "http://127.0.0.1:54321/functions/v1/auth-hook"
@@ -94,3 +94,58 @@ inspector_port = 8083
 enabled = false
 port = 54329
 backend = "postgres"
+
+# ─── Edge Function configuration ─────────────────────────────────────────────
+
+[functions.auth-hook]
+enabled = true
+verify_jwt = false
+
+[functions.switch-tenant]
+enabled = true
+verify_jwt = true
+
+[functions.students]
+enabled = true
+verify_jwt = true
+
+[functions.instructors]
+enabled = true
+verify_jwt = true
+
+[functions.slots]
+enabled = true
+verify_jwt = true
+
+[functions.bookings]
+enabled = true
+verify_jwt = true
+
+[functions.notifications]
+enabled = true
+verify_jwt = true
+
+[functions.waitlist]
+enabled = true
+verify_jwt = true
+
+# Event worker: drains the internal channel of the transactional outbox.
+# verify_jwt = false because it uses WORKER_SECRET for auth (set in secrets).
+# Production cron: configure via pg_cron (see below) or Supabase scheduled functions.
+#
+# pg_cron setup (run once after enabling the pg_cron extension):
+#   SELECT cron.schedule(
+#     'event-worker-drain',
+#     '* * * * *',   -- every minute; for 30-second intervals run two staggered jobs
+#     $$SELECT net.http_post(
+#       url     := current_setting('app.supabase_url') || '/functions/v1/event-worker',
+#       headers := jsonb_build_object(
+#         'Content-Type',  'application/json',
+#         'Authorization', 'Bearer ' || current_setting('app.worker_secret')
+#       ),
+#       body    := '{}'::jsonb
+#     )$$
+#   );
+[functions.event-worker]
+enabled = true
+verify_jwt = false

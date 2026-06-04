@@ -1258,14 +1258,16 @@ INSERT INTO public.permissions (id, code, domain, resource, action, description)
   (gen_random_uuid(), 'scheduling:booking:delete',      'scheduling', 'booking',      'delete', 'Cancel or delete lesson bookings'),
   (gen_random_uuid(), 'scheduling:booking:export',      'scheduling', 'booking',      'export', 'Export booking data'),
   (gen_random_uuid(), 'scheduling:availability:read',   'scheduling', 'availability', 'read',   'View instructor availability and time-off'),
-  (gen_random_uuid(), 'scheduling:availability:update', 'scheduling', 'availability', 'update', 'Manage instructor availability and time-off');
+  (gen_random_uuid(), 'scheduling:availability:update', 'scheduling', 'availability', 'update', 'Manage instructor availability and time-off')
+ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO public.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM   public.roles r
 CROSS JOIN public.permissions p
 WHERE  r.name IN ('org_owner', 'org_admin') AND r.is_system_role = true
-  AND  p.domain = 'scheduling';
+  AND  p.domain = 'scheduling'
+ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
@@ -1277,7 +1279,8 @@ WHERE  r.name = 'org_manager' AND r.is_system_role = true
     'scheduling:booking:create', 'scheduling:booking:read',
     'scheduling:booking:update', 'scheduling:booking:export',
     'scheduling:availability:read', 'scheduling:availability:update'
-  ]);
+  ])
+ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
@@ -1288,7 +1291,8 @@ WHERE  r.name IN ('instructor', 'instructor_senior') AND r.is_system_role = true
     'scheduling:slot:create', 'scheduling:slot:read', 'scheduling:slot:update',
     'scheduling:booking:read', 'scheduling:booking:update',
     'scheduling:availability:read', 'scheduling:availability:update'
-  ]);
+  ])
+ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
@@ -1300,4 +1304,5 @@ WHERE  r.name = 'receptionist' AND r.is_system_role = true
     'scheduling:booking:create', 'scheduling:booking:read',
     'scheduling:booking:update', 'scheduling:booking:export',
     'scheduling:availability:read'
-  ]);
+  ])
+ON CONFLICT DO NOTHING;

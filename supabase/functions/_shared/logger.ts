@@ -1,22 +1,27 @@
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-interface LogEntry {
-  level: LogLevel;
-  message: string;
-  timestamp: string;
-  context?: Record<string, unknown>;
+interface LogData {
+  [key: string]: unknown;
 }
 
-function log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
-  const entry: LogEntry = {
+/**
+ * Structured logger for Edge Functions.
+ * Every log entry includes: event name, level, timestamp.
+ * Add correlation_id and org_id to every call site for traceability.
+ *
+ * Usage:
+ *   logger.info('request.started', { correlation_id: ..., org_id: ..., method: 'POST' });
+ *   logger.error('booking.failed',  { correlation_id: ..., error: err.message });
+ */
+function log(level: LogLevel, event: string, data: LogData = {}): void {
+  const entry = {
     level,
-    message,
+    event,
     timestamp: new Date().toISOString(),
-    ...(context && Object.keys(context).length > 0 && { context }),
+    ...data,
   };
 
   const serialized = JSON.stringify(entry);
-
   if (level === 'error') {
     console.error(serialized);
   } else if (level === 'warn') {
@@ -27,8 +32,8 @@ function log(level: LogLevel, message: string, context?: Record<string, unknown>
 }
 
 export const logger = {
-  debug: (message: string, context?: Record<string, unknown>) => log('debug', message, context),
-  info:  (message: string, context?: Record<string, unknown>) => log('info',  message, context),
-  warn:  (message: string, context?: Record<string, unknown>) => log('warn',  message, context),
-  error: (message: string, context?: Record<string, unknown>) => log('error', message, context),
+  debug: (event: string, data?: LogData) => log('debug', event, data),
+  info:  (event: string, data?: LogData) => log('info',  event, data),
+  warn:  (event: string, data?: LogData) => log('warn',  event, data),
+  error: (event: string, data?: LogData) => log('error', event, data),
 };

@@ -313,7 +313,7 @@ INSERT INTO public.permissions (id, code, domain, resource, action, description)
    'View scheduling generation configuration and automation settings'),
   (gen_random_uuid(),
    'scheduling:config:write',
-   'scheduling', 'config', 'write',
+   'scheduling', 'config', 'manage',
    'Create, update, and delete scheduling generation configuration'),
   (gen_random_uuid(),
    'scheduling:health:read',

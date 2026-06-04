@@ -1,0 +1,21 @@
+{
+  "name": "@platform/validation",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Zod DTO schemas — single source of truth for all platform API validation",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./common": "./src/common/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.0",
+    "@platform/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

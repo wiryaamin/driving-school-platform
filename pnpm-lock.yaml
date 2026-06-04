@@ -133,7 +133,33 @@ importers:
         specifier: ^6.0.7
         version: 6.4.2(jiti@1.21.7)
 
+  packages/api-core:
+    dependencies:
+      '@platform/types':
+        specifier: workspace:*
+        version: link:../types
+      '@supabase/supabase-js':
+        specifier: ^2.47.0
+        version: 2.106.2
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/config: {}
+
+  packages/database:
+    dependencies:
+      '@platform/types':
+        specifier: workspace:*
+        version: link:../types
+      '@supabase/supabase-js':
+        specifier: ^2.47.0
+        version: 2.106.2
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
 
   packages/i18n:
     dependencies:
@@ -218,6 +244,19 @@ importers:
       '@platform/types':
         specifier: workspace:*
         version: link:../types
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  packages/validation:
+    dependencies:
+      '@platform/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

@@ -18,6 +18,26 @@ export type LanguageCodeEnum        = 'sv' | 'en';
 export type EventOutboxStatusEnum   = 'pending' | 'processing' | 'delivered' | 'failed' | 'dead_letter' | 'cancelled';
 export type EventChannelEnum        = 'email' | 'sms' | 'whatsapp' | 'push' | 'webhook' | 'ai_job' | 'accounting' | 'internal';
 
+// Phase 2A domain enums
+export type StudentStatusEnum           = 'lead' | 'onboarding' | 'active' | 'paused' | 'completed' | 'withdrawn' | 'archived';
+export type PermitStageEnum             = 'not_started' | 'theory_study' | 'risk1_booked' | 'risk1_completed' | 'risk2_booked' | 'risk2_completed' | 'theory_exam_booked' | 'theory_passed' | 'practical_exam_booked' | 'practical_passed' | 'licence_issued';
+export type PersonalIdentityTypeEnum    = 'personnummer' | 'samordningsnummer' | 'passport' | 'national_id' | 'none';
+export type InstructorEmploymentTypeEnum = 'employed' | 'contractor' | 'external' | 'on_leave' | 'inactive';
+
+// Phase 2B scheduling enums
+export type LessonCategoryEnum       = 'driving' | 'theory' | 'risk1' | 'risk2' | 'simulator' | 'assessment' | 'intensive' | 'group_theory' | 'other';
+export type LessonSlotStatusEnum     = 'open' | 'full' | 'in_progress' | 'completed' | 'cancelled' | 'blocked';
+export type BookingStatusEnum        = 'draft' | 'reserved' | 'confirmed' | 'completed' | 'cancelled' | 'no_show' | 'rescheduled';
+export type TimeOffTypeEnum          = 'vacation' | 'sickness' | 'training' | 'public_holiday' | 'emergency' | 'other';
+export type TimeOffStatusEnum        = 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type SlotGenerationSourceEnum = 'manual' | 'recurring' | 'imported';
+
+// Phase 3D notification + automation enums
+export type NotificationStatusEnum  = 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled';
+export type ReminderStatusEnum      = 'scheduled' | 'sending' | 'sent' | 'failed' | 'cancelled' | 'skipped';
+export type WaitlistStatusEnum      = 'waiting' | 'promoted' | 'expired' | 'cancelled';
+export type AutomationRuleTypeEnum  = 'reservation_expiry' | 'reminder_24h' | 'reminder_2h' | 'reminder_1h' | 'auto_confirm' | 'waitlist_promotion';
+
 // ─── Database Interface ───────────────────────────────────────────────────────
 
 export interface Database {
@@ -399,6 +419,551 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['platform_admins']['Insert']>;
       };
 
+      // Phase 2A: Students
+      students: {
+        Row: {
+          id:                           string;
+          organization_id:              string;
+          first_name:                   string;
+          last_name:                    string;
+          date_of_birth:                string | null;
+          identity_type:                PersonalIdentityTypeEnum;
+          personnummer_encrypted:        string | null;
+          personnummer_hash:             string | null;
+          personnummer_last4:            string | null;
+          email:                        string | null;
+          phone:                        string | null;
+          address_line1:                string | null;
+          address_line2:                string | null;
+          postal_code:                  string | null;
+          city:                         string | null;
+          preferred_language:           LanguageCodeEnum;
+          communication_opt_in_email:   boolean;
+          communication_opt_in_sms:     boolean;
+          gdpr_consent_given_at:        string | null;
+          gdpr_consent_version:         string | null;
+          data_processing_consent:      boolean;
+          marketing_consent:            boolean;
+          gdpr_retention_override_at:   string | null;
+          status:                       StudentStatusEnum;
+          status_changed_at:            string | null;
+          enrolled_at:                  string | null;
+          enrollment_location_id:       string | null;
+          assigned_instructor_id:       string | null;
+          target_licence_category:      string;
+          permit_stage:                 PermitStageEnum;
+          permit_stage_updated_at:      string | null;
+          risk1_completed_at:           string | null;
+          risk2_completed_at:           string | null;
+          theory_passed_at:             string | null;
+          practical_passed_at:          string | null;
+          licence_issued_at:            string | null;
+          licence_number:               string | null;
+          user_id:                      string | null;
+          created_by:                   string | null;
+          updated_by:                   string | null;
+          deleted_at:                   string | null;
+          deleted_by:                   string | null;
+          created_at:                   string;
+          updated_at:                   string;
+        };
+        Insert: {
+          id?:                           string;
+          organization_id:               string;
+          first_name:                    string;
+          last_name:                     string;
+          date_of_birth?:                string | null;
+          identity_type?:                PersonalIdentityTypeEnum;
+          personnummer_encrypted?:        string | null;
+          personnummer_hash?:             string | null;
+          personnummer_last4?:            string | null;
+          email?:                        string | null;
+          phone?:                        string | null;
+          address_line1?:                string | null;
+          address_line2?:                string | null;
+          postal_code?:                  string | null;
+          city?:                         string | null;
+          preferred_language?:           LanguageCodeEnum;
+          communication_opt_in_email?:   boolean;
+          communication_opt_in_sms?:     boolean;
+          gdpr_consent_given_at?:        string | null;
+          gdpr_consent_version?:         string | null;
+          data_processing_consent?:      boolean;
+          marketing_consent?:            boolean;
+          gdpr_retention_override_at?:   string | null;
+          status?:                       StudentStatusEnum;
+          status_changed_at?:            string | null;
+          enrolled_at?:                  string | null;
+          enrollment_location_id?:       string | null;
+          assigned_instructor_id?:       string | null;
+          target_licence_category?:      string;
+          permit_stage?:                 PermitStageEnum;
+          permit_stage_updated_at?:      string | null;
+          risk1_completed_at?:           string | null;
+          risk2_completed_at?:           string | null;
+          theory_passed_at?:             string | null;
+          practical_passed_at?:          string | null;
+          licence_issued_at?:            string | null;
+          licence_number?:               string | null;
+          user_id?:                      string | null;
+          created_by?:                   string | null;
+          updated_by?:                   string | null;
+          deleted_at?:                   string | null;
+          deleted_by?:                   string | null;
+          created_at?:                   string;
+          updated_at?:                   string;
+        };
+        Update: Partial<Database['public']['Tables']['students']['Insert']>;
+      };
+
+      // Phase 2A: Instructors
+      instructors: {
+        Row: {
+          id:                     string;
+          organization_id:        string;
+          first_name:             string;
+          last_name:              string;
+          email:                  string;
+          phone:                  string | null;
+          date_of_birth:          string | null;
+          identity_type:          PersonalIdentityTypeEnum;
+          personnummer_encrypted:  string | null;
+          personnummer_hash:       string | null;
+          personnummer_last4:      string | null;
+          employment_type:        InstructorEmploymentTypeEnum;
+          employment_started_at:  string | null;
+          employment_ended_at:    string | null;
+          employee_number:        string | null;
+          teaching_categories:    string[];
+          adi_number:             string | null;
+          adi_valid_until:        string | null;
+          primary_location_id:    string | null;
+          languages_spoken:       string[];
+          max_lessons_per_day:    number | null;
+          user_id:                string | null;
+          created_by:             string | null;
+          updated_by:             string | null;
+          deleted_at:             string | null;
+          deleted_by:             string | null;
+          created_at:             string;
+          updated_at:             string;
+        };
+        Insert: {
+          id?:                     string;
+          organization_id:         string;
+          first_name:              string;
+          last_name:               string;
+          email:                   string;
+          phone?:                  string | null;
+          date_of_birth?:          string | null;
+          identity_type?:          PersonalIdentityTypeEnum;
+          personnummer_encrypted?:  string | null;
+          personnummer_hash?:       string | null;
+          personnummer_last4?:      string | null;
+          employment_type?:        InstructorEmploymentTypeEnum;
+          employment_started_at?:  string | null;
+          employment_ended_at?:    string | null;
+          employee_number?:        string | null;
+          teaching_categories?:    string[];
+          adi_number?:             string | null;
+          adi_valid_until?:        string | null;
+          primary_location_id?:    string | null;
+          languages_spoken?:       string[];
+          max_lessons_per_day?:    number | null;
+          user_id?:                string | null;
+          created_by?:             string | null;
+          updated_by?:             string | null;
+          deleted_at?:             string | null;
+          deleted_by?:             string | null;
+          created_at?:             string;
+          updated_at?:             string;
+        };
+        Update: Partial<Database['public']['Tables']['instructors']['Insert']>;
+      };
+
+      // Phase 2B: Lesson types (per-org lesson catalog)
+      lesson_types: {
+        Row: {
+          id:                       string;
+          organization_id:          string;
+          name:                     string;
+          code:                     string;
+          category:                 LessonCategoryEnum;
+          default_duration_minutes: number;
+          min_duration_minutes:     number;
+          max_duration_minutes:     number;
+          requires_vehicle:         boolean;
+          requires_instructor:      boolean;
+          required_certifications:  string[];
+          max_students_per_slot:    number;
+          color_hex:                string;
+          display_order:            number;
+          is_active:                boolean;
+          pricing_sek:              number | null;
+          created_by:               string | null;
+          updated_by:               string | null;
+          created_at:               string;
+          updated_at:               string;
+        };
+        Insert: {
+          id?:                       string;
+          organization_id:           string;
+          name:                      string;
+          code:                      string;
+          category:                  LessonCategoryEnum;
+          default_duration_minutes?: number;
+          min_duration_minutes?:     number;
+          max_duration_minutes?:     number;
+          requires_vehicle?:         boolean;
+          requires_instructor?:      boolean;
+          required_certifications?:  string[];
+          max_students_per_slot?:    number;
+          color_hex?:                string;
+          display_order?:            number;
+          is_active?:                boolean;
+          pricing_sek?:              number | null;
+          created_by?:               string | null;
+          updated_by?:               string | null;
+          created_at?:               string;
+          updated_at?:               string;
+        };
+        Update: Partial<Database['public']['Tables']['lesson_types']['Insert']>;
+      };
+
+      // Phase 2B: Lesson slots (concrete bookable time windows)
+      lesson_slots: {
+        Row: {
+          id:                   string;
+          organization_id:      string;
+          instructor_id:        string;
+          vehicle_id:           string | null;
+          location_id:          string | null;
+          lesson_type_id:       string;
+          starts_at:            string;
+          ends_at:              string;
+          timezone:             string;
+          status:               LessonSlotStatusEnum;
+          status_changed_at:    string | null;
+          max_bookings:         number;
+          current_bookings:     number;
+          generation_source:    SlotGenerationSourceEnum;
+          availability_rule_id: string | null;
+          exception_id:         string | null;
+          notes:                string | null;
+          deleted_at:           string | null;
+          deleted_by:           string | null;
+          created_by:           string | null;
+          updated_by:           string | null;
+          created_at:           string;
+          updated_at:           string;
+        };
+        Insert: {
+          id?:                   string;
+          organization_id:       string;
+          instructor_id:         string;
+          vehicle_id?:           string | null;
+          location_id?:          string | null;
+          lesson_type_id:        string;
+          starts_at:             string;
+          ends_at:               string;
+          timezone?:             string;
+          status?:               LessonSlotStatusEnum;
+          status_changed_at?:    string | null;
+          max_bookings?:         number;
+          current_bookings?:     number;
+          generation_source?:    SlotGenerationSourceEnum;
+          availability_rule_id?: string | null;
+          exception_id?:         string | null;
+          notes?:                string | null;
+          deleted_at?:           string | null;
+          deleted_by?:           string | null;
+          created_by?:           string | null;
+          updated_by?:           string | null;
+          created_at?:           string;
+          updated_at?:           string;
+        };
+        Update: Partial<Database['public']['Tables']['lesson_slots']['Insert']>;
+      };
+
+      // Phase 2B: Lesson bookings (student allocations to slots)
+      // starts_at/ends_at/instructor_id/vehicle_id/lesson_type_id/location_id
+      // are denormalised from the slot by BEFORE INSERT trigger lesson_booking_set_slot_fields().
+      lesson_bookings: {
+        Row: {
+          id:                   string;
+          organization_id:      string;
+          slot_id:              string;
+          student_id:           string;
+          instructor_id:        string;
+          vehicle_id:           string | null;
+          lesson_type_id:       string;
+          location_id:          string | null;
+          starts_at:            string;
+          ends_at:              string;
+          status:               BookingStatusEnum;
+          status_changed_at:    string | null;
+          cancelled_at:         string | null;
+          cancelled_by:         string | null;
+          cancellation_reason:  string | null;
+          cancellation_category: string | null;
+          rescheduled_from_id:  string | null;
+          no_show_marked_at:    string | null;
+          no_show_marked_by:    string | null;
+          package_item_id:      string | null;
+          payment_status:       string;
+          price_sek:            number | null;
+          booked_by:            string | null;
+          deleted_at:           string | null;
+          deleted_by:           string | null;
+          created_by:           string | null;
+          updated_by:           string | null;
+          created_at:           string;
+          updated_at:           string;
+        };
+        Insert: {
+          id?:                    string;
+          organization_id:        string;
+          slot_id:                string;
+          student_id:             string;
+          // Denormalized fields: set by BEFORE INSERT trigger from the slot.
+          // Pass them if you need to override; otherwise leave blank.
+          instructor_id?:         string;
+          vehicle_id?:            string | null;
+          lesson_type_id?:        string;
+          location_id?:           string | null;
+          starts_at?:             string;
+          ends_at?:               string;
+          status?:                BookingStatusEnum;
+          status_changed_at?:     string | null;
+          cancelled_at?:          string | null;
+          cancelled_by?:          string | null;
+          cancellation_reason?:   string | null;
+          cancellation_category?: string | null;
+          rescheduled_from_id?:   string | null;
+          no_show_marked_at?:     string | null;
+          no_show_marked_by?:     string | null;
+          package_item_id?:       string | null;
+          payment_status?:        string;
+          price_sek?:             number | null;
+          booked_by?:             string | null;
+          deleted_at?:            string | null;
+          deleted_by?:            string | null;
+          created_by?:            string | null;
+          updated_by?:            string | null;
+          created_at?:            string;
+          updated_at?:            string;
+        };
+        Update: Partial<Database['public']['Tables']['lesson_bookings']['Insert']>;
+      };
+
+      // Phase 3D: Notification templates (organization_id NULL = system-wide)
+      notification_templates: {
+        Row: {
+          id:              string;
+          organization_id: string | null;
+          key:             string;
+          locale:          string;
+          channel:         string;
+          subject:         string | null;
+          body_html:       string | null;
+          body_text:       string;
+          variables:       string[];
+          is_active:       boolean;
+          created_at:      string;
+          updated_at:      string;
+        };
+        Insert: {
+          id?:              string;
+          organization_id?: string | null;
+          key:              string;
+          locale?:          string;
+          channel:          string;
+          subject?:         string | null;
+          body_html?:       string | null;
+          body_text:        string;
+          variables?:       string[];
+          is_active?:       boolean;
+          created_at?:      string;
+          updated_at?:      string;
+        };
+        Update: Partial<Database['public']['Tables']['notification_templates']['Insert']>;
+      };
+
+      // Phase 3D: Notification audit log with idempotency + retry tracking
+      notifications: {
+        Row: {
+          id:                string;
+          organization_id:   string;
+          recipient_id:      string;
+          recipient_type:    string;
+          channel:           string;
+          template_key:      string;
+          locale:            string;
+          subject:           string | null;
+          body:              string | null;
+          metadata:          Json;
+          status:            NotificationStatusEnum;
+          status_changed_at: string | null;
+          sent_at:           string | null;
+          failed_at:         string | null;
+          failure_reason:    string | null;
+          retry_count:       number;
+          max_retries:       number;
+          idempotency_key:   string | null;
+          scheduled_for:     string | null;
+          reference_type:    string | null;
+          reference_id:      string | null;
+          created_at:        string;
+          updated_at:        string;
+        };
+        Insert: {
+          id?:                string;
+          organization_id:    string;
+          recipient_id:       string;
+          recipient_type:     string;
+          channel:            string;
+          template_key:       string;
+          locale?:            string;
+          subject?:           string | null;
+          body?:              string | null;
+          metadata?:          Json;
+          status?:            NotificationStatusEnum;
+          status_changed_at?: string | null;
+          sent_at?:           string | null;
+          failed_at?:         string | null;
+          failure_reason?:    string | null;
+          retry_count?:       number;
+          max_retries?:       number;
+          idempotency_key?:   string | null;
+          scheduled_for?:     string | null;
+          reference_type?:    string | null;
+          reference_id?:      string | null;
+          created_at?:        string;
+          updated_at?:        string;
+        };
+        Update: Partial<Database['public']['Tables']['notifications']['Insert']>;
+      };
+
+      // Phase 3D: Per-profile channel + type notification preferences
+      notification_preferences: {
+        Row: {
+          id:                string;
+          organization_id:   string;
+          profile_id:        string;
+          channel:           string;
+          notification_type: string;
+          enabled:           boolean;
+          created_at:        string;
+          updated_at:        string;
+        };
+        Insert: {
+          id?:                string;
+          organization_id:    string;
+          profile_id:         string;
+          channel:            string;
+          notification_type:  string;
+          enabled?:           boolean;
+          created_at?:        string;
+          updated_at?:        string;
+        };
+        Update: Partial<Database['public']['Tables']['notification_preferences']['Insert']>;
+      };
+
+      // Phase 3D: Scheduled lesson reminders with atomic claim pattern
+      lesson_reminders: {
+        Row: {
+          id:               string;
+          organization_id:  string;
+          booking_id:       string;
+          recipient_id:     string;
+          recipient_type:   string;
+          reminder_type:    string;
+          offset_minutes:   number;
+          scheduled_for:    string;
+          status:           ReminderStatusEnum;
+          notification_id:  string | null;
+          idempotency_key:  string;
+          created_at:       string;
+          updated_at:       string;
+        };
+        Insert: {
+          id?:               string;
+          organization_id:   string;
+          booking_id:        string;
+          recipient_id:      string;
+          recipient_type?:   string;
+          reminder_type:     string;
+          offset_minutes:    number;
+          scheduled_for:     string;
+          status?:           ReminderStatusEnum;
+          notification_id?:  string | null;
+          idempotency_key:   string;
+          created_at?:       string;
+          updated_at?:       string;
+        };
+        Update: Partial<Database['public']['Tables']['lesson_reminders']['Insert']>;
+      };
+
+      // Phase 3D: Slot waitlist with priority ordering
+      waitlist_entries: {
+        Row: {
+          id:                   string;
+          organization_id:      string;
+          slot_id:              string;
+          student_id:           string;
+          priority:             number;
+          status:               WaitlistStatusEnum;
+          status_changed_at:    string | null;
+          expires_at:           string | null;
+          promoted_booking_id:  string | null;
+          notified_at:          string | null;
+          reservation_deadline: string | null;
+          notes:                string | null;
+          created_at:           string;
+          updated_at:           string;
+        };
+        Insert: {
+          id?:                   string;
+          organization_id:       string;
+          slot_id:               string;
+          student_id:            string;
+          priority?:             number;
+          status?:               WaitlistStatusEnum;
+          status_changed_at?:    string | null;
+          expires_at?:           string | null;
+          promoted_booking_id?:  string | null;
+          notified_at?:          string | null;
+          reservation_deadline?: string | null;
+          notes?:                string | null;
+          created_at?:           string;
+          updated_at?:           string;
+        };
+        Update: Partial<Database['public']['Tables']['waitlist_entries']['Insert']>;
+      };
+
+      // Phase 3D: Per-org configurable automation rules
+      automation_rules: {
+        Row: {
+          id:              string;
+          organization_id: string;
+          rule_type:       AutomationRuleTypeEnum;
+          enabled:         boolean;
+          config:          Json;
+          created_at:      string;
+          updated_at:      string;
+        };
+        Insert: {
+          id?:              string;
+          organization_id:  string;
+          rule_type:        AutomationRuleTypeEnum;
+          enabled?:         boolean;
+          config?:          Json;
+          created_at?:      string;
+          updated_at?:      string;
+        };
+        Update: Partial<Database['public']['Tables']['automation_rules']['Insert']>;
+      };
+
       // Phase 1B.2: Transactional outbox for async event delivery.
       event_outbox: {
         Row: {
@@ -603,6 +1168,55 @@ export interface Database {
         Args: { p_event_id: string; p_error: string };
         Returns: undefined;
       };
+      // ── Scheduling availability pre-flight helpers ───────────────────────────
+      check_instructor_availability: {
+        Args: {
+          p_instructor_id:   string;
+          p_starts_at:       string;
+          p_ends_at:         string;
+          p_exclude_slot_id?: string;
+        };
+        Returns: boolean;
+      };
+      check_vehicle_availability: {
+        Args: {
+          p_vehicle_id:      string;
+          p_starts_at:       string;
+          p_ends_at:         string;
+          p_exclude_slot_id?: string;
+        };
+        Returns: boolean;
+      };
+      check_student_booking_availability: {
+        Args: {
+          p_student_id:          string;
+          p_starts_at:           string;
+          p_ends_at:             string;
+          p_exclude_booking_id?: string;
+        };
+        Returns: boolean;
+      };
+      // ── Phase 3D: Automation + notification DB helpers ──────────────────────
+      schedule_lesson_reminders: {
+        Args: { p_booking_id: string };
+        Returns: number;
+      };
+      cancel_lesson_reminders: {
+        Args: { p_booking_id: string };
+        Returns: number;
+      };
+      drain_due_reminders: {
+        Args: { p_limit?: number };
+        Returns: Database['public']['Tables']['lesson_reminders']['Row'][];
+      };
+      promote_waitlist_next: {
+        Args: { p_slot_id: string };
+        Returns: string | null;
+      };
+      expire_stale_reservations: {
+        Args: { p_timeout_minutes?: number };
+        Returns: number;
+      };
       // ── Soft delete helpers (service role only) ──────────────────────────────
       soft_delete: {
         Args: { p_table_name: string; p_record_id: string };
@@ -615,15 +1229,29 @@ export interface Database {
     };
 
     Enums: {
-      organization_status: OrganizationStatusEnum;
-      subscription_tier:   SubscriptionTierEnum;
-      subscription_status: SubscriptionStatusEnum;
-      location_status:     LocationStatusEnum;
-      membership_status:   MembershipStatusEnum;
-      audit_operation:     AuditOperationEnum;
-      language_code:       LanguageCodeEnum;
-      event_outbox_status: EventOutboxStatusEnum;
-      event_channel:       EventChannelEnum;
+      organization_status:   OrganizationStatusEnum;
+      subscription_tier:     SubscriptionTierEnum;
+      subscription_status:   SubscriptionStatusEnum;
+      location_status:       LocationStatusEnum;
+      membership_status:     MembershipStatusEnum;
+      audit_operation:       AuditOperationEnum;
+      language_code:         LanguageCodeEnum;
+      event_outbox_status:   EventOutboxStatusEnum;
+      event_channel:         EventChannelEnum;
+      student_status:             StudentStatusEnum;
+      permit_stage:               PermitStageEnum;
+      personal_identity_type:     PersonalIdentityTypeEnum;
+      instructor_employment_type: InstructorEmploymentTypeEnum;
+      lesson_category:            LessonCategoryEnum;
+      lesson_slot_status:         LessonSlotStatusEnum;
+      booking_status:             BookingStatusEnum;
+      time_off_type:              TimeOffTypeEnum;
+      time_off_status:            TimeOffStatusEnum;
+      slot_generation_source:     SlotGenerationSourceEnum;
+      notification_status:        NotificationStatusEnum;
+      reminder_status:            ReminderStatusEnum;
+      waitlist_status:            WaitlistStatusEnum;
+      automation_rule_type:       AutomationRuleTypeEnum;
     };
   };
 }

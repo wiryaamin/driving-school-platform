@@ -607,7 +607,16 @@ CREATE TABLE public.permissions (
   CONSTRAINT permissions_code_key     UNIQUE (code),
   CONSTRAINT permissions_code_format  CHECK (code ~ '^[a-z_]+:[a-z_]+:[a-z_]+$'),
   CONSTRAINT permissions_action_check CHECK (
-    action IN ('create','read','update','delete','export','approve','assign','void')
+    action IN (
+      'create', 'read', 'update', 'delete',
+      'export', 'import',
+      'approve', 'void',
+      'assign', 'advance', 'archive',
+      'run',
+      'manage',
+      'configure',
+      'send'
+    )
   )
 );
 
