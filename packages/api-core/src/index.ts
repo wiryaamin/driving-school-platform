@@ -45,6 +45,13 @@ export { NotificationRepository } from './repositories/notification.repository.j
 export { NotificationPreferenceRepository } from './repositories/notification-preference.repository.js';
 export { LessonReminderRepository } from './repositories/lesson-reminder.repository.js';
 export { WaitlistRepository } from './repositories/waitlist.repository.js';
+export { PackageCatalogRepository } from './repositories/package-catalog.repository.js';
+export { PackageOfferingRepository } from './repositories/package-offering.repository.js';
+export { StudentPackageRepository } from './repositories/student-package.repository.js';
+export { CreditLedgerRepository } from './repositories/credit-ledger.repository.js';
+export { InvoiceRepository } from './repositories/invoice.repository.js';
+export { PaymentRepository } from './repositories/payment.repository.js';
+export { FinancialPeriodRepository } from './repositories/financial-period.repository.js';
 
 // Services
 export { StudentService } from './services/student.service.js';
@@ -53,6 +60,10 @@ export { SchedulingService } from './services/scheduling.service.js';
 export { NotificationService } from './services/notification.service.js';
 export { ReminderService } from './services/reminder.service.js';
 export { WaitlistService } from './services/waitlist.service.js';
+export { PackageService } from './services/package.service.js';
+export { InvoiceService } from './services/invoice.service.js';
+export { PaymentService } from './services/payment.service.js';
+export { CreditService } from './services/credit.service.js';
 
 // Events
 export { OutboxPublisher, createOutboxPublisher } from './events/outbox.publisher.js';

@@ -7,5 +7,6 @@ export type * from './students.types.js';
 export type * from './instructors.types.js';
 export type * from './scheduling.types.js';
 export type * from './notifications.types.js';
+export type * from './commercial.types.js';
 // api.types exports ApiErrorCode enum (runtime value) — must not use `export type *`
 export * from './api.types.js';

@@ -29,11 +29,13 @@ import { logger } from '../_shared/logger.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const BATCH_SIZE      = Number(Deno.env.get('EVENT_WORKER_BATCH_SIZE')    ?? '50');
-const LOCK_TTL        = Deno.env.get('EVENT_WORKER_LOCK_TTL')             ?? '5 minutes';
-const REMINDER_BATCH  = Number(Deno.env.get('EVENT_WORKER_REMINDER_BATCH') ?? '20');
-const EXPIRY_TIMEOUT  = Number(Deno.env.get('RESERVATION_EXPIRY_MINUTES') ?? '30');
-const WORKER_SECRET   = Deno.env.get('WORKER_SECRET');
+const BATCH_SIZE           = Number(Deno.env.get('EVENT_WORKER_BATCH_SIZE')      ?? '50');
+const ACCOUNTING_BATCH     = Number(Deno.env.get('EVENT_WORKER_ACCT_BATCH')      ?? '50');
+const LOCK_TTL             = Deno.env.get('EVENT_WORKER_LOCK_TTL')               ?? '5 minutes';
+const REMINDER_BATCH       = Number(Deno.env.get('EVENT_WORKER_REMINDER_BATCH')  ?? '20');
+const EXPIRY_TIMEOUT       = Number(Deno.env.get('RESERVATION_EXPIRY_MINUTES')   ?? '30');
+const CREDIT_EXPIRY_BATCH  = Number(Deno.env.get('CREDIT_EXPIRY_BATCH')         ?? '50');
+const WORKER_SECRET        = Deno.env.get('WORKER_SECRET');
 
 // ─── Template key mapping ─────────────────────────────────────────────────────
 
@@ -81,6 +83,8 @@ interface WorkerMetrics {
   reminders_processed:   number;
   reminders_failed:      number;
   reservations_expired:  number;
+  accounting_delivered:  number;
+  credits_expired:       number;
 }
 
 // ─── Outbox event handlers ────────────────────────────────────────────────────
@@ -313,6 +317,110 @@ async function handleNotificationDelivered(event: OutboxEvent, _client: unknown)
   return { success: true };
 }
 
+// ── Phase 4A commercial handlers (accounting channel) ─────────────────────────
+// Phase 4A: all handlers are stubs — log and acknowledge.
+// Phase 4B: swap for real analytics sync, invoice notifications, etc.
+
+async function handlePackagePurchased(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.package_purchased', {
+    event_id:           event.id,
+    student_package_id: event.payload['student_package_id'],
+    student_id:         event.payload['student_id'],
+    offering_name:      event.payload['offering_name'],
+    quantity_granted:   event.payload['quantity_granted'],
+    lesson_category:    event.payload['lesson_category'],
+    price:              event.payload['price'],
+    currency:           event.payload['currency'],
+  });
+  return { success: true };
+}
+
+async function handleInvoiceIssued(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.invoice_issued', {
+    event_id:        event.id,
+    invoice_id:      event.payload['invoice_id'],
+    invoice_number:  event.payload['invoice_number'],
+    student_id:      event.payload['student_id'],
+    total_amount:    event.payload['total_amount'],
+    currency:        event.payload['currency'],
+  });
+  // TODO Phase 4B: send invoice email to student
+  return { success: true };
+}
+
+async function handleInvoicePaid(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.invoice_paid', {
+    event_id:        event.id,
+    invoice_id:      event.payload['invoice_id'],
+    invoice_number:  event.payload['invoice_number'],
+    student_id:      event.payload['student_id'],
+    total_amount:    event.payload['total_amount'],
+    payment_id:      event.payload['payment_id'],
+  });
+  return { success: true };
+}
+
+async function handleInvoiceVoided(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.invoice_voided', {
+    event_id:        event.id,
+    invoice_id:      event.payload['invoice_id'],
+    invoice_number:  event.payload['invoice_number'],
+    student_id:      event.payload['student_id'],
+    reason:          event.payload['reason'],
+  });
+  return { success: true };
+}
+
+async function handlePaymentReceived(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.payment_received', {
+    event_id:   event.id,
+    payment_id: event.payload['payment_id'],
+    invoice_id: event.payload['invoice_id'],
+    student_id: event.payload['student_id'],
+    amount:     event.payload['amount'],
+    method:     event.payload['method'],
+  });
+  return { success: true };
+}
+
+async function handleCreditGranted(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.credit_granted', {
+    event_id:           event.id,
+    ledger_id:          event.payload['ledger_id'],
+    student_id:         event.payload['student_id'],
+    lesson_category:    event.payload['lesson_category'],
+    quantity:           event.payload['quantity'],
+    expires_at:         event.payload['expires_at'],
+    student_package_id: event.payload['student_package_id'],
+  });
+  return { success: true };
+}
+
+async function handleCreditConsumed(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.credit_consumed', {
+    event_id:        event.id,
+    ledger_id:       event.payload['ledger_id'],
+    student_id:      event.payload['student_id'],
+    lesson_category: event.payload['lesson_category'],
+    quantity:        event.payload['quantity'],
+    booking_id:      event.payload['booking_id'],
+  });
+  return { success: true };
+}
+
+async function handleCreditExpired(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.credit_expired', {
+    event_id:        event.id,
+    ledger_id:       event.payload['ledger_id'],
+    student_id:      event.payload['student_id'],
+    lesson_category: event.payload['lesson_category'],
+    quantity:        event.payload['quantity'],
+    expired_at:      event.payload['expired_at'],
+  });
+  // TODO Phase 4B: notify student that credits are about to/have expired
+  return { success: true };
+}
+
 // ─── Handler registry ─────────────────────────────────────────────────────────
 
 const HANDLER_REGISTRY: Record<string, EventHandler> = {
@@ -333,6 +441,15 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
   'Reservation.Expired':     handleReservationExpired,
   'Reminder.Sent':           handleReminderSent,
   'Notification.Delivered':  handleNotificationDelivered,
+  // Phase 4A: Commercial accounting events (accounting channel)
+  'Package.Purchased':       handlePackagePurchased,
+  'Invoice.Issued':          handleInvoiceIssued,
+  'Invoice.Paid':            handleInvoicePaid,
+  'Invoice.Voided':          handleInvoiceVoided,
+  'Payment.Received':        handlePaymentReceived,
+  'Credit.Granted':          handleCreditGranted,
+  'Credit.Consumed':         handleCreditConsumed,
+  'Credit.Expired':          handleCreditExpired,
 };
 
 // ─── Maintenance tick ─────────────────────────────────────────────────────────
@@ -343,6 +460,7 @@ interface MaintenanceMetrics {
   reminders_processed:  number;
   reminders_failed:     number;
   reservations_expired: number;
+  credits_expired:      number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -449,6 +567,7 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     reminders_processed:  0,
     reminders_failed:     0,
     reservations_expired: 0,
+    credits_expired:      0,
   };
 
   // 1. Drain due reminders (atomic claim via SKIP LOCKED in DB function)
@@ -492,6 +611,27 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     }
   }
 
+  // 3. Expire stale credits (Phase 4A: FIFO grant expiry via SKIP LOCKED in DB)
+  const { data: expiredCredits, error: creditExpireErr } = await (client as any).rpc(
+    'expire_stale_credits',
+    { p_limit: CREDIT_EXPIRY_BATCH }
+  );
+
+  if (creditExpireErr !== null) {
+    logger.warn('maintenance.expire_credits_failed', {
+      worker_id: workerId,
+      error:     creditExpireErr.message,
+    });
+  } else {
+    metrics.credits_expired = (expiredCredits as number) ?? 0;
+    if (metrics.credits_expired > 0) {
+      logger.info('maintenance.credits_expired', {
+        worker_id: workerId,
+        count:     metrics.credits_expired,
+      });
+    }
+  }
+
   return metrics;
 }
 
@@ -513,6 +653,8 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
     reminders_processed:  0,
     reminders_failed:     0,
     reservations_expired: 0,
+    accounting_delivered: 0,
+    credits_expired:      0,
   };
 
   const client = createServiceClient();
@@ -596,11 +738,56 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
     }
   }
 
-  // Phase 3D: Maintenance tick — runs every invocation regardless of outbox state
+  // Phase 4A: Drain accounting channel (commercial events: Invoice, Payment, Credit)
+  const { data: accountingEvents, error: acctClaimErr } = await (client as any).rpc('outbox_claim_next', {
+    p_channel:    'accounting',
+    p_worker_id:  workerId,
+    p_batch_size: ACCOUNTING_BATCH,
+    p_lock_ttl:   LOCK_TTL,
+  });
+
+  if (acctClaimErr !== null) {
+    logger.warn('worker.accounting_claim_failed', {
+      worker_id: workerId,
+      error:     acctClaimErr.message,
+    });
+  } else {
+    for (const event of (accountingEvents ?? []) as OutboxEvent[]) {
+      const handler = HANDLER_REGISTRY[event.event_type];
+      try {
+        if (handler === undefined) {
+          await (client as any).rpc('outbox_complete', { p_event_id: event.id });
+        } else {
+          const result = await handler(event, client);
+          if (result.success) {
+            await (client as any).rpc('outbox_complete', { p_event_id: event.id });
+            metrics.accounting_delivered++;
+          } else {
+            await (client as any).rpc('outbox_fail', {
+              p_event_id: event.id,
+              p_error:    result.error ?? 'accounting handler failure',
+            });
+          }
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error('worker.accounting_handler_threw', {
+          worker_id:  workerId,
+          event_id:   event.id,
+          event_type: event.event_type,
+          error:      errMsg,
+        });
+        await (client as any).rpc('outbox_fail', { p_event_id: event.id, p_error: errMsg });
+      }
+    }
+  }
+
+  // Phase 3D + 4A: Maintenance tick — runs every invocation regardless of outbox state
   const maintMetrics = await runMaintenanceTick(client as any, workerId);
   metrics.reminders_processed  = maintMetrics.reminders_processed;
   metrics.reminders_failed     = maintMetrics.reminders_failed;
   metrics.reservations_expired = maintMetrics.reservations_expired;
+  metrics.credits_expired      = maintMetrics.credits_expired;
 
   metrics.run_duration_ms = Date.now() - startedAt;
 

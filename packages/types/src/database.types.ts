@@ -38,6 +38,16 @@ export type ReminderStatusEnum      = 'scheduled' | 'sending' | 'sent' | 'failed
 export type WaitlistStatusEnum      = 'waiting' | 'promoted' | 'expired' | 'cancelled';
 export type AutomationRuleTypeEnum  = 'reservation_expiry' | 'reminder_24h' | 'reminder_2h' | 'reminder_1h' | 'auto_confirm' | 'waitlist_promotion';
 
+// Phase 4A commercial enums
+export type PackageTypeEnum           = 'driving' | 'theory' | 'risk1' | 'risk2' | 'intensive' | 'mixed' | 'custom';
+export type PackageStatusEnum         = 'draft' | 'active' | 'archived' | 'discontinued';
+export type CreditEntryTypeEnum       = 'grant' | 'bonus' | 'consume' | 'expire' | 'adjust' | 'reverse';
+export type InvoiceStatusEnum         = 'draft' | 'issued' | 'paid' | 'partially_paid' | 'void' | 'overdue';
+export type InvoiceLineTypeEnum       = 'package' | 'lesson' | 'fee' | 'discount' | 'tax' | 'other';
+export type PaymentMethodEnum         = 'manual' | 'card' | 'bank_transfer' | 'swish' | 'stripe' | 'invoice_credit' | 'other';
+export type PaymentStatusEnum         = 'pending' | 'confirmed' | 'failed' | 'refunded' | 'partially_refunded' | 'void';
+export type FinancialPeriodStatusEnum = 'open' | 'closed' | 'locked';
+
 // ─── Database Interface ───────────────────────────────────────────────────────
 
 export interface Database {
@@ -964,6 +974,430 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['automation_rules']['Insert']>;
       };
 
+      // Phase 4A: Commercial foundation tables.
+
+      package_catalog: {
+        Row: {
+          id:               string;
+          organization_id:  string | null;
+          name:             string;
+          description:      string | null;
+          package_type:     PackageTypeEnum;
+          lesson_category:  LessonCategoryEnum;
+          default_quantity: number;
+          default_price:    number;
+          currency:         string;
+          vat_rate:         number;
+          validity_days:    number | null;
+          is_active:        boolean;
+          sort_order:       number;
+          metadata:         Json;
+          created_at:       string;
+          updated_at:       string;
+          created_by:       string | null;
+          updated_by:       string | null;
+        };
+        Insert: {
+          id?:               string;
+          organization_id?:  string | null;
+          name:              string;
+          description?:      string | null;
+          package_type?:     PackageTypeEnum;
+          lesson_category:   LessonCategoryEnum;
+          default_quantity:  number;
+          default_price:     number;
+          currency?:         string;
+          vat_rate?:         number;
+          validity_days?:    number | null;
+          is_active?:        boolean;
+          sort_order?:       number;
+          metadata?:         Json;
+          created_at?:       string;
+          updated_at?:       string;
+          created_by?:       string | null;
+          updated_by?:       string | null;
+        };
+        Update: Partial<Database['public']['Tables']['package_catalog']['Insert']>;
+      };
+
+      package_offerings: {
+        Row: {
+          id:               string;
+          organization_id:  string;
+          catalog_id:       string | null;
+          name:             string;
+          description:      string | null;
+          package_type:     PackageTypeEnum;
+          lesson_category:  LessonCategoryEnum;
+          quantity:         number;
+          bundle_credits:   Json;
+          price:            number;
+          currency:         string;
+          vat_rate:         number;
+          validity_days:    number | null;
+          status:           PackageStatusEnum;
+          sort_order:       number;
+          metadata:         Json;
+          created_at:       string;
+          updated_at:       string;
+          archived_at:      string | null;
+          created_by:       string | null;
+          updated_by:       string | null;
+          archived_by:      string | null;
+        };
+        Insert: {
+          id?:               string;
+          organization_id:   string;
+          catalog_id?:       string | null;
+          name:              string;
+          description?:      string | null;
+          package_type?:     PackageTypeEnum;
+          lesson_category:   LessonCategoryEnum;
+          quantity:          number;
+          bundle_credits?:   Json;
+          price:             number;
+          currency?:         string;
+          vat_rate?:         number;
+          validity_days?:    number | null;
+          status?:           PackageStatusEnum;
+          sort_order?:       number;
+          metadata?:         Json;
+          created_at?:       string;
+          updated_at?:       string;
+          archived_at?:      string | null;
+          created_by?:       string | null;
+          updated_by?:       string | null;
+          archived_by?:      string | null;
+        };
+        Update: Partial<Database['public']['Tables']['package_offerings']['Insert']>;
+      };
+
+      student_packages: {
+        Row: {
+          id:                string;
+          organization_id:   string;
+          student_id:        string;
+          offering_id:       string;
+          status:            PackageStatusEnum;
+          quantity_granted:  number;
+          quantity_consumed: number;
+          quantity_expired:  number;
+          price_paid:        number;
+          currency:          string;
+          vat_rate:          number;
+          purchased_at:      string;
+          activated_at:      string | null;
+          expires_at:        string | null;
+          archived_at:       string | null;
+          archived_by:       string | null;
+          notes:             string | null;
+          metadata:          Json;
+          created_at:        string;
+          updated_at:        string;
+          created_by:        string | null;
+        };
+        Insert: {
+          id?:               string;
+          organization_id:   string;
+          student_id:        string;
+          offering_id:       string;
+          status?:           PackageStatusEnum;
+          quantity_granted:  number;
+          quantity_consumed?: number;
+          quantity_expired?:  number;
+          price_paid:        number;
+          currency?:         string;
+          vat_rate:          number;
+          purchased_at?:     string;
+          activated_at?:     string | null;
+          expires_at?:       string | null;
+          archived_at?:      string | null;
+          archived_by?:      string | null;
+          notes?:            string | null;
+          metadata?:         Json;
+          created_at?:       string;
+          updated_at?:       string;
+          created_by?:       string | null;
+        };
+        Update: Partial<Database['public']['Tables']['student_packages']['Insert']>;
+      };
+
+      credit_ledger: {
+        Row: {
+          id:                 string;
+          organization_id:    string;
+          student_id:         string;
+          lesson_category:    LessonCategoryEnum;
+          entry_type:         CreditEntryTypeEnum;
+          quantity:           number;
+          currency:           string;
+          student_package_id: string | null;
+          booking_id:         string | null;
+          grant_entry_id:     string | null;
+          reference_type:     string | null;
+          reference_id:       string | null;
+          description:        string | null;
+          actor_id:           string | null;
+          expires_at:         string | null;
+          metadata:           Json;
+          created_at:         string;
+        };
+        Insert: {
+          id?:                string;
+          organization_id:    string;
+          student_id:         string;
+          lesson_category:    LessonCategoryEnum;
+          entry_type:         CreditEntryTypeEnum;
+          quantity:           number;
+          currency?:          string;
+          student_package_id?: string | null;
+          booking_id?:        string | null;
+          grant_entry_id?:    string | null;
+          reference_type?:    string | null;
+          reference_id?:      string | null;
+          description?:       string | null;
+          actor_id?:          string | null;
+          expires_at?:        string | null;
+          metadata?:          Json;
+          created_at?:        string;
+        };
+        Update: Partial<Database['public']['Tables']['credit_ledger']['Insert']>;
+      };
+
+      credit_balance_cache: {
+        Row: {
+          id:               string;
+          organization_id:  string;
+          student_id:       string;
+          lesson_category:  LessonCategoryEnum;
+          balance:          number;
+          last_ledger_id:   string | null;
+          updated_at:       string;
+        };
+        Insert: {
+          id?:              string;
+          organization_id:  string;
+          student_id:       string;
+          lesson_category:  LessonCategoryEnum;
+          balance?:         number;
+          last_ledger_id?:  string | null;
+          updated_at?:      string;
+        };
+        Update: Partial<Database['public']['Tables']['credit_balance_cache']['Insert']>;
+      };
+
+      invoices: {
+        Row: {
+          id:                  string;
+          organization_id:     string;
+          student_id:          string;
+          student_package_id:  string | null;
+          invoice_number:      string | null;
+          status:              InvoiceStatusEnum;
+          currency:            string;
+          subtotal_amount:     number;
+          vat_amount:          number;
+          total_amount:        number;
+          paid_amount:         number;
+          outstanding_amount:  number;
+          due_date:            string | null;
+          issued_at:           string | null;
+          issued_by:           string | null;
+          paid_at:             string | null;
+          void_at:             string | null;
+          void_by:             string | null;
+          void_reason:         string | null;
+          notes:               string | null;
+          metadata:            Json;
+          created_at:          string;
+          updated_at:          string;
+          created_by:          string | null;
+          updated_by:          string | null;
+        };
+        Insert: {
+          id?:                 string;
+          organization_id:     string;
+          student_id:          string;
+          student_package_id?: string | null;
+          invoice_number?:     string | null;
+          status?:             InvoiceStatusEnum;
+          currency?:           string;
+          subtotal_amount?:    number;
+          vat_amount?:         number;
+          total_amount?:       number;
+          paid_amount?:        number;
+          outstanding_amount?: number;
+          due_date?:           string | null;
+          issued_at?:          string | null;
+          issued_by?:          string | null;
+          paid_at?:            string | null;
+          void_at?:            string | null;
+          void_by?:            string | null;
+          void_reason?:        string | null;
+          notes?:              string | null;
+          metadata?:           Json;
+          created_at?:         string;
+          updated_at?:         string;
+          created_by?:         string | null;
+          updated_by?:         string | null;
+        };
+        Update: Partial<Database['public']['Tables']['invoices']['Insert']>;
+      };
+
+      invoice_line_items: {
+        Row: {
+          id:                 string;
+          organization_id:    string;
+          invoice_id:         string;
+          student_package_id: string | null;
+          line_type:          InvoiceLineTypeEnum;
+          description:        string;
+          quantity:           number;
+          unit_price:         number;
+          vat_rate:           number;
+          vat_amount:         number;
+          line_total:         number;
+          sort_order:         number;
+          metadata:           Json;
+          created_at:         string;
+          updated_at:         string;
+        };
+        Insert: {
+          id?:                string;
+          organization_id:    string;
+          invoice_id:         string;
+          student_package_id?: string | null;
+          line_type?:         InvoiceLineTypeEnum;
+          description:        string;
+          quantity?:          number;
+          unit_price:         number;
+          vat_rate?:          number;
+          vat_amount?:        number;
+          line_total?:        number;
+          sort_order?:        number;
+          metadata?:          Json;
+          created_at?:        string;
+          updated_at?:        string;
+        };
+        Update: Partial<Database['public']['Tables']['invoice_line_items']['Insert']>;
+      };
+
+      invoice_number_sequences: {
+        Row: {
+          id:               string;
+          organization_id:  string;
+          year:             number;
+          last_number:      number;
+          prefix:           string;
+          created_at:       string;
+          updated_at:       string;
+        };
+        Insert: {
+          id?:              string;
+          organization_id:  string;
+          year:             number;
+          last_number?:     number;
+          prefix?:          string;
+          created_at?:      string;
+          updated_at?:      string;
+        };
+        Update: Partial<Database['public']['Tables']['invoice_number_sequences']['Insert']>;
+      };
+
+      payments: {
+        Row: {
+          id:                  string;
+          organization_id:     string;
+          invoice_id:          string;
+          student_id:          string;
+          payment_method:      PaymentMethodEnum;
+          status:              PaymentStatusEnum;
+          amount:              number;
+          currency:            string;
+          provider_reference:  string | null;
+          provider_metadata:   Json;
+          paid_at:             string | null;
+          confirmed_at:        string | null;
+          confirmed_by:        string | null;
+          void_at:             string | null;
+          void_by:             string | null;
+          void_reason:         string | null;
+          refund_amount:       number | null;
+          refunded_at:         string | null;
+          refunded_by:         string | null;
+          notes:               string | null;
+          metadata:            Json;
+          created_at:          string;
+          updated_at:          string;
+          created_by:          string | null;
+        };
+        Insert: {
+          id?:                 string;
+          organization_id:     string;
+          invoice_id:          string;
+          student_id:          string;
+          payment_method:      PaymentMethodEnum;
+          status?:             PaymentStatusEnum;
+          amount:              number;
+          currency?:           string;
+          provider_reference?: string | null;
+          provider_metadata?:  Json;
+          paid_at?:            string | null;
+          confirmed_at?:       string | null;
+          confirmed_by?:       string | null;
+          void_at?:            string | null;
+          void_by?:            string | null;
+          void_reason?:        string | null;
+          refund_amount?:      number | null;
+          refunded_at?:        string | null;
+          refunded_by?:        string | null;
+          notes?:              string | null;
+          metadata?:           Json;
+          created_at?:         string;
+          updated_at?:         string;
+          created_by?:         string | null;
+        };
+        Update: Partial<Database['public']['Tables']['payments']['Insert']>;
+      };
+
+      financial_periods: {
+        Row: {
+          id:               string;
+          organization_id:  string;
+          name:             string;
+          period_start:     string;
+          period_end:       string;
+          status:           FinancialPeriodStatusEnum;
+          closed_at:        string | null;
+          closed_by:        string | null;
+          locked_at:        string | null;
+          locked_by:        string | null;
+          notes:            string | null;
+          metadata:         Json;
+          created_at:       string;
+          updated_at:       string;
+          created_by:       string | null;
+        };
+        Insert: {
+          id?:              string;
+          organization_id:  string;
+          name:             string;
+          period_start:     string;
+          period_end:       string;
+          status?:          FinancialPeriodStatusEnum;
+          closed_at?:       string | null;
+          closed_by?:       string | null;
+          locked_at?:       string | null;
+          locked_by?:       string | null;
+          notes?:           string | null;
+          metadata?:        Json;
+          created_at?:      string;
+          updated_at?:      string;
+          created_by?:      string | null;
+        };
+        Update: Partial<Database['public']['Tables']['financial_periods']['Insert']>;
+      };
+
       // Phase 1B.2: Transactional outbox for async event delivery.
       event_outbox: {
         Row: {
@@ -1217,6 +1651,48 @@ export interface Database {
         Args: { p_timeout_minutes?: number };
         Returns: number;
       };
+      // ── Phase 4A: Commercial SECURITY DEFINER functions ─────────────────────
+      purchase_package: {
+        Args: {
+          p_org_id:      string;
+          p_student_id:  string;
+          p_offering_id: string;
+          p_actor_id:    string;
+        };
+        Returns: string;  // student_package_id
+      };
+      consume_credit: {
+        Args: {
+          p_org_id:     string;
+          p_student_id: string;
+          p_booking_id: string;
+          p_category:   LessonCategoryEnum;
+          p_quantity?:  number;
+        };
+        Returns: string;  // credit_ledger entry id
+      };
+      issue_invoice: {
+        Args: { p_invoice_id: string; p_actor_id: string };
+        Returns: string;  // invoice_number
+      };
+      void_invoice: {
+        Args: { p_invoice_id: string; p_actor_id: string; p_reason?: string };
+        Returns: string;  // void_at timestamp
+      };
+      record_payment: {
+        Args: {
+          p_invoice_id: string;
+          p_amount:     number;
+          p_method:     PaymentMethodEnum;
+          p_reference?: string;
+          p_actor_id?:  string;
+        };
+        Returns: string;  // payment_id
+      };
+      expire_stale_credits: {
+        Args: { p_limit?: number };
+        Returns: number;
+      };
       // ── Soft delete helpers (service role only) ──────────────────────────────
       soft_delete: {
         Args: { p_table_name: string; p_record_id: string };
@@ -1252,6 +1728,14 @@ export interface Database {
       reminder_status:            ReminderStatusEnum;
       waitlist_status:            WaitlistStatusEnum;
       automation_rule_type:       AutomationRuleTypeEnum;
+      package_type:               PackageTypeEnum;
+      package_status:             PackageStatusEnum;
+      credit_entry_type:          CreditEntryTypeEnum;
+      invoice_status:             InvoiceStatusEnum;
+      invoice_line_type:          InvoiceLineTypeEnum;
+      payment_method:             PaymentMethodEnum;
+      payment_status:             PaymentStatusEnum;
+      financial_period_status:    FinancialPeriodStatusEnum;
     };
   };
 }

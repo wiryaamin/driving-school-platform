@@ -129,6 +129,26 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+[functions.packages]
+enabled = true
+verify_jwt = true
+
+[functions.student-packages]
+enabled = true
+verify_jwt = true
+
+[functions.invoices]
+enabled = true
+verify_jwt = true
+
+[functions.payments]
+enabled = true
+verify_jwt = true
+
+[functions.wallet]
+enabled = true
+verify_jwt = true
+
 # Event worker: drains the internal channel of the transactional outbox.
 # verify_jwt = false because it uses WORKER_SECRET for auth (set in secrets).
 # Production cron: configure via pg_cron (see below) or Supabase scheduled functions.
