@@ -11,11 +11,12 @@ import { LoadingScreen } from '@shared/components/layout/LoadingScreen/LoadingSc
 
 const LoginPage = lazy(() => import('@modules/auth/routes/LoginPage.js').then(m => ({ default: m.LoginPage })));
 const DashboardPage = lazy(() => import('@modules/dashboard/routes/DashboardPage.js').then(m => ({ default: m.DashboardPage })));
+const StudentsPage = lazy(() => import('@modules/students/index.js').then(m => ({ default: m.StudentsPage })));
+const SchedulingPage = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.SchedulingPage })));
+const InstructorsPage = lazy(() => import('@modules/instructors/index.js').then(m => ({ default: m.InstructorsPage })));
+const FinancePage = lazy(() => import('@modules/finance/index.js').then(m => ({ default: m.FinancePage })));
 
 // Future modules — uncomment as they're implemented:
-// const StudentsPage = lazy(() => import('@modules/students/routes/StudentsPage.js').then(m => ({ default: m.StudentsPage })));
-// const SchedulingPage = lazy(() => import('@modules/scheduling/routes/SchedulingPage.js').then(m => ({ default: m.SchedulingPage })));
-// const FinancePage = lazy(() => import('@modules/finance/routes/FinancePage.js').then(m => ({ default: m.FinancePage })));
 // const SettingsPage = lazy(() => import('@modules/settings/routes/SettingsPage.js').then(m => ({ default: m.SettingsPage })));
 
 // ─── Route Definitions ────────────────────────────────────────────────────────
@@ -56,10 +57,40 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      // ── Module routes ─────────────────────────────────────────────────
+      {
+        path: 'students/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <StudentsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'scheduling/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <SchedulingPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'instructors/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <InstructorsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'finance/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <FinancePage />
+          </Suspense>
+        ),
+      },
       // Future module routes — added here as modules are implemented:
-      // { path: 'students/*', element: <Suspense fallback={<LoadingScreen />}><StudentsPage /></Suspense> },
-      // { path: 'scheduling/*', element: <Suspense fallback={<LoadingScreen />}><SchedulingPage /></Suspense> },
-      // { path: 'finance/*', element: <Suspense fallback={<LoadingScreen />}><FinancePage /></Suspense> },
       // { path: 'settings/*', element: <Suspense fallback={<LoadingScreen />}><SettingsPage /></Suspense> },
     ],
   },

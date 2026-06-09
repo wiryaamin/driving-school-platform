@@ -1,56 +1,32 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /*
-  ─── Design Token Definitions ───────────────────────────────────────────────
-  All CSS variables following shadcn/ui convention.
+  ─── @platform/ui Design Tokens ─────────────────────────────────────────────
+  CSS variable definitions only. @tailwind directives must be provided by the
+  consuming application (e.g. apps/web/src/globals.css).
   Primary brand color: Swedish Blue (#006AA7)
 */
 
 @layer base {
   :root {
-    /* Core */
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;
-
-    /* Card */
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
-
-    /* Popover */
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
-
-    /* Primary — Swedish Blue */
     --primary: 207 100% 33%;
     --primary-foreground: 210 40% 98%;
-
-    /* Secondary */
     --secondary: 210 40% 96%;
     --secondary-foreground: 222 47% 11%;
-
-    /* Muted */
     --muted: 210 40% 96%;
     --muted-foreground: 215 16% 47%;
-
-    /* Accent */
     --accent: 210 40% 96%;
     --accent-foreground: 222 47% 11%;
-
-    /* Destructive */
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
-
-    /* Border / Input */
     --border: 214 32% 91%;
     --input: 214 32% 91%;
     --ring: 207 100% 33%;
-
-    /* Radius */
     --radius: 0.5rem;
-
-    /* Sidebar */
     --sidebar-background: 222 47% 11%;
     --sidebar-foreground: 215 20% 75%;
     --sidebar-primary: 207 100% 45%;
@@ -58,8 +34,6 @@
     --sidebar-accent: 222 47% 18%;
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 222 47% 18%;
-
-    /* Layout */
     --sidebar-width: 256px;
     --sidebar-collapsed-width: 64px;
     --topbar-height: 56px;
@@ -85,40 +59,10 @@
     --border: 217 33% 17%;
     --input: 217 33% 17%;
     --ring: 207 100% 50%;
-  }
-}
-
-@layer base {
-  * {
-    @apply border-border;
-  }
-
-  html {
-    font-feature-settings: 'rlig' 1, 'calt' 1;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
-  body {
-    @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, sans-serif;
-  }
-
-  /* Custom scrollbar */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    @apply bg-transparent;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    @apply bg-border rounded-full;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-muted-foreground/40;
+    --sidebar-background: 222 47% 4%;
+    --sidebar-foreground: 215 20% 65%;
+    --sidebar-primary: 207 100% 55%;
+    --sidebar-accent: 222 47% 10%;
+    --sidebar-border: 222 47% 10%;
   }
 }

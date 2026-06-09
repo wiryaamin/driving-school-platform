@@ -67,7 +67,7 @@ export function LoginPage() {
         {/* Email */}
         <FormField
           label={t('login.email_label')}
-          error={errors.email?.message}
+          {...(errors.email?.message ? { error: errors.email.message } : {})}
         >
           <input
             {...register('email')}
@@ -90,7 +90,7 @@ export function LoginPage() {
         {/* Password */}
         <FormField
           label={t('login.password_label')}
-          error={errors.password?.message}
+          {...(errors.password?.message ? { error: errors.password.message } : {})}
         >
           <input
             {...register('password')}

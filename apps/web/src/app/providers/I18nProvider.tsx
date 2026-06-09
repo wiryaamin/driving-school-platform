@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { I18nextProvider } from 'react-i18next';
+import { I18nextProvider } from '@platform/i18n';
 import { i18n } from '@platform/i18n';
 
 /**

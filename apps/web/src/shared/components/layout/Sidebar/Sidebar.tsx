@@ -36,13 +36,13 @@ interface NavSection {
   items: NavItem[];
 }
 
-const NAVIGATION: NavSection[] = [
+export const NAVIGATION: NavSection[] = [
   {
     labelSv: null,
     items: [
       {
         key: 'dashboard',
-        labelSv: 'Instrumentpanel',
+        labelSv: 'Översikt',
         icon: LayoutDashboard,
         path: '/dashboard',
         permission: null,
@@ -148,21 +148,61 @@ const NAVIGATION: NavSection[] = [
   },
 ];
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── Shared Nav Content ───────────────────────────────────────────────────────
+
+interface SidebarNavContentProps {
+  collapsed?: boolean;
+  onNavClick?: () => void;
+}
+
+export function SidebarNavContent({ collapsed = false, onNavClick }: SidebarNavContentProps) {
+  const { can } = usePermissions();
+
+  return (
+    <nav className={cn('flex-1 overflow-y-auto py-4 px-2 space-y-1')}>
+      {NAVIGATION.map((section, sectionIdx) => {
+        const visibleItems = section.items.filter(
+          (item) => item.permission === null || can(item.permission)
+        );
+        if (visibleItems.length === 0) return null;
+
+        return (
+          <div key={sectionIdx} className="mb-2">
+            {section.labelSv && !collapsed && (
+              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/50 select-none">
+                {section.labelSv}
+              </p>
+            )}
+            {visibleItems.map((item) => (
+              <SidebarItem
+                key={item.key}
+                item={item}
+                collapsed={collapsed}
+                {...(onNavClick ? { onClick: onNavClick } : {})}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ─── Desktop Sidebar ──────────────────────────────────────────────────────────
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebarCollapsed } = useUiStore();
-  const { can } = usePermissions();
 
   return (
     <aside
       className={cn(
-        'fixed left-0 top-0 h-full flex flex-col bg-sidebar border-r border-sidebar-border',
+        'fixed left-0 top-0 h-full flex-col bg-sidebar border-r border-sidebar-border',
         'transition-all duration-300 ease-in-out z-40',
+        'hidden md:flex',
         sidebarCollapsed ? 'w-16' : 'w-64'
       )}
     >
-      {/* ── Header ────────────────────────────────────────────────────────── */}
+      {/* Header */}
       <div className="flex items-center h-14 px-4 border-b border-sidebar-border shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
@@ -180,37 +220,10 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* ── Navigation ────────────────────────────────────────────────────── */}
-      <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
-        {NAVIGATION.map((section, sectionIdx) => {
-          const visibleItems = section.items.filter(
-            (item) => item.permission === null || can(item.permission)
-          );
+      {/* Navigation */}
+      <SidebarNavContent collapsed={sidebarCollapsed} />
 
-          if (visibleItems.length === 0) return null;
-
-          return (
-            <div key={sectionIdx} className="mb-2">
-              {/* Section label */}
-              {section.labelSv && !sidebarCollapsed && (
-                <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/50 select-none">
-                  {section.labelSv}
-                </p>
-              )}
-              {/* Items */}
-              {visibleItems.map((item) => (
-                <SidebarItem
-                  key={item.key}
-                  item={item}
-                  collapsed={sidebarCollapsed}
-                />
-              ))}
-            </div>
-          );
-        })}
-      </nav>
-
-      {/* ── Collapse Toggle ───────────────────────────────────────────────── */}
+      {/* Collapse Toggle */}
       <div className="shrink-0 p-2 border-t border-sidebar-border">
         <button
           onClick={toggleSidebarCollapsed}
@@ -234,7 +247,15 @@ export function Sidebar() {
 
 // ─── Sidebar Item ─────────────────────────────────────────────────────────────
 
-function SidebarItem({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+function SidebarItem({
+  item,
+  collapsed,
+  onClick,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  onClick?: () => void;
+}) {
   const location = useLocation();
   const isActive = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
   const Icon = item.icon;
@@ -242,6 +263,7 @@ function SidebarItem({ item, collapsed }: { item: NavItem; collapsed: boolean })
   return (
     <NavLink
       to={item.path}
+      onClick={onClick}
       className={cn(
         'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium',
         'transition-colors duration-150',
@@ -253,9 +275,7 @@ function SidebarItem({ item, collapsed }: { item: NavItem; collapsed: boolean })
       title={collapsed ? item.labelSv : undefined}
     >
       <Icon className="w-4 h-4 shrink-0" />
-      {!collapsed && (
-        <span className="truncate">{item.labelSv}</span>
-      )}
+      {!collapsed && <span className="truncate">{item.labelSv}</span>}
       {!collapsed && item.badge !== undefined && item.badge > 0 && (
         <span className="ml-auto shrink-0 text-xs font-semibold bg-primary text-primary-foreground rounded-full w-5 h-5 flex items-center justify-center">
           {item.badge > 99 ? '99+' : item.badge}

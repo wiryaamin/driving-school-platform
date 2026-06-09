@@ -1,0 +1,325 @@
+import { useState, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Search, X } from 'lucide-react';
+import type { ColumnDef } from '@platform/ui';
+import {
+  Button, Input,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  DataTable, DataTableColumnHeader,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
+} from '@platform/ui';
+import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
+import { useInvoiceList, useVoidInvoice } from '../hooks/useFinance.js';
+import type { Invoice, InvoiceStatus } from '../hooks/useFinance.js';
+import { InvoiceStatusBadge, INVOICE_STATUS_OPTIONS } from '../components/InvoiceStatusBadge.js';
+import { InvoiceQuickActions } from '../components/InvoiceQuickActions.js';
+import { formatCurrency, formatDate } from '../lib/financeUtils.js';
+
+// ─── Column definitions ───────────────────────────────────────────────────────
+
+function buildColumns(
+  onVoid: (invoice: Invoice) => void,
+): ColumnDef<Invoice>[] {
+  return [
+    {
+      id:     'invoice_number',
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Fakturanr" />,
+      accessorFn: (row) => row.invoice_number ?? '',
+      cell: ({ row }) => {
+        const inv = row.original;
+        return (
+          <span className={`text-sm font-mono ${!inv.invoice_number ? 'text-muted-foreground italic' : 'text-foreground font-medium'}`}>
+            {inv.invoice_number ?? 'Utkast'}
+          </span>
+        );
+      },
+    },
+    {
+      id:     'total_amount',
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Belopp" />,
+      accessorKey: 'total_amount',
+      cell: ({ row }) => (
+        <span className="text-sm font-mono font-medium">
+          {formatCurrency(row.original.total_amount, row.original.currency)}
+        </span>
+      ),
+    },
+    {
+      id:     'outstanding_amount',
+      header: 'Utestående',
+      cell: ({ row }) => {
+        const inv = row.original;
+        if (inv.status === 'paid') return <span className="text-sm text-muted-foreground">—</span>;
+        return (
+          <span className={`text-sm font-mono ${inv.outstanding_amount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+            {formatCurrency(inv.outstanding_amount, inv.currency)}
+          </span>
+        );
+      },
+    },
+    {
+      id:          'status',
+      accessorKey: 'status',
+      header:      ({ column }) => <DataTableColumnHeader column={column} title="Status" />,
+      cell:        ({ row }) => <InvoiceStatusBadge status={row.original.status} />,
+    },
+    {
+      id:     'due_date',
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Förfaller" />,
+      accessorFn: (row) => row.due_date ?? '',
+      cell: ({ row }) => {
+        const inv = row.original;
+        const isOverdue = inv.due_date && inv.status !== 'paid' && inv.status !== 'void'
+          && new Date(inv.due_date) < new Date();
+        return (
+          <span className={`text-sm ${isOverdue ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+            {formatDate(inv.due_date)}
+          </span>
+        );
+      },
+    },
+    {
+      id:     'created_at',
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Skapad" />,
+      accessorKey: 'created_at',
+      cell: ({ row }) => (
+        <span className="text-sm text-muted-foreground">
+          {formatDate(row.original.created_at)}
+        </span>
+      ),
+    },
+    {
+      id:            'vat_amount',
+      header:        'Moms',
+      cell:          ({ row }) => (
+        <span className="text-sm text-muted-foreground font-mono">
+          {formatCurrency(row.original.vat_amount, row.original.currency)}
+        </span>
+      ),
+    },
+    {
+      id:            'actions',
+      header:        '',
+      cell:          ({ row }) => (
+        <InvoiceQuickActions invoice={row.original} onVoid={onVoid} />
+      ),
+      enableSorting:  false,
+      enableHiding:   false,
+    },
+  ];
+}
+
+// ─── Toolbar ──────────────────────────────────────────────────────────────────
+
+interface ToolbarProps {
+  search:               string;
+  onSearchChange:       (v: string) => void;
+  statusFilter:         InvoiceStatus | 'all';
+  onStatusFilterChange: (v: InvoiceStatus | 'all') => void;
+}
+
+function InvoiceTableToolbar({ search, onSearchChange, statusFilter, onStatusFilterChange }: ToolbarProps) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap w-full">
+      <div className="relative flex-1 min-w-[200px] max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <Input
+          placeholder="Sök fakturanummer..."
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          className="pl-9 pr-8"
+        />
+        {search && (
+          <button
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            onClick={() => onSearchChange('')}
+            aria-label="Rensa sökning"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      <Select
+        value={statusFilter}
+        onValueChange={(v) => onStatusFilterChange(v as InvoiceStatus | 'all')}
+      >
+        <SelectTrigger className="w-[180px]">
+          <SelectValue placeholder="Alla statusar" />
+        </SelectTrigger>
+        <SelectContent>
+          {INVOICE_STATUS_OPTIONS.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+// ─── Void confirm dialog ──────────────────────────────────────────────────────
+
+interface VoidDialogProps {
+  invoice:   Invoice | null;
+  open:      boolean;
+  onClose:   () => void;
+  onConfirm: (id: string) => void;
+  isPending: boolean;
+}
+
+function VoidConfirmDialog({ invoice, open, onClose, onConfirm, isPending }: VoidDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Makulera faktura</DialogTitle>
+          <DialogDescription>
+            Är du säker på att du vill makulera faktura{' '}
+            <strong>{invoice?.invoice_number ?? 'utkast'}</strong>?
+            Denna åtgärd kan inte ångras.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={isPending}>
+            Avbryt
+          </Button>
+          <PermissionGate permission={Permissions.FINANCE_INVOICE_VOID}>
+            <Button
+              variant="destructive"
+              onClick={() => { if (invoice) onConfirm(invoice.id); }}
+              disabled={isPending}
+            >
+              {isPending ? 'Makulerar...' : 'Makulera faktura'}
+            </Button>
+          </PermissionGate>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export function InvoiceListPage() {
+  const navigate = useNavigate();
+
+  const [search,       setSearch]       = useState('');
+  const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all');
+  const [voidTarget,   setVoidTarget]   = useState<Invoice | null>(null);
+
+  const { data, isLoading, error } = useInvoiceList({
+    ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+    per_page: 50,
+  });
+
+  const voidMutation = useVoidInvoice();
+
+  const invoices = data?.data ?? [];
+  const total    = data?.meta.total ?? 0;
+
+  const filteredInvoices = useMemo(() => {
+    if (!search) return invoices;
+    const q = search.toLowerCase();
+    return invoices.filter((inv) =>
+      (inv.invoice_number ?? '').toLowerCase().includes(q)
+    );
+  }, [invoices, search]);
+
+  const handleVoid = useCallback((invoice: Invoice) => {
+    setVoidTarget(invoice);
+  }, []);
+
+  const handleVoidConfirm = useCallback((id: string) => {
+    voidMutation.mutate({ id }, {
+      onSuccess: () => setVoidTarget(null),
+    });
+  }, [voidMutation]);
+
+  const columns = useMemo(() => buildColumns(handleVoid), [handleVoid]);
+
+  return (
+    <PageLayout>
+      <PageHeader
+        title="Fakturor"
+        {...(total > 0 ? { description: `${total} fakturor totalt` } : {})}
+        breadcrumbs={[
+          { label: 'Hem' },
+          { label: 'Ekonomi' },
+          { label: 'Fakturor' },
+        ]}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate('/finance/payments')}
+            >
+              Betalningar
+            </Button>
+          </div>
+        }
+      />
+
+      <PageContent>
+        {error ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <p className="text-sm text-destructive">Det gick inte att hämta fakturalistan.</p>
+            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+              Försök igen
+            </Button>
+          </div>
+        ) : (
+          <>
+            {/* Summary badges */}
+            {!isLoading && invoices.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-4">
+                {(['overdue', 'issued', 'paid'] as const).map((s) => {
+                  const count = invoices.filter((i) => i.status === s).length;
+                  if (count === 0) return null;
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => setStatusFilter(s)}
+                      className="flex items-center gap-1.5 text-sm hover:opacity-80 transition-opacity"
+                    >
+                      <InvoiceStatusBadge status={s} />
+                      <span className="text-muted-foreground">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <DataTable
+              columns={columns}
+              data={filteredInvoices}
+              isLoading={isLoading}
+              emptyMessage="Inga fakturor hittades."
+              defaultPageSize={25}
+              toolbar={
+                <InvoiceTableToolbar
+                  search={search}
+                  onSearchChange={setSearch}
+                  statusFilter={statusFilter}
+                  onStatusFilterChange={setStatusFilter}
+                />
+              }
+            />
+          </>
+        )}
+      </PageContent>
+
+      <VoidConfirmDialog
+        invoice={voidTarget}
+        open={voidTarget !== null}
+        onClose={() => setVoidTarget(null)}
+        onConfirm={handleVoidConfirm}
+        isPending={voidMutation.isPending}
+      />
+    </PageLayout>
+  );
+}

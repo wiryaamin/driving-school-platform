@@ -1,28 +1,35 @@
-import { Bell, ChevronDown, LogOut, Settings, User } from 'lucide-react';
+import { Bell, ChevronDown, LogOut, Menu, Moon, Settings, Sun, User } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
 import { useState } from 'react';
 
-/**
- * TopBar — the persistent header bar across all authenticated pages.
- * Contains: organization context, notifications, and user menu.
- */
 export function TopBar() {
   const { user, profile, organization } = useSessionStore();
-  const { sidebarCollapsed } = useUiStore();
+  const { sidebarCollapsed, toggleMobileMenu, theme, toggleTheme } = useUiStore();
 
   return (
     <header
       className={cn(
         'h-14 bg-background border-b border-border',
-        'flex items-center px-6 gap-4',
+        'flex items-center px-4 gap-3',
         'fixed top-0 right-0 z-30 transition-all duration-300',
-        sidebarCollapsed ? 'left-16' : 'left-64'
+        /* Mobile: full width. Desktop: offset by sidebar */
+        'left-0',
+        sidebarCollapsed ? 'md:left-16' : 'md:left-64'
       )}
     >
-      {/* Organization + Location Context */}
+      {/* Mobile hamburger — only visible on mobile */}
+      <button
+        className="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        onClick={toggleMobileMenu}
+        aria-label="Öppna meny"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
+
+      {/* Organization context */}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-foreground truncate">
           {organization?.name ?? '—'}
@@ -30,8 +37,18 @@ export function TopBar() {
       </div>
 
       {/* Right side controls */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-1 shrink-0">
+        {/* Dark mode toggle */}
+        <button
+          className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Ljust läge' : 'Mörkt läge'}
+        >
+          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
+
         <NotificationBell />
+
         <UserMenu
           displayName={profile ? `${profile.first_name} ${profile.last_name}` : (user?.email ?? '')}
           email={user?.email ?? ''}
@@ -45,7 +62,7 @@ export function TopBar() {
 // ─── Notification Bell ────────────────────────────────────────────────────────
 
 function NotificationBell() {
-  const [hasUnread] = useState(false); // Wired to realtime in Phase 2
+  const [hasUnread] = useState(false);
 
   return (
     <button
@@ -106,7 +123,6 @@ function UserMenu({ displayName, email, role }: UserMenuProps) {
         aria-haspopup="true"
         aria-expanded={open}
       >
-        {/* Avatar */}
         <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0">
           <span className="text-xs font-semibold text-primary-foreground">{initials || '?'}</span>
         </div>
@@ -114,17 +130,14 @@ function UserMenu({ displayName, email, role }: UserMenuProps) {
         <ChevronDown className={cn('w-3.5 h-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
 
-      {/* Dropdown */}
       {open && (
         <>
-          {/* Backdrop */}
           <div
             className="fixed inset-0 z-40"
             onClick={() => setOpen(false)}
             aria-hidden
           />
           <div className="absolute right-0 top-full mt-1 w-56 bg-popover border border-border rounded-xl shadow-lg z-50 py-1 overflow-hidden">
-            {/* User info */}
             <div className="px-3 py-2.5 border-b border-border">
               <p className="text-sm font-semibold text-popover-foreground truncate">{displayName}</p>
               <p className="text-xs text-muted-foreground truncate">{email}</p>
@@ -132,13 +145,10 @@ function UserMenu({ displayName, email, role }: UserMenuProps) {
                 <p className="text-xs text-primary mt-0.5">{ROLE_LABELS[role] ?? role}</p>
               )}
             </div>
-
-            {/* Menu items */}
             <div className="py-1">
               <MenuButton icon={User} label="Min profil" onClick={() => setOpen(false)} />
               <MenuButton icon={Settings} label="Inställningar" onClick={() => setOpen(false)} />
             </div>
-
             <div className="border-t border-border py-1">
               <MenuButton
                 icon={LogOut}

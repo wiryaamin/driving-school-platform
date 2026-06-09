@@ -35,6 +35,7 @@ const LOCK_TTL             = Deno.env.get('EVENT_WORKER_LOCK_TTL')              
 const REMINDER_BATCH       = Number(Deno.env.get('EVENT_WORKER_REMINDER_BATCH')  ?? '20');
 const EXPIRY_TIMEOUT       = Number(Deno.env.get('RESERVATION_EXPIRY_MINUTES')   ?? '30');
 const CREDIT_EXPIRY_BATCH  = Number(Deno.env.get('CREDIT_EXPIRY_BATCH')         ?? '50');
+const DUNNING_BATCH        = Number(Deno.env.get('DUNNING_BATCH')               ?? '100');
 const WORKER_SECRET        = Deno.env.get('WORKER_SECRET');
 
 // ─── Template key mapping ─────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ interface WorkerMetrics {
   reservations_expired:  number;
   accounting_delivered:  number;
   credits_expired:       number;
+  dunning_processed:     number;
 }
 
 // ─── Outbox event handlers ────────────────────────────────────────────────────
@@ -417,7 +419,87 @@ async function handleCreditExpired(event: OutboxEvent, _client: unknown): Promis
     quantity:        event.payload['quantity'],
     expired_at:      event.payload['expired_at'],
   });
-  // TODO Phase 4B: notify student that credits are about to/have expired
+  // TODO: notify student that credits have expired
+  return { success: true };
+}
+
+// ── Phase 4B commercial handlers (accounting + internal channels) ─────────────
+
+async function handleRefundProcessed(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.refund_processed', {
+    event_id:        event.id,
+    refund_id:       event.payload['refund_id'],
+    invoice_id:      event.payload['invoice_id'],
+    student_id:      event.payload['student_id'],
+    refund_type:     event.payload['refund_type'],
+    reason_code:     event.payload['reason_code'],
+    refund_amount:   event.payload['refund_amount'],
+    credit_quantity: event.payload['credit_quantity'],
+  });
+  // TODO: enqueue in accounting_export_queue; notify student of refund
+  return { success: true };
+}
+
+async function handlePaymentReconciled(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.payment_reconciled', {
+    event_id:                  event.id,
+    allocation_id:             event.payload['allocation_id'],
+    payment_id:                event.payload['payment_id'],
+    invoice_id:                event.payload['invoice_id'],
+    allocated_amount:          event.payload['allocated_amount'],
+    invoice_outstanding_after: event.payload['invoice_outstanding_after'],
+  });
+  // TODO: enqueue in accounting_export_queue
+  return { success: true };
+}
+
+async function handleDiscountApplied(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.discount_applied', {
+    event_id:         event.id,
+    application_id:   event.payload['application_id'],
+    discount_id:      event.payload['discount_id'],
+    discount_name:    event.payload['discount_name'],
+    invoice_id:       event.payload['invoice_id'],
+    discount_amount:  event.payload['discount_amount'],
+  });
+  return { success: true };
+}
+
+async function handleCouponRedeemed(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.coupon_redeemed', {
+    event_id:        event.id,
+    coupon_id:       event.payload['coupon_id'],
+    coupon_code:     event.payload['coupon_code'],
+    student_id:      event.payload['student_id'],
+    invoice_id:      event.payload['invoice_id'],
+  });
+  return { success: true };
+}
+
+async function handleInvoiceOverdue(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  logger.info('handler.invoice_overdue', {
+    event_id:      event.id,
+    invoice_id:    event.payload['invoice_id'],
+    student_id:    event.payload['student_id'],
+    days_overdue:  event.payload['days_overdue'],
+    due_date:      event.payload['due_date'],
+  });
+  // TODO: trigger initial overdue notification to student
+  return { success: true };
+}
+
+async function handleInvoiceReminderSent(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+  const actionType = event.payload['action_type'] as string | undefined;
+  logger.info('handler.invoice_reminder_sent', {
+    event_id:        event.id,
+    invoice_id:      event.payload['invoice_id'],
+    student_id:      event.payload['student_id'],
+    stage_number:    event.payload['stage_number'],
+    action_type:     actionType,
+    reminder_log_id: event.payload['reminder_log_id'],
+    is_automated:    event.payload['is_automated'],
+  });
+  // TODO: dispatch email/SMS/both based on action_type
   return { success: true };
 }
 
@@ -450,6 +532,13 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
   'Credit.Granted':          handleCreditGranted,
   'Credit.Consumed':         handleCreditConsumed,
   'Credit.Expired':          handleCreditExpired,
+  // Phase 4B: Refunds, reconciliation, discounts, dunning
+  'Refund.Processed':        handleRefundProcessed,
+  'Payment.Reconciled':      handlePaymentReconciled,
+  'Discount.Applied':        handleDiscountApplied,
+  'Coupon.Redeemed':         handleCouponRedeemed,
+  'Invoice.Overdue':         handleInvoiceOverdue,
+  'Invoice.ReminderSent':    handleInvoiceReminderSent,
 };
 
 // ─── Maintenance tick ─────────────────────────────────────────────────────────
@@ -461,6 +550,7 @@ interface MaintenanceMetrics {
   reminders_failed:     number;
   reservations_expired: number;
   credits_expired:      number;
+  dunning_processed:    number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -568,6 +658,7 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     reminders_failed:     0,
     reservations_expired: 0,
     credits_expired:      0,
+    dunning_processed:    0,
   };
 
   // 1. Drain due reminders (atomic claim via SKIP LOCKED in DB function)
@@ -628,6 +719,27 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
       logger.info('maintenance.credits_expired', {
         worker_id: workerId,
         count:     metrics.credits_expired,
+      });
+    }
+  }
+
+  // 4. Process dunning tick (Phase 4B: mark overdue invoices + advance dunning stages)
+  const { data: dunningCount, error: dunningErr } = await (client as any).rpc(
+    'process_dunning_tick',
+    { p_limit: DUNNING_BATCH }
+  );
+
+  if (dunningErr !== null) {
+    logger.warn('maintenance.dunning_tick_failed', {
+      worker_id: workerId,
+      error:     dunningErr.message,
+    });
+  } else {
+    metrics.dunning_processed = (dunningCount as number) ?? 0;
+    if (metrics.dunning_processed > 0) {
+      logger.info('maintenance.dunning_processed', {
+        worker_id: workerId,
+        count:     metrics.dunning_processed,
       });
     }
   }
@@ -788,6 +900,7 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
   metrics.reminders_failed     = maintMetrics.reminders_failed;
   metrics.reservations_expired = maintMetrics.reservations_expired;
   metrics.credits_expired      = maintMetrics.credits_expired;
+  metrics.dunning_processed    = maintMetrics.dunning_processed;
 
   metrics.run_duration_ms = Date.now() - startedAt;
 

@@ -35,6 +35,7 @@ export const Permissions = {
   FINANCE_INVOICE_EXPORT: 'finance:invoice:export',
   FINANCE_PAYMENT_READ: 'finance:payment:read',
   FINANCE_PAYMENT_CREATE: 'finance:payment:create',
+  FINANCE_WALLET_READ: 'finance:wallet:read',
 
   // ─── Documents ─────────────────────────────────────────────────────────────
   DOCUMENTS_READ: 'documents:document:read',

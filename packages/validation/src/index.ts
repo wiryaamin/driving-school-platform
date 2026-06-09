@@ -92,6 +92,21 @@ export type {
 } from './commercial/index.js';
 
 export {
+  UpsertSwedishSettingsSchema,
+  CreateVatPeriodSchema,
+  LockVatPeriodSchema,
+  GenerateSie4Schema,
+  FortnoxQueueSyncSchema,
+} from './swedish/index.js';
+export type {
+  UpsertSwedishSettingsDto,
+  CreateVatPeriodDto,
+  LockVatPeriodDto,
+  GenerateSie4Dto,
+  FortnoxQueueSyncDto,
+} from './swedish/index.js';
+
+export {
   CreateLessonSlotSchema,
   UpdateLessonSlotSchema,
   LessonSlotListQuerySchema,

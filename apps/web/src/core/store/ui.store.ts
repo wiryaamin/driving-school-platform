@@ -1,12 +1,15 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 
+type Theme = 'light' | 'dark';
+
 // ─── State Shape ──────────────────────────────────────────────────────────────
 
 interface UiState {
   sidebarCollapsed: boolean;
   activeModuleKey: string | null;
   isMobileMenuOpen: boolean;
+  theme: Theme;
 }
 
 interface UiActions {
@@ -15,6 +18,8 @@ interface UiActions {
   setActiveModule: (key: string | null) => void;
   toggleMobileMenu: () => void;
   closeMobileMenu: () => void;
+  setTheme: (theme: Theme) => void;
+  toggleTheme: () => void;
 }
 
 type UiStore = UiState & UiActions;
@@ -28,6 +33,7 @@ export const useUiStore = create<UiStore>()(
         sidebarCollapsed: false,
         activeModuleKey: null,
         isMobileMenuOpen: false,
+        theme: 'light',
 
         toggleSidebarCollapsed: () =>
           set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
@@ -40,11 +46,17 @@ export const useUiStore = create<UiStore>()(
           set((state) => ({ isMobileMenuOpen: !state.isMobileMenuOpen })),
 
         closeMobileMenu: () => set({ isMobileMenuOpen: false }),
+
+        setTheme: (theme) => set({ theme }),
+
+        toggleTheme: () =>
+          set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' })),
       }),
       {
         name: 'platform-ui',
         partialize: (state) => ({
           sidebarCollapsed: state.sidebarCollapsed,
+          theme: state.theme,
         }),
       }
     ),

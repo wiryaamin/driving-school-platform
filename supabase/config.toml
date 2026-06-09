@@ -149,6 +149,38 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+[functions.refunds]
+enabled = true
+verify_jwt = true
+
+[functions.discounts]
+enabled = true
+verify_jwt = true
+
+[functions.dunning]
+enabled = true
+verify_jwt = true
+
+[functions.reports]
+enabled = true
+verify_jwt = true
+
+[functions.swedish-settings]
+enabled = true
+verify_jwt = true
+
+[functions.swedish-vat]
+enabled = true
+verify_jwt = true
+
+[functions.sie4]
+enabled = true
+verify_jwt = true
+
+[functions.fortnox]
+enabled = true
+verify_jwt = true
+
 # Event worker: drains the internal channel of the transactional outbox.
 # verify_jwt = false because it uses WORKER_SECRET for auth (set in secrets).
 # Production cron: configure via pg_cron (see below) or Supabase scheduled functions.
@@ -169,3 +201,47 @@ verify_jwt = true
 [functions.event-worker]
 enabled = true
 verify_jwt = false
+
+[functions.ledger]
+enabled = true
+verify_jwt = true
+
+[functions.reconciliation]
+enabled = true
+verify_jwt = true
+
+[functions.financial-close]
+enabled = true
+verify_jwt = true
+
+[functions.payroll]
+enabled = true
+verify_jwt = true
+
+[functions.regulatory-exports]
+enabled = true
+verify_jwt = true
+
+[functions.fixed-assets]
+enabled = true
+verify_jwt = true
+
+[functions.accruals]
+enabled = true
+verify_jwt = true
+
+[functions.ledger-replay]
+enabled = true
+verify_jwt = true
+
+[functions.ledger-governance]
+enabled = true
+verify_jwt = true
+
+[functions.replay-architecture]
+enabled = true
+verify_jwt = true
+
+[functions.compliance]
+enabled = true
+verify_jwt = true

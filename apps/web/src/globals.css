@@ -1,27 +1,291 @@
-/* Import shared design system from packages/ui */
-@import '../../node_modules/@platform/ui/src/globals.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* App-specific overrides */
+/*
+  ─── Design Token Definitions ───────────────────────────────────────────────
+  Primary brand color: Swedish Blue (#006AA7)
+  All CSS variables follow shadcn/ui convention.
+*/
+
 @layer base {
-  /* Smooth scroll */
-  html {
-    scroll-behavior: smooth;
+  :root {
+    /* Core */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    /* Card */
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Primary — Swedish Blue */
+    --primary: 207 100% 33%;
+    --primary-foreground: 210 40% 98%;
+
+    /* Secondary */
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    /* Muted */
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Accent */
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+
+    /* Destructive */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    /* Border / Input */
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 207 100% 33%;
+
+    /* Radius */
+    --radius: 0.5rem;
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 215 20% 75%;
+    --sidebar-primary: 207 100% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 47% 18%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 222 47% 18%;
+
+    /* Layout */
+    --sidebar-width: 256px;
+    --sidebar-collapsed-width: 64px;
+    --topbar-height: 56px;
   }
 
-  /* Focus ring — accessible and on-brand */
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 207 100% 50%;
+    --primary-foreground: 222 47% 6%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 63% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 207 100% 50%;
+
+    /* Sidebar dark */
+    --sidebar-background: 222 47% 4%;
+    --sidebar-foreground: 215 20% 65%;
+    --sidebar-primary: 207 100% 55%;
+    --sidebar-accent: 222 47% 10%;
+    --sidebar-border: 222 47% 10%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Accessible focus ring */
   :focus-visible {
     @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
   }
 
-  /* Remove focus ring from mouse users */
   :focus:not(:focus-visible) {
     @apply outline-none;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/40;
   }
 }
 
 @layer components {
-  /* Page transition animation */
   .page-enter {
     @apply animate-fade-in;
   }
+}
+
+/* ─── FullCalendar integration ─────────────────────────────────────────────── */
+
+/* Override FullCalendar CSS custom properties to match our design system */
+.fc {
+  --fc-border-color: hsl(var(--border));
+  --fc-button-bg-color: hsl(var(--primary));
+  --fc-button-border-color: hsl(var(--primary));
+  --fc-button-hover-bg-color: hsl(207 100% 28%);
+  --fc-button-hover-border-color: hsl(207 100% 28%);
+  --fc-button-active-bg-color: hsl(207 100% 25%);
+  --fc-button-active-border-color: hsl(207 100% 25%);
+  --fc-button-text-color: hsl(var(--primary-foreground));
+  --fc-today-bg-color: hsl(var(--primary) / 0.06);
+  --fc-neutral-bg-color: hsl(var(--muted));
+  --fc-neutral-text-color: hsl(var(--muted-foreground));
+  --fc-page-bg-color: hsl(var(--card));
+  --fc-event-bg-color: hsl(var(--primary));
+  --fc-event-border-color: hsl(var(--primary));
+  --fc-event-text-color: hsl(var(--primary-foreground));
+  --fc-event-selected-overlay-color: rgba(0, 0, 0, 0.15);
+  --fc-now-indicator-color: hsl(var(--destructive));
+  --fc-non-business-color: hsl(var(--muted) / 0.3);
+  --fc-list-event-hover-bg-color: hsl(var(--accent));
+  --fc-highlight-color: hsl(var(--primary) / 0.1);
+
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
+/* Calendar background */
+.fc .fc-view-harness {
+  background-color: hsl(var(--card));
+}
+
+/* Column headers (Mon, Tue...) */
+.fc .fc-col-header-cell {
+  background-color: hsl(var(--muted) / 0.4);
+  border-color: hsl(var(--border));
+}
+
+.fc .fc-col-header-cell-cushion {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 4px;
+  text-decoration: none !important;
+}
+
+/* Time axis labels */
+.fc .fc-timegrid-slot-label-cushion {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+/* Cell borders */
+.fc .fc-timegrid-slot,
+.fc .fc-daygrid-day,
+.fc .fc-timegrid-col {
+  border-color: hsl(var(--border));
+}
+
+/* Today column highlight */
+.fc .fc-day-today {
+  background-color: hsl(var(--primary) / 0.04) !important;
+}
+
+.fc .fc-day-today .fc-col-header-cell-cushion {
+  color: hsl(var(--primary));
+}
+
+/* Events — remove default browser focus outline, use our own */
+.fc .fc-event:focus {
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+  outline: none;
+}
+
+/* Event container */
+.fc .fc-timegrid-event {
+  border-radius: 4px;
+  box-shadow: none;
+  border-width: 1px;
+}
+
+/* Remove default event title (we render custom content) */
+.fc .fc-event-title {
+  display: none;
+}
+
+.fc .fc-event-time {
+  display: none;
+}
+
+/* Month view day numbers */
+.fc .fc-daygrid-day-number {
+  color: hsl(var(--foreground));
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: none !important;
+  padding: 4px 6px;
+}
+
+.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+  color: hsl(var(--primary));
+  font-weight: 700;
+}
+
+/* "More" events link */
+.fc .fc-daygrid-more-link {
+  color: hsl(var(--primary));
+  font-size: 0.7rem;
+}
+
+/* Now indicator line */
+.fc .fc-timegrid-now-indicator-line {
+  border-color: hsl(var(--destructive));
+}
+.fc .fc-timegrid-now-indicator-arrow {
+  border-top-color: hsl(var(--destructive));
+  border-bottom-color: hsl(var(--destructive));
+}
+
+/* Dark mode overrides */
+.dark .fc .fc-col-header-cell {
+  background-color: hsl(var(--muted) / 0.6);
+}
+
+.dark .fc .fc-timegrid-slot.fc-timegrid-slot-minor {
+  border-color: hsl(var(--border) / 0.5);
+}
+
+/* Scrollbar in time grid */
+.fc .fc-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+.fc .fc-scroller::-webkit-scrollbar {
+  width: 6px;
+}
+.fc .fc-scroller::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--border));
+  border-radius: 3px;
 }

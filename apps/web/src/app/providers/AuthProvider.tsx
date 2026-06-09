@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         permissions:          claims.permissions,
         subscription_tier:    claims.subscription_tier,
         is_platform_admin:    claims.is_platform_admin,
-        impersonator_id:      claims.impersonator_id,
+        ...(claims.impersonator_id ? { impersonator_id: claims.impersonator_id } : {}),
       };
 
       // ── Fetch profile ──────────────────────────────────────────────────────

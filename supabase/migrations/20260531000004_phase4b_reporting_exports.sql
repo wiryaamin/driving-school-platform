@@ -1,0 +1,490 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- MIGRATION: 20260531000004_phase4b_reporting_exports.sql
+-- Platform:  Trafikskolan SaaS — Swedish Driving School ERP
+-- Phase:     4B.4 — Financial Reporting, Accounting Exports, and Complete RBAC
+--
+-- Implements:
+--   accounting_chart_of_accounts — org-specific event→BAS account code mappings
+--   accounting_export_runs       — history of export runs
+--   accounting_export_queue      — events queued for accounting export
+--
+-- New SECURITY INVOKER views (use calling user's RLS context):
+--   v_revenue_by_period      — confirmed payments matched to financial periods
+--   v_vat_summary            — VAT collected per org per month
+--   v_outstanding_invoices   — all invoices with outstanding balance > 0
+--   v_invoice_aging          — outstanding invoices bucketed by days overdue
+--   v_wallet_liability       — total unconsumed lesson credits per org (future obligation)
+--   v_deferred_revenue       — estimated future revenue from unconsumed credits
+--
+-- New SECURITY DEFINER RPCs:
+--   get_aging_report   — parameterized aging report (buckets: current, 1-30, 31-60, 61-90, 90+)
+--   get_vat_summary    — parameterized VAT summary for a date range
+--
+-- Complete Phase 4B RBAC:
+--   All remaining Phase 4B permissions + role assignments consolidated here.
+--
+-- Dependencies:
+--   20260531000003_phase4b_dunning.sql (preceding Phase 4B migrations)
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- ── Section 1: New enum types ────────────────────────────────────────────────
+
+CREATE TYPE public.accounting_export_format AS ENUM (
+  'sie4',         -- Swedish SIE 4 format (standard for Swedish bookkeeping software)
+  'fortnox_csv',  -- Fortnox-compatible CSV format
+  'visma_csv'     -- Visma e-Economy compatible CSV format
+);
+
+-- ── Section 2: New tables ────────────────────────────────────────────────────
+
+-- 2.1 accounting_chart_of_accounts
+-- Per-org mapping of event types to BAS (Swedish Chart of Accounts) codes.
+-- Used by the TypeScript accounting export service to generate SIE4/CSV files.
+-- NULL organization_id = platform-wide default (not currently used; reserved).
+
+CREATE TABLE public.accounting_chart_of_accounts (
+  id               uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id  uuid        NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  event_type       text        NOT NULL,
+  account_debit    text        NOT NULL,
+  account_credit   text        NOT NULL,
+  description      text,
+  is_active        boolean     NOT NULL DEFAULT true,
+  metadata         jsonb       NOT NULL DEFAULT '{}',
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  created_by       uuid        REFERENCES auth.users(id) ON DELETE SET NULL,
+
+  CONSTRAINT chart_of_accounts_org_event_unique UNIQUE (organization_id, event_type)
+);
+
+COMMENT ON TABLE  public.accounting_chart_of_accounts IS
+  'Per-org mapping of domain event types to Swedish BAS account codes. '
+  'Used by accounting export functions to generate SIE4 and CSV export files.';
+COMMENT ON COLUMN public.accounting_chart_of_accounts.account_debit IS
+  'Swedish BAS debit account code (e.g., 1510 = Kundfordringar).';
+COMMENT ON COLUMN public.accounting_chart_of_accounts.account_credit IS
+  'Swedish BAS credit account code (e.g., 3040 = Varuförsäljning, 25% moms).';
+
+CREATE TRIGGER set_chart_of_accounts_updated_at
+  BEFORE UPDATE ON public.accounting_chart_of_accounts
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- 2.2 accounting_export_runs
+-- History of accounting export operations.
+-- Each run covers a date range and produces a file in the requested format.
+
+CREATE TABLE public.accounting_export_runs (
+  id               uuid                             NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id  uuid                             NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
+  format           public.accounting_export_format  NOT NULL,
+  from_date        date                             NOT NULL,
+  to_date          date                             NOT NULL,
+  status           text                             NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+  item_count       int                              NOT NULL DEFAULT 0,
+  file_reference   text,
+  error_message    text,
+  started_at       timestamptz                      NOT NULL DEFAULT now(),
+  completed_at     timestamptz,
+  created_by       uuid                             REFERENCES auth.users(id) ON DELETE SET NULL,
+
+  CONSTRAINT export_runs_dates_check CHECK (to_date >= from_date)
+);
+
+COMMENT ON TABLE public.accounting_export_runs IS
+  'History of accounting export runs. The actual export data is generated by '
+  'the accounting export Edge Function and stored at file_reference.';
+
+-- 2.3 accounting_export_queue
+-- Events queued for inclusion in the next accounting export.
+-- Populated by event-worker accounting handlers when processing Phase 4A/4B events.
+-- exported_at is set when the event is included in a completed export run.
+
+CREATE TABLE public.accounting_export_queue (
+  id               uuid          NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id  uuid          NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
+  event_type       text          NOT NULL,
+  event_data       jsonb         NOT NULL DEFAULT '{}',
+  amount           numeric(12,2),
+  currency         text          NOT NULL DEFAULT 'SEK',
+  transaction_date date          NOT NULL DEFAULT now()::date,
+  account_debit    text,
+  account_credit   text,
+  exported_at      timestamptz,
+  export_run_id    uuid          REFERENCES public.accounting_export_runs(id) ON DELETE SET NULL,
+  created_at       timestamptz   NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE  public.accounting_export_queue IS
+  'Events queued for accounting export. One row per accountable financial event. '
+  'exported_at=NULL means pending export. Set by the accounting export run.';
+COMMENT ON COLUMN public.accounting_export_queue.account_debit IS
+  'BAS debit account code. Populated from accounting_chart_of_accounts at queue time.';
+
+-- ── Section 3: Audit trigger ─────────────────────────────────────────────────
+
+CREATE TRIGGER chart_of_accounts_audit
+  AFTER INSERT OR UPDATE ON public.accounting_chart_of_accounts
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_fn();
+
+CREATE TRIGGER accounting_export_runs_audit
+  AFTER INSERT OR UPDATE ON public.accounting_export_runs
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_fn();
+
+-- ── Section 4: Row Level Security ────────────────────────────────────────────
+
+ALTER TABLE public.accounting_chart_of_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.accounting_export_runs        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.accounting_export_queue       ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "chart_of_accounts_select"
+  ON public.accounting_chart_of_accounts FOR SELECT
+  USING (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "chart_of_accounts_insert"
+  ON public.accounting_chart_of_accounts FOR INSERT
+  WITH CHECK (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "chart_of_accounts_update"
+  ON public.accounting_chart_of_accounts FOR UPDATE
+  USING (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  )
+  WITH CHECK (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "export_runs_select"
+  ON public.accounting_export_runs FOR SELECT
+  USING (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "export_runs_insert"
+  ON public.accounting_export_runs FOR INSERT
+  WITH CHECK (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "export_runs_update"
+  ON public.accounting_export_runs FOR UPDATE
+  USING (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+CREATE POLICY "export_queue_select"
+  ON public.accounting_export_queue FOR SELECT
+  USING (
+    organization_id = public.auth_organization_id()
+    AND public.has_permission('finance:export:run')
+  );
+
+-- ── Section 5: Table grants ──────────────────────────────────────────────────
+
+GRANT SELECT, INSERT, UPDATE ON public.accounting_chart_of_accounts TO authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE ON public.accounting_export_runs        TO authenticated, service_role;
+GRANT SELECT                 ON public.accounting_export_queue       TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.accounting_export_queue       TO service_role;
+
+-- ── Section 6: SECURITY INVOKER reporting views ───────────────────────────────
+-- Views use SECURITY INVOKER: RLS on underlying tables applies for calling user.
+-- Tenant isolation is enforced by the underlying table policies.
+-- No WHERE clauses needed for org scoping — RLS handles it.
+
+-- 6.1 v_revenue_by_period — confirmed payments matched to financial periods
+CREATE OR REPLACE VIEW public.v_revenue_by_period
+  WITH (security_invoker = true)
+AS
+SELECT
+  fp.organization_id,
+  fp.id               AS period_id,
+  fp.name             AS period_name,
+  fp.period_start,
+  fp.period_end,
+  fp.status           AS period_status,
+  COUNT(DISTINCT pay.id)                          AS payment_count,
+  COALESCE(SUM(pay.amount), 0)                    AS total_payments_received,
+  COALESCE(SUM(pay.amount - COALESCE(pay.refund_amount, 0)), 0) AS net_payments,
+  COALESCE(SUM(pay.refund_amount), 0)             AS total_refunds,
+  COUNT(DISTINCT inv.id)                          AS invoice_count,
+  COALESCE(SUM(inv.total_amount), 0)              AS total_invoiced,
+  COALESCE(SUM(inv.vat_amount), 0)                AS total_vat_invoiced,
+  COALESCE(SUM(inv.outstanding_amount), 0)        AS total_outstanding
+FROM public.financial_periods fp
+LEFT JOIN public.payments pay
+  ON  pay.organization_id = fp.organization_id
+  AND pay.confirmed_at::date BETWEEN fp.period_start AND fp.period_end
+  AND pay.status IN ('confirmed', 'partially_refunded', 'refunded')
+LEFT JOIN public.invoices inv
+  ON  inv.organization_id = fp.organization_id
+  AND inv.issued_at::date BETWEEN fp.period_start AND fp.period_end
+  AND inv.status IN ('issued', 'paid', 'partially_paid', 'overdue')
+GROUP BY fp.organization_id, fp.id, fp.name, fp.period_start, fp.period_end, fp.status;
+
+COMMENT ON VIEW public.v_revenue_by_period IS
+  'Revenue summary matched to financial periods. Uses SECURITY INVOKER so '
+  'tenant isolation is enforced by underlying RLS policies.';
+
+-- 6.2 v_vat_summary — VAT collected per month (for Swedish VAT reporting)
+CREATE OR REPLACE VIEW public.v_vat_summary
+  WITH (security_invoker = true)
+AS
+SELECT
+  inv.organization_id,
+  DATE_TRUNC('month', inv.issued_at)::date AS month_start,
+  inv.currency,
+  COUNT(DISTINCT inv.id)                   AS invoice_count,
+  COALESCE(SUM(inv.subtotal_amount), 0)    AS total_subtotal,
+  COALESCE(SUM(inv.vat_amount), 0)         AS total_vat,
+  COALESCE(SUM(inv.total_amount), 0)       AS total_gross,
+  COALESCE(SUM(inv.vat_amount)
+    / NULLIF(SUM(inv.subtotal_amount), 0), 0) AS effective_vat_rate
+FROM public.invoices inv
+WHERE inv.status IN ('issued', 'paid', 'partially_paid')
+  AND inv.issued_at IS NOT NULL
+GROUP BY inv.organization_id, DATE_TRUNC('month', inv.issued_at), inv.currency;
+
+-- 6.3 v_outstanding_invoices — invoices with outstanding balance
+CREATE OR REPLACE VIEW public.v_outstanding_invoices
+  WITH (security_invoker = true)
+AS
+SELECT
+  inv.id,
+  inv.organization_id,
+  inv.student_id,
+  inv.invoice_number,
+  inv.status,
+  inv.currency,
+  inv.total_amount,
+  inv.paid_amount,
+  inv.outstanding_amount,
+  inv.due_date,
+  inv.issued_at,
+  CASE
+    WHEN inv.due_date IS NULL       THEN NULL
+    WHEN inv.due_date >= now()::date THEN 0
+    ELSE (now()::date - inv.due_date)
+  END                                           AS days_overdue,
+  ids.current_stage_number                      AS dunning_stage,
+  ids.is_escalated_legal                        AS is_legal
+FROM public.invoices inv
+LEFT JOIN public.invoice_dunning_state ids ON ids.invoice_id = inv.id
+WHERE inv.outstanding_amount > 0
+  AND inv.status NOT IN ('void', 'draft');
+
+-- 6.4 v_invoice_aging — outstanding invoices bucketed by days overdue
+CREATE OR REPLACE VIEW public.v_invoice_aging
+  WITH (security_invoker = true)
+AS
+SELECT
+  inv.organization_id,
+  inv.currency,
+  CASE
+    WHEN inv.due_date IS NULL OR inv.due_date >= now()::date THEN 'current'
+    WHEN (now()::date - inv.due_date) BETWEEN 1  AND 30     THEN '1_30_days'
+    WHEN (now()::date - inv.due_date) BETWEEN 31 AND 60     THEN '31_60_days'
+    WHEN (now()::date - inv.due_date) BETWEEN 61 AND 90     THEN '61_90_days'
+    ELSE '90_plus_days'
+  END                                             AS aging_bucket,
+  COUNT(*)                                        AS invoice_count,
+  COALESCE(SUM(inv.outstanding_amount), 0)        AS outstanding_amount
+FROM public.invoices inv
+WHERE inv.outstanding_amount > 0
+  AND inv.status NOT IN ('void', 'draft')
+GROUP BY inv.organization_id, inv.currency,
+  CASE
+    WHEN inv.due_date IS NULL OR inv.due_date >= now()::date THEN 'current'
+    WHEN (now()::date - inv.due_date) BETWEEN 1  AND 30     THEN '1_30_days'
+    WHEN (now()::date - inv.due_date) BETWEEN 31 AND 60     THEN '31_60_days'
+    WHEN (now()::date - inv.due_date) BETWEEN 61 AND 90     THEN '61_90_days'
+    ELSE '90_plus_days'
+  END;
+
+-- 6.5 v_wallet_liability — total unconsumed lesson credits per org
+-- Represents future lesson obligations (the school owes this many lessons).
+CREATE OR REPLACE VIEW public.v_wallet_liability
+  WITH (security_invoker = true)
+AS
+SELECT
+  cbc.organization_id,
+  cbc.lesson_category,
+  COALESCE(SUM(GREATEST(cbc.balance, 0)), 0) AS total_credits,
+  COUNT(DISTINCT cbc.student_id)             AS student_count
+FROM public.credit_balance_cache cbc
+WHERE cbc.balance > 0
+GROUP BY cbc.organization_id, cbc.lesson_category;
+
+COMMENT ON VIEW public.v_wallet_liability IS
+  'Total unconsumed lesson credits per org and category. '
+  'Represents the school''s future delivery obligation (liability).';
+
+-- 6.6 v_deferred_revenue — estimated monetary value of unconsumed credits
+-- Approximates deferred revenue by multiplying credit balances by average offering price.
+-- NOTE: This is an ESTIMATE, not a precise accounting figure. Use for management reporting only.
+CREATE OR REPLACE VIEW public.v_deferred_revenue
+  WITH (security_invoker = true)
+AS
+SELECT
+  cbc.organization_id,
+  cbc.lesson_category,
+  COALESCE(SUM(GREATEST(cbc.balance, 0)), 0) AS total_credits,
+  COALESCE(AVG(po.price), 0)                  AS avg_unit_price,
+  COALESCE(SUM(GREATEST(cbc.balance, 0)) * AVG(po.price), 0) AS estimated_deferred_revenue,
+  po.currency
+FROM public.credit_balance_cache cbc
+JOIN public.package_offerings po
+  ON  po.organization_id   = cbc.organization_id
+  AND po.lesson_category   = cbc.lesson_category
+  AND po.status            = 'active'
+WHERE cbc.balance > 0
+GROUP BY cbc.organization_id, cbc.lesson_category, po.currency;
+
+COMMENT ON VIEW public.v_deferred_revenue IS
+  'ESTIMATE of deferred revenue from unconsumed lesson credits. '
+  'Uses average active offering price as unit value. '
+  'For management reporting only — not a substitute for precise accounting.';
+
+-- ── Section 7: SECURITY DEFINER reporting RPCs ───────────────────────────────
+
+-- 7.1 get_aging_report — returns aging buckets for the calling org
+CREATE OR REPLACE FUNCTION public.get_aging_report(
+  p_org_id uuid
+)
+RETURNS TABLE (
+  aging_bucket     text,
+  invoice_count    bigint,
+  outstanding_amount numeric(12,2),
+  currency         text
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    CASE
+      WHEN i.due_date IS NULL OR i.due_date >= now()::date THEN 'current'
+      WHEN (now()::date - i.due_date) BETWEEN 1  AND 30   THEN '1_30_days'
+      WHEN (now()::date - i.due_date) BETWEEN 31 AND 60   THEN '31_60_days'
+      WHEN (now()::date - i.due_date) BETWEEN 61 AND 90   THEN '61_90_days'
+      ELSE '90_plus_days'
+    END                                                  AS aging_bucket,
+    COUNT(*)                                             AS invoice_count,
+    COALESCE(SUM(i.outstanding_amount), 0)               AS outstanding_amount,
+    i.currency
+  FROM invoices i
+  WHERE i.organization_id    = p_org_id
+    AND i.outstanding_amount > 0
+    AND i.status NOT IN ('void', 'draft')
+  GROUP BY
+    CASE
+      WHEN i.due_date IS NULL OR i.due_date >= now()::date THEN 'current'
+      WHEN (now()::date - i.due_date) BETWEEN 1  AND 30   THEN '1_30_days'
+      WHEN (now()::date - i.due_date) BETWEEN 31 AND 60   THEN '31_60_days'
+      WHEN (now()::date - i.due_date) BETWEEN 61 AND 90   THEN '61_90_days'
+      ELSE '90_plus_days'
+    END,
+    i.currency
+  ORDER BY aging_bucket;
+$$;
+
+-- 7.2 get_vat_summary — returns monthly VAT summary for a date range
+CREATE OR REPLACE FUNCTION public.get_vat_summary(
+  p_org_id    uuid,
+  p_from_date date,
+  p_to_date   date
+)
+RETURNS TABLE (
+  month_start      date,
+  currency         text,
+  invoice_count    bigint,
+  total_subtotal   numeric(12,2),
+  total_vat        numeric(12,2),
+  total_gross      numeric(12,2)
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    DATE_TRUNC('month', i.issued_at)::date AS month_start,
+    i.currency,
+    COUNT(*)                               AS invoice_count,
+    COALESCE(SUM(i.subtotal_amount), 0)    AS total_subtotal,
+    COALESCE(SUM(i.vat_amount), 0)         AS total_vat,
+    COALESCE(SUM(i.total_amount), 0)       AS total_gross
+  FROM invoices i
+  WHERE i.organization_id = p_org_id
+    AND i.issued_at::date  BETWEEN p_from_date AND p_to_date
+    AND i.status          IN ('issued', 'paid', 'partially_paid')
+  GROUP BY DATE_TRUNC('month', i.issued_at), i.currency
+  ORDER BY month_start;
+$$;
+
+-- ── Section 8: Function grants ───────────────────────────────────────────────
+
+GRANT EXECUTE ON FUNCTION public.get_aging_report(uuid)
+  TO authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public.get_vat_summary(uuid, date, date)
+  TO authenticated, service_role;
+
+-- ── Section 9: Remaining Phase 4B permissions ────────────────────────────────
+
+INSERT INTO public.permissions (id, code, domain, resource, action, description) VALUES
+  (gen_random_uuid(), 'finance:reconciliation:manage', 'finance', 'reconciliation', 'manage', 'Manually allocate payments and manage reconciliation'),
+  (gen_random_uuid(), 'finance:export:run',            'finance', 'export',         'run',    'Run accounting exports (SIE4, Fortnox, Visma)')
+ON CONFLICT (code) DO NOTHING;
+
+-- ── Section 10: All Phase 4B role-permission assignments ─────────────────────
+-- Consolidated here after all permissions are seeded across files 1-4.
+
+-- org_owner: all Phase 4B permissions
+INSERT INTO public.role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM   public.roles r
+CROSS  JOIN public.permissions p
+WHERE  r.name = 'org_owner'
+  AND  r.is_system_role = true
+  AND  p.code = ANY(ARRAY[
+    'finance:reconciliation:manage',
+    'finance:export:run'
+  ])
+ON CONFLICT DO NOTHING;
+
+-- org_admin: all Phase 4B permissions
+INSERT INTO public.role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM   public.roles r
+CROSS  JOIN public.permissions p
+WHERE  r.name = 'org_admin'
+  AND  r.is_system_role = true
+  AND  p.code = ANY(ARRAY[
+    'finance:reconciliation:manage',
+    'finance:export:run'
+  ])
+ON CONFLICT DO NOTHING;
+
+-- finance_admin: all Phase 4B permissions
+INSERT INTO public.role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM   public.roles r
+CROSS  JOIN public.permissions p
+WHERE  r.name = 'finance_admin'
+  AND  r.is_system_role = true
+  AND  p.code = ANY(ARRAY[
+    'finance:reconciliation:manage',
+    'finance:export:run'
+  ])
+ON CONFLICT DO NOTHING;

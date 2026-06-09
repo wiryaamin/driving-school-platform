@@ -14,10 +14,14 @@ export function parseJwtClaims(accessToken: string): JwtClaims | null {
     if (segments.length !== 3) return null;
 
     // Base64url → base64 → JSON
-    const base64 = segments[1].replace(/-/g, '+').replace(/_/g, '/');
+    // segments[1] is guaranteed defined: we checked segments.length !== 3 above
+    const segment1 = segments[1]!;
+    const base64 = segment1.replace(/-/g, '+').replace(/_/g, '/');
     const padded  = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
     const decoded: Record<string, unknown> = JSON.parse(atob(padded));
 
+    // Build claims; use conditional spreads for optional fields so that
+    // exactOptionalPropertyTypes is satisfied (absent ≠ undefined).
     return {
       sub:                  String(decoded['sub']                  ?? ''),
       email:                String(decoded['email']                ?? ''),
@@ -32,10 +36,14 @@ export function parseJwtClaims(accessToken: string): JwtClaims | null {
                               : [],
       subscription_tier:    String(decoded['subscription_tier']    ?? 'trial'),
       is_platform_admin:    decoded['is_platform_admin'] === true,
-      impersonator_id:      (decoded['impersonator_id'] as string) ?? undefined,
-      auth_degraded:        decoded['auth_degraded'] === true ? true : undefined,
       iat:                  Number(decoded['iat'] ?? 0),
       exp:                  Number(decoded['exp'] ?? 0),
+      ...(decoded['impersonator_id']
+        ? { impersonator_id: decoded['impersonator_id'] as string }
+        : {}),
+      ...(decoded['auth_degraded'] === true
+        ? { auth_degraded: true as const }
+        : {}),
     };
   } catch {
     return null;
