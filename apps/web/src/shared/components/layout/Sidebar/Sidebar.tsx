@@ -31,6 +31,7 @@ interface NavItem {
   path: string;
   permission: Permission | null;
   badge?: number;
+  comingSoon?: boolean;
 }
 
 interface NavSection {
@@ -100,6 +101,7 @@ export const NAVIGATION: NavSection[] = [
         icon: Building2,
         path: '/corporate',
         permission: 'corporate:contract:read' as Permission,
+        comingSoon: true,
       },
     ],
   },
@@ -112,6 +114,7 @@ export const NAVIGATION: NavSection[] = [
         icon: MessageSquare,
         path: '/messages',
         permission: 'communications:message:read' as Permission,
+        comingSoon: true,
       },
       {
         key: 'documents',
@@ -119,6 +122,7 @@ export const NAVIGATION: NavSection[] = [
         icon: FileText,
         path: '/documents',
         permission: 'documents:document:read' as Permission,
+        comingSoon: true,
       },
       {
         key: 'reports',
@@ -126,6 +130,7 @@ export const NAVIGATION: NavSection[] = [
         icon: BarChart3,
         path: '/reports',
         permission: 'reporting:report:read' as Permission,
+        comingSoon: true,
       },
       {
         key: 'users',
@@ -133,6 +138,7 @@ export const NAVIGATION: NavSection[] = [
         icon: Users,
         path: '/administration/users',
         permission: 'administration:user:read' as Permission,
+        comingSoon: true,
       },
     ],
   },
@@ -145,6 +151,7 @@ export const NAVIGATION: NavSection[] = [
         icon: Settings,
         path: '/settings',
         permission: null,
+        comingSoon: true,
       },
     ],
   },
@@ -277,6 +284,30 @@ function SidebarItem({
   const location = useLocation();
   const isActive = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
   const Icon = item.icon;
+
+  if (item.comingSoon) {
+    return (
+      <div
+        className={cn(
+          'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium',
+          'opacity-40 cursor-default select-none',
+          collapsed && 'justify-center px-2'
+        )}
+        title={collapsed ? `${item.labelSv} (kommer snart)` : undefined}
+        aria-disabled="true"
+      >
+        <Icon className="w-4 h-4 shrink-0" />
+        {!collapsed && (
+          <>
+            <span className="truncate flex-1">{item.labelSv}</span>
+            <span className="ml-auto shrink-0 text-[10px] font-medium text-sidebar-foreground/60 bg-sidebar-accent/40 rounded px-1 py-0.5 leading-none">
+              Snart
+            </span>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <NavLink

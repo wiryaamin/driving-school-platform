@@ -76,19 +76,20 @@ function NotificationBell() {
   const hasUnread = useNotificationDot();
 
   return (
-    <button
+    <div
       className={cn(
         'relative w-9 h-9 rounded-lg flex items-center justify-center',
-        'text-muted-foreground hover:text-foreground hover:bg-accent',
-        'transition-colors'
+        'text-muted-foreground',
+        hasUnread && 'text-foreground'
       )}
-      aria-label="Notiser"
+      title={hasUnread ? 'Du har nya notiser' : 'Inga nya notiser'}
+      aria-label={hasUnread ? 'Du har nya notiser' : 'Inga nya notiser'}
     >
       <Bell className="w-4 h-4" />
       {hasUnread && (
         <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-destructive rounded-full" />
       )}
-    </button>
+    </div>
   );
 }
 

@@ -242,6 +242,7 @@ export function StudentListPage() {
             isLoading={isLoading}
             emptyMessage="Inga elever hittades. Skapa en ny elev för att komma igång."
             defaultPageSize={20}
+            onRowClick={(student) => navigate(`/students/${student.id}`)}
             toolbar={
               <StudentTableToolbar
                 search={search}

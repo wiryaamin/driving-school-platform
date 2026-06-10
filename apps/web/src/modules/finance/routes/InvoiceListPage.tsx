@@ -317,6 +317,7 @@ export function InvoiceListPage() {
               isLoading={isLoading}
               emptyMessage="Inga fakturor hittades. Klicka på 'Ny faktura' för att skapa din första faktura."
               defaultPageSize={25}
+              onRowClick={(invoice) => navigate(`/finance/invoices/${invoice.id}`)}
               toolbar={
                 <InvoiceTableToolbar
                   search={search}

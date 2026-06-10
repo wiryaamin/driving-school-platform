@@ -28,6 +28,8 @@ interface DataTableProps<TData, TValue> {
   className?: string;
   /** Rendered above the table (search, filters, actions) */
   toolbar?: React.ReactNode;
+  /** Called when a data row is clicked — makes every row interactive */
+  onRowClick?: (row: TData) => void;
 }
 
 export function DataTable<TData, TValue>({
@@ -39,6 +41,7 @@ export function DataTable<TData, TValue>({
   defaultPageSize = 20,
   className,
   toolbar,
+  onRowClick,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -93,7 +96,12 @@ export function DataTable<TData, TValue>({
               ))
             ) : table.getRowModel().rows.length > 0 ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} data-state={row.getIsSelected() && 'selected'}>
+                <TableRow
+                  key={row.id}
+                  data-state={row.getIsSelected() && 'selected'}
+                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                  className={cn(onRowClick && 'cursor-pointer')}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MoreHorizontal, Pencil, Eye, UserX, Calendar } from 'lucide-react';
+import { MoreHorizontal, Pencil, Eye, UserX } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,14 +61,6 @@ export function StudentQuickActions({ student, onEdit }: StudentQuickActionsProp
               Redigera elev
             </DropdownMenuItem>
           </PermissionGate>
-
-          <DropdownMenuItem
-            onClick={() => navigate(`/scheduling?student_id=${student.id}`)}
-            disabled
-          >
-            <Calendar className="mr-2 h-4 w-4" />
-            Boka lektion
-          </DropdownMenuItem>
 
           <PermissionGate permission={Permissions.STUDENTS_DELETE}>
             <DropdownMenuSeparator />

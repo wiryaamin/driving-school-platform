@@ -99,7 +99,7 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
               </Button>
             )}
 
-            {/* Närvande — confirmed only */}
+            {/* Närvaro — confirmed only */}
             {booking.status === 'confirmed' && (
               <Button
                 size="sm"
@@ -109,7 +109,7 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
                 onClick={() => handleStatus('completed')}
               >
                 {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
-                Närvande
+                Närvaro
               </Button>
             )}
 
@@ -196,7 +196,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         <SheetContent className="w-full sm:max-w-md flex flex-col p-0 gap-0">
           {/* Header */}
           <SheetHeader className="px-5 pt-5 pb-4 border-b border-border">
-            <SheetTitle className="text-left">Lektionspass</SheetTitle>
+            <SheetTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</SheetTitle>
           </SheetHeader>
 
           <ScrollArea className="flex-1">
@@ -251,17 +251,6 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   <h3 className="text-sm font-semibold text-foreground">
                     Bokningar ({slot.current_bookings}/{slot.max_bookings})
                   </h3>
-                  {!full && slot.status === 'open' && (
-                    <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => setBookingDialogOpen(true)}
-                      >
-                        + Boka lektion
-                      </Button>
-                    </PermissionGate>
-                  )}
                 </div>
 
                 {bookingsLoading ? (
