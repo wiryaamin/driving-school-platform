@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button,
@@ -51,9 +51,12 @@ function buildColumns(): ColumnDef<Payment>[] {
       id:     'invoice',
       header: 'Faktura',
       cell:   ({ row }) => (
-        <span className="text-xs font-mono text-muted-foreground">
+        <Link
+          to={`/finance/invoices/${row.original.invoice_id}`}
+          className="text-xs font-mono text-primary hover:underline"
+        >
           {row.original.invoice_id.slice(0, 8)}…
-        </span>
+        </Link>
       ),
     },
     {
@@ -183,7 +186,7 @@ export function PaymentListPage() {
               columns={columns}
               data={payments}
               isLoading={isLoading}
-              emptyMessage="Inga betalningar hittades."
+              emptyMessage="Inga betalningar registrerade. Betalningar registreras automatiskt när en faktura betalas."
               defaultPageSize={25}
               toolbar={
                 <PaymentTableToolbar

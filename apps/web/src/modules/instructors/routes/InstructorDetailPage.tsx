@@ -2,15 +2,24 @@ import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ChevronLeft, Mail, Shield, Info,
-  Award, Briefcase, Calendar, BookOpen, Clock,
+  Award, Briefcase, Calendar, BookOpen, Clock, Users,
 } from 'lucide-react';
 import {
-  Button, Badge,
+  Button, Badge, Skeleton,
   Card, CardContent, CardHeader, CardTitle,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { useStudent } from '@modules/students/hooks/useStudents.js';
+import {
+  useInstructorUpcomingSlots,
+  useInstructorUpcomingBookings,
+  SlotStatusBadge,
+  formatSlotDate,
+  formatSlotTime,
+  formatCapacity,
+} from '@modules/scheduling/index.js';
 import { useInstructor } from '../hooks/useInstructors.js';
 import { InstructorStatusBadge } from '../components/InstructorStatusBadge.js';
 import { InstructorForm } from '../components/InstructorForm.js';
@@ -20,12 +29,49 @@ import {
   formatDateTime,
 } from '../lib/instructorUtils.js';
 
+// ─── Detail page skeleton ─────────────────────────────────────────────────────
+
+function InstructorDetailSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="lg:col-span-2 space-y-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-3">
+              <div className="h-4 bg-muted rounded animate-pulse w-32" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[1, 2, 3, 4].map((j) => (
+                <div key={j} className="h-8 bg-muted rounded animate-pulse" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="space-y-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-3">
+              <div className="h-4 bg-muted rounded animate-pulse w-24" />
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {[1, 2, 3].map((j) => (
+                <div key={j} className="h-6 bg-muted rounded animate-pulse" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Detail row primitive ─────────────────────────────────────────────────────
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start gap-4 py-2 border-b border-border last:border-0">
-      <span className="text-sm text-muted-foreground w-44 shrink-0">{label}</span>
+      <span className="text-sm text-muted-foreground w-28 sm:w-44 shrink-0">{label}</span>
       <span className="text-sm text-foreground">{value ?? '—'}</span>
     </div>
   );
@@ -63,6 +109,15 @@ function TeachingCategoryList({ categories }: { categories: string[] }) {
   );
 }
 
+// ─── Student name (single-student fetch, cached by React Query) ───────────────
+
+function StudentName({ id }: { id: string }) {
+  const { data: student, isLoading } = useStudent(id);
+  if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
+  if (!student)  return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
+  return <span>{student.first_name} {student.last_name}</span>;
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function InstructorDetailPage() {
@@ -72,12 +127,19 @@ export function InstructorDetailPage() {
 
   const { data: instructor, isLoading, error } = useInstructor(id ?? null);
 
+  const { data: slotsData,    isLoading: slotsLoading }    = useInstructorUpcomingSlots(instructor?.id);
+  const { data: bookingsData, isLoading: bookingsLoading } = useInstructorUpcomingBookings(instructor?.id);
+
   if (isLoading) {
     return (
       <PageLayout>
-        <div className="flex items-center justify-center py-32 text-muted-foreground text-sm">
-          Laddar läraruppgifter...
-        </div>
+        <PageHeader
+          title="Laddar lärare..."
+          breadcrumbs={[{ label: 'Hem' }, { label: 'Lärare', href: '/instructors' }]}
+        />
+        <PageContent>
+          <InstructorDetailSkeleton />
+        </PageContent>
       </PageLayout>
     );
   }
@@ -99,6 +161,10 @@ export function InstructorDetailPage() {
   }
 
   const fullName = `${instructor.first_name} ${instructor.last_name}`;
+
+  const upcomingSlots    = slotsData?.data ?? [];
+  const upcomingBookings = bookingsData?.data ?? [];
+  const uniqueStudentIds = [...new Set(upcomingBookings.map((b) => b.student_id))];
 
   return (
     <PageLayout>
@@ -308,44 +374,102 @@ export function InstructorDetailPage() {
           </div>
         </div>
 
-        {/* ── Upcoming lessons placeholder ──────────────────────────────── */}
+        {/* ── Upcoming lessons ──────────────────────────────────────────── */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-muted-foreground" />
-              Kommande lektioner
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
-              <Calendar className="w-8 h-8 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">
-                Lärarens kommande lektioner visas i schemaläggningen.
-              </p>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-muted-foreground" />
+                Kommande lektioner
+                {upcomingSlots.length > 0 && (
+                  <Badge variant="outline" className="font-normal text-xs">{upcomingSlots.length}</Badge>
+                )}
+              </CardTitle>
               <Link
                 to={`/scheduling?instructor_id=${instructor.id}`}
                 className="text-xs text-primary hover:underline"
               >
-                Öppna schema
+                Visa i schema
               </Link>
             </div>
+          </CardHeader>
+          <CardContent>
+            {slotsLoading ? (
+              <div className="space-y-2">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full rounded" />
+                ))}
+              </div>
+            ) : upcomingSlots.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+                <Calendar className="w-7 h-7 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">
+                  Inga kommande lektioner de närmaste 30 dagarna
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {upcomingSlots.map((slot) => (
+                  <div key={slot.id} className="flex items-center justify-between py-2.5 border-b border-border last:border-0 gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium capitalize text-foreground">
+                        {formatSlotDate(slot.starts_at)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatSlotTime(slot.starts_at)}–{formatSlotTime(slot.ends_at)}
+                        {' · '}
+                        {formatCapacity(slot.current_bookings, slot.max_bookings)} bokningar
+                      </p>
+                    </div>
+                    <SlotStatusBadge status={slot.status} />
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* ── Assigned students placeholder ─────────────────────────────── */}
+        {/* ── Assigned students ─────────────────────────────────────────── */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-muted-foreground" />
+              <Users className="w-4 h-4 text-muted-foreground" />
               Tilldelade elever
+              {uniqueStudentIds.length > 0 && (
+                <Badge variant="outline" className="font-normal text-xs">{uniqueStudentIds.length}</Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
-              <p className="text-sm text-muted-foreground">
-                Elevtilldelning visas i UI-5.
-              </p>
-            </div>
+            {bookingsLoading ? (
+              <div className="space-y-2">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-8 w-full rounded" />
+                ))}
+              </div>
+            ) : uniqueStudentIds.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-6 gap-2 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Inga elever bokade de närmaste 90 dagarna
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {uniqueStudentIds.map((studentId) => (
+                  <div key={studentId} className="flex items-center gap-2.5 py-2 border-b border-border last:border-0">
+                    <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center shrink-0">
+                      <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                    </div>
+                    <Link
+                      to={`/students/${studentId}`}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      <StudentName id={studentId} />
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

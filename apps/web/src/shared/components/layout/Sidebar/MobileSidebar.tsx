@@ -1,8 +1,10 @@
 import { useUiStore } from '@core/store/ui.store.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import { SidebarNavContent } from './Sidebar.js';
 
 export function MobileSidebar() {
   const { isMobileMenuOpen, closeMobileMenu } = useUiStore();
+  const { organization } = useSession();
 
   if (!isMobileMenuOpen) return null;
 
@@ -27,7 +29,7 @@ export function MobileSidebar() {
             </svg>
           </div>
           <span className="ml-3 text-sm font-semibold text-sidebar-primary-foreground truncate">
-            Körskola
+            {organization?.name ?? 'Körskola'}
           </span>
         </div>
 

@@ -288,9 +288,14 @@ COMMENT ON FUNCTION public.generate_sie4_export(uuid, uuid) IS
   'Generates an immutable SIE4 bookkeeping file from a completed accounting export run. Idempotent — returns existing sie4_export_id if run already has one.';
 
 -- ── Section 5: Permissions ────────────────────────────────────────────────────
+-- Resource is 'sie' (not 'sie4') — format constraint prohibits digits in any
+-- segment. SIE is the format family; type 4 is a protocol version, not a
+-- resource discriminator. Action is 'export' — generating a SIE4 file is a
+-- file-artifact operation consistent with finance:invoice:export and
+-- finance:ledger:export. The 'run' action is reserved for pipeline triggers.
 
 INSERT INTO public.permissions (code, domain, resource, action, description)
 VALUES
-  ('finance:sie4:run',  'finance', 'sie4', 'run',  'Generate SIE4 export from a completed accounting export run'),
-  ('finance:sie4:read', 'finance', 'sie4', 'read', 'Read and download SIE4 export files')
+  ('finance:sie:export', 'finance', 'sie', 'export', 'Generate a SIE4 bookkeeping file from a completed accounting export run'),
+  ('finance:sie:read',   'finance', 'sie', 'read',   'Read and download SIE4 export files')
 ON CONFLICT (code) DO NOTHING;

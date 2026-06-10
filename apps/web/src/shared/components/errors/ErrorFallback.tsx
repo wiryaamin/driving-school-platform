@@ -1,5 +1,3 @@
-import { useNavigate } from 'react-router-dom';
-
 interface ErrorFallbackProps {
   error: Error | null;
   onReset?: () => void;
@@ -7,9 +5,12 @@ interface ErrorFallbackProps {
 
 /**
  * Full-page error fallback — shown when ErrorBoundary catches a rendering error.
+ *
+ * Does NOT use useNavigate() — this component renders outside the RouterProvider
+ * context (the ErrorBoundary wraps RouterProvider in AppRouter), so react-router
+ * hooks are unavailable. window.location.href is the safe navigation path here.
  */
 export function ErrorFallback({ error, onReset }: ErrorFallbackProps) {
-  const navigate = useNavigate();
   const traceId = crypto.randomUUID().slice(0, 8).toUpperCase();
 
   return (
@@ -46,7 +47,7 @@ export function ErrorFallback({ error, onReset }: ErrorFallbackProps) {
             </button>
           )}
           <button
-            onClick={() => navigate('/', { replace: true })}
+            onClick={() => { window.location.href = '/'; }}
             className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
           >
             Gå till startsidan

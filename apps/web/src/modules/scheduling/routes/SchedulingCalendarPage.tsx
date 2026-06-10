@@ -120,8 +120,9 @@ export function SchedulingCalendarPage() {
             </div>
           )}
 
-          {/* Calendar */}
+          {/* Calendar — outer card clips to border-radius; inner div scrolls week view on narrow screens */}
           <div className="rounded-lg border border-border bg-card overflow-hidden">
+            <div className="overflow-x-auto">
             <SchedulingCalendar
               calendarRef={calendarRef}
               events={events}
@@ -131,6 +132,7 @@ export function SchedulingCalendarPage() {
               onSlotDrop={handleSlotDrop}
               isLoading={isLoading}
             />
+            </div>
           </div>
 
           {/* Empty state */}

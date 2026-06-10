@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell } from 'lucide-react';
+import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap } from 'lucide-react';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
   Button, Badge, Separator, ScrollArea, Skeleton,
@@ -8,6 +8,9 @@ import { toast } from '@platform/ui';
 import type { LessonSlot, BookingStatus } from '@platform/types';
 import type { LessonBooking } from '@platform/types';
 import { useStudent } from '@modules/students/hooks/useStudents.js';
+import { useInstructor } from '@modules/instructors/index.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
 import { useWaitlistForSlot } from '../hooks/useWaitlist.js';
 import { useUpdateBookingStatus } from '../hooks/useSchedulingMutations.js';
@@ -24,6 +27,15 @@ function StudentName({ id }: { id: string }) {
   if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
   if (!student)  return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
   return <span className="font-medium">{student.first_name} {student.last_name}</span>;
+}
+
+// ─── Instructor name (single-instructor fetch, cached by React Query) ─────────
+
+function InstructorName({ id }: { id: string }) {
+  const { data: instructor, isLoading } = useInstructor(id);
+  if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
+  if (!instructor) return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
+  return <span className="font-medium">{instructor.first_name} {instructor.last_name}</span>;
 }
 
 // ─── Booking row ──────────────────────────────────────────────────────────────
@@ -71,61 +83,63 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
 
       {/* Action buttons — only for non-terminal bookings */}
       {!terminal && (
-        <div className="flex flex-wrap gap-1.5 ml-9">
-          {/* Bekräfta — draft or reserved */}
-          {(booking.status === 'draft' || booking.status === 'reserved') && (
+        <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
+          <div className="flex flex-wrap gap-1.5 ml-9">
+            {/* Bekräfta — draft or reserved */}
+            {(booking.status === 'draft' || booking.status === 'reserved') && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs gap-1"
+                disabled={busy}
+                onClick={() => handleStatus('confirmed')}
+              >
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarCheck className="w-3 h-3" />}
+                Bekräfta
+              </Button>
+            )}
+
+            {/* Närvande — confirmed only */}
+            {booking.status === 'confirmed' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs gap-1 text-green-700 border-green-200 hover:bg-green-50 dark:text-green-400 dark:border-green-900/40 dark:hover:bg-green-900/20"
+                disabled={busy}
+                onClick={() => handleStatus('completed')}
+              >
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                Närvande
+              </Button>
+            )}
+
+            {/* Uteblev — confirmed only */}
+            {booking.status === 'confirmed' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs gap-1 text-amber-700 border-amber-200 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-900/40 dark:hover:bg-amber-900/20"
+                disabled={busy}
+                onClick={() => handleStatus('no_show')}
+              >
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
+                Uteblev
+              </Button>
+            )}
+
+            {/* Avboka */}
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1"
+              className="h-8 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
               disabled={busy}
-              onClick={() => handleStatus('confirmed')}
+              onClick={() => onCancel(booking.id)}
             >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarCheck className="w-3 h-3" />}
-              Bekräfta
+              <XCircle className="w-3 h-3" />
+              Avboka
             </Button>
-          )}
-
-          {/* Närvande — confirmed only */}
-          {booking.status === 'confirmed' && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs gap-1 text-green-700 border-green-200 hover:bg-green-50 dark:text-green-400 dark:border-green-900/40 dark:hover:bg-green-900/20"
-              disabled={busy}
-              onClick={() => handleStatus('completed')}
-            >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
-              Närvande
-            </Button>
-          )}
-
-          {/* Uteblev — confirmed only */}
-          {booking.status === 'confirmed' && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs gap-1 text-amber-700 border-amber-200 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-900/40 dark:hover:bg-amber-900/20"
-              disabled={busy}
-              onClick={() => handleStatus('no_show')}
-            >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
-              Uteblev
-            </Button>
-          )}
-
-          {/* Avboka */}
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
-            disabled={busy}
-            onClick={() => onCancel(booking.id)}
-          >
-            <XCircle className="w-3 h-3" />
-            Avboka
-          </Button>
-        </div>
+          </div>
+        </PermissionGate>
       )}
     </div>
   );
@@ -216,6 +230,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   )}
                 </div>
 
+                {/* Instructor */}
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                  <InstructorName id={slot.instructor_id} />
+                </div>
+
                 {/* Timing detail */}
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Clock className="w-3.5 h-3.5 shrink-0" />
@@ -232,13 +252,15 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                     Bokningar ({slot.current_bookings}/{slot.max_bookings})
                   </h3>
                   {!full && slot.status === 'open' && (
-                    <Button
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setBookingDialogOpen(true)}
-                    >
-                      + Boka lektion
-                    </Button>
+                    <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setBookingDialogOpen(true)}
+                      >
+                        + Boka lektion
+                      </Button>
+                    </PermissionGate>
                   )}
                 </div>
 
@@ -317,14 +339,16 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
           {/* Footer action */}
           {!full && slot.status === 'open' && (
-            <div className="px-5 py-4 border-t border-border">
-              <Button
-                className="w-full"
-                onClick={() => setBookingDialogOpen(true)}
-              >
-                Boka lektion
-              </Button>
-            </div>
+            <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+              <div className="px-5 py-4 border-t border-border">
+                <Button
+                  className="w-full"
+                  onClick={() => setBookingDialogOpen(true)}
+                >
+                  Boka lektion
+                </Button>
+              </div>
+            </PermissionGate>
           )}
         </SheetContent>
       </Sheet>

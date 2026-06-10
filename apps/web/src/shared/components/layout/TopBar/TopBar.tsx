@@ -1,12 +1,14 @@
 import { Bell, ChevronDown, LogOut, Menu, Moon, Settings, Sun, User } from 'lucide-react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
-import { useState } from 'react';
+import { useNotificationDot } from '@shared/hooks/useNotifications.js';
 
 export function TopBar() {
-  const { user, profile, organization } = useSessionStore();
+  const { user, profile, organization, isLoading } = useSessionStore();
   const { sidebarCollapsed, toggleMobileMenu, theme, toggleTheme } = useUiStore();
 
   return (
@@ -32,8 +34,17 @@ export function TopBar() {
       {/* Organization context */}
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-foreground truncate">
-          {organization?.name ?? '—'}
+          {organization?.name ?? (isLoading ? '' : '—')}
         </p>
+        {organization?.subscription_status === 'trialing' && (
+          <p className="text-[10px] font-medium text-amber-500 leading-none">Testperiod aktiv</p>
+        )}
+        {organization?.subscription_status === 'past_due' && (
+          <p className="text-[10px] font-medium text-destructive leading-none">Betalning försenad</p>
+        )}
+        {organization?.status === 'suspended' && (
+          <p className="text-[10px] font-medium text-destructive leading-none">Konto inaktivt</p>
+        )}
       </div>
 
       {/* Right side controls */}
@@ -62,7 +73,7 @@ export function TopBar() {
 // ─── Notification Bell ────────────────────────────────────────────────────────
 
 function NotificationBell() {
-  const [hasUnread] = useState(false);
+  const hasUnread = useNotificationDot();
 
   return (
     <button
@@ -91,6 +102,7 @@ interface UserMenuProps {
 
 function UserMenu({ displayName, email, role }: UserMenuProps) {
   const { signOut } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
   const initials = displayName
@@ -146,8 +158,8 @@ function UserMenu({ displayName, email, role }: UserMenuProps) {
               )}
             </div>
             <div className="py-1">
-              <MenuButton icon={User} label="Min profil" onClick={() => setOpen(false)} />
-              <MenuButton icon={Settings} label="Inställningar" onClick={() => setOpen(false)} />
+              <MenuButton icon={User} label="Min profil" onClick={() => { setOpen(false); navigate('/profile'); }} />
+              <MenuButton icon={Settings} label="Inställningar" onClick={() => { setOpen(false); navigate('/settings'); }} />
             </div>
             <div className="border-t border-border py-1">
               <MenuButton

@@ -6,6 +6,20 @@ import { parseJwtClaims } from '@/lib/auth/jwt.js';
 import type { AuthUser, Organization, UserProfile } from '@platform/types';
 import type { Session } from '@supabase/supabase-js';
 
+// Retries a Supabase query up to `retries` times on transient errors.
+// PGRST116 ("0 rows returned") is a genuine not-found, never retried.
+async function fetchWithRetry<T>(
+  fn: () => Promise<{ data: T | null; error: { code: string; message: string } | null }>,
+  retries = 2,
+): Promise<{ data: T | null; error: { code: string; message: string } | null }> {
+  const result = await fn();
+  if (!result.error) return result;
+  if (result.error.code === 'PGRST116') return result;
+  if (retries === 0) return result;
+  await new Promise(r => setTimeout(r, 150));
+  return fetchWithRetry(fn, retries - 1);
+}
+
 /**
  * AuthProvider — subscribes to Supabase auth state changes and syncs to Zustand.
  *
@@ -94,11 +108,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
 
       // ── Fetch profile ──────────────────────────────────────────────────────
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
+      const { data: profile, error: profileError } = await fetchWithRetry(() =>
+        supabase.from('profiles').select('*').eq('id', session.user.id).single()
+      );
 
       if (profileError) {
         // Profile missing = user not fully onboarded (e.g. invite accepted but
@@ -115,11 +127,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let organization: Organization | null = null;
 
       if (claims.organization_id) {
-        const { data: org, error: orgError } = await supabase
-          .from('organizations')
-          .select('*')
-          .eq('id', claims.organization_id)
-          .single();
+        const { data: org, error: orgError } = await fetchWithRetry(() =>
+          supabase.from('organizations').select('*').eq('id', claims.organization_id).single()
+        );
 
         if (orgError) {
           logger.warn('syncSession: organization not found', {

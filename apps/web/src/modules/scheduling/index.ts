@@ -3,11 +3,11 @@ export { SchedulingPage } from './routes/SchedulingPage.js';
 export { SchedulingCalendarPage } from './routes/SchedulingCalendarPage.js';
 
 // ─── Slot query hooks + keys ──────────────────────────────────────────────────
-export { useSlot, useSlotList, slotKeys } from './hooks/useSlots.js';
+export { useSlot, useSlotList, useInstructorUpcomingSlots, slotKeys } from './hooks/useSlots.js';
 export type { SlotListResponse, SlotListMeta } from './hooks/useSlots.js';
 
 // ─── Booking query hooks + keys ───────────────────────────────────────────────
-export { useBooking, useBookingList, useBookingsForSlot, bookingKeys } from './hooks/useBookings.js';
+export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBookings, useInstructorUpcomingBookings, bookingKeys } from './hooks/useBookings.js';
 export type { BookingListResponse, BookingListMeta } from './hooks/useBookings.js';
 
 // ─── Waitlist query hooks + keys ──────────────────────────────────────────────
@@ -51,4 +51,5 @@ export {
   isTerminalBookingStatus,
   BOOKING_STATUS_CONFIG,
 } from './components/BookingStatusBadge.js';
+export { StudentBookingDialog } from './components/StudentBookingDialog.js';
 export type { SlotDropInfo } from './components/SchedulingCalendar.js';

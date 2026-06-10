@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, X } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, X, Plus } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button, Input,
@@ -15,6 +15,7 @@ import { useInvoiceList, useVoidInvoice } from '../hooks/useFinance.js';
 import type { Invoice, InvoiceStatus } from '../hooks/useFinance.js';
 import { InvoiceStatusBadge, INVOICE_STATUS_OPTIONS } from '../components/InvoiceStatusBadge.js';
 import { InvoiceQuickActions } from '../components/InvoiceQuickActions.js';
+import { CreateInvoiceSheet } from '../components/CreateInvoiceSheet.js';
 import { formatCurrency, formatDate } from '../lib/financeUtils.js';
 
 // ─── Column definitions ───────────────────────────────────────────────────────
@@ -206,13 +207,17 @@ function VoidConfirmDialog({ invoice, open, onClose, onConfirm, isPending }: Voi
 
 export function InvoiceListPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const studentIdFilter = searchParams.get('student_id') ?? undefined;
 
-  const [search,       setSearch]       = useState('');
-  const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all');
-  const [voidTarget,   setVoidTarget]   = useState<Invoice | null>(null);
+  const [search,          setSearch]          = useState('');
+  const [statusFilter,    setStatusFilter]    = useState<InvoiceStatus | 'all'>('all');
+  const [voidTarget,      setVoidTarget]      = useState<Invoice | null>(null);
+  const [createSheetOpen, setCreateSheetOpen] = useState(false);
 
   const { data, isLoading, error } = useInvoiceList({
     ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
+    ...(studentIdFilter ? { student_id: studentIdFilter } : {}),
     per_page: 50,
   });
 
@@ -245,7 +250,9 @@ export function InvoiceListPage() {
     <PageLayout>
       <PageHeader
         title="Fakturor"
-        {...(total > 0 ? { description: `${total} fakturor totalt` } : {})}
+        {...(total > 0
+          ? { description: studentIdFilter ? `Filtrerat per elev · ${total} fakturor` : `${total} fakturor totalt` }
+          : {})}
         breadcrumbs={[
           { label: 'Hem' },
           { label: 'Ekonomi' },
@@ -260,6 +267,16 @@ export function InvoiceListPage() {
             >
               Betalningar
             </Button>
+            <PermissionGate permission={Permissions.FINANCE_INVOICE_CREATE}>
+              <Button
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setCreateSheetOpen(true)}
+              >
+                <Plus className="w-4 h-4" />
+                Ny faktura
+              </Button>
+            </PermissionGate>
           </div>
         }
       />
@@ -298,7 +315,7 @@ export function InvoiceListPage() {
               columns={columns}
               data={filteredInvoices}
               isLoading={isLoading}
-              emptyMessage="Inga fakturor hittades."
+              emptyMessage="Inga fakturor hittades. Klicka på 'Ny faktura' för att skapa din första faktura."
               defaultPageSize={25}
               toolbar={
                 <InvoiceTableToolbar
@@ -319,6 +336,11 @@ export function InvoiceListPage() {
         onClose={() => setVoidTarget(null)}
         onConfirm={handleVoidConfirm}
         isPending={voidMutation.isPending}
+      />
+
+      <CreateInvoiceSheet
+        open={createSheetOpen}
+        onOpenChange={setCreateSheetOpen}
       />
     </PageLayout>
   );

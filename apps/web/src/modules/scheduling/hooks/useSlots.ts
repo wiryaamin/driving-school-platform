@@ -66,11 +66,11 @@ async function apiFetchSlot(id: string): Promise<LessonSlot> {
 
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
-export function useSlotList(params: LessonSlotListQueryInput = {}) {
+export function useSlotList(params: LessonSlotListQueryInput = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: slotKeys.list(params),
     queryFn: () => apiFetchSlots({ per_page: 100, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
-    enabled: Boolean(params.from && params.to),
+    enabled: options?.enabled !== false && Boolean(params.from && params.to),
   });
 }
 
@@ -79,5 +79,25 @@ export function useSlot(id: string | null) {
     queryKey: slotKeys.detail(id ?? ''),
     queryFn: () => apiFetchSlot(id!),
     enabled: id !== null && id !== '',
+  });
+}
+
+export function useInstructorUpcomingSlots(instructorId: string | null | undefined) {
+  const from  = new Date().toISOString();
+  const to    = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const today = from.slice(0, 10);
+
+  return useQuery({
+    queryKey: [...slotKeys.all, 'instructor-upcoming', instructorId ?? '', today],
+    queryFn:  () => apiFetchSlots({
+      instructor_id: instructorId!,
+      from,
+      to,
+      per_page: 10,
+      sort_by:  'starts_at',
+      sort_dir: 'asc',
+    }),
+    enabled:   Boolean(instructorId),
+    staleTime: 2 * 60 * 1000,
   });
 }

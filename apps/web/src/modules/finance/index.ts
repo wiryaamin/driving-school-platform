@@ -8,6 +8,9 @@ export {
   usePaymentList,
   useStudentWallet,
   useStudentPackages,
+  useCreateInvoice,
+  useAddInvoiceLine,
+  useRecordPayment,
   financeKeys,
 } from './hooks/useFinance.js';
 
@@ -24,6 +27,9 @@ export type {
   InvoiceListParams,
   PaymentListParams,
   WalletSummary,
+  CreateInvoiceInput,
+  AddInvoiceLineInput,
+  RecordPaymentInput,
 } from './hooks/useFinance.js';
 
 export {

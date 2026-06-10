@@ -77,10 +77,10 @@ export const useSessionStore = create<SessionStore>()(
       }),
       {
         name: 'platform-session',
-        // Persist only non-sensitive display state — auth tokens are managed by Supabase
-        partialize: (state) => ({
-          organization: state.organization,
-        }),
+        // Nothing is persisted — all session state is rebuilt from the JWT on
+        // every page load via syncSessionToStore. Persisting organization caused
+        // stale org data to survive tenant switches and token refreshes.
+        partialize: () => ({}),
       },
     ),
     { name: 'SessionStore' },

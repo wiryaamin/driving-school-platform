@@ -504,14 +504,15 @@ BEGIN
 
   -- Emit outbox event
   PERFORM public.insert_outbox_event(
-    v_fy.organization_id, 'FiscalYear.Closed',
+    'FiscalYear.Closed',
+    'accounting'::public.event_channel,
     jsonb_build_object(
       'fiscal_year_id', p_fiscal_year_id,
       'year_number',    v_fy.year_number,
       'entry_id',       v_entry_id,
       'closed_by',      p_actor_id
     ),
-    p_actor_id
+    v_fy.organization_id
   );
 END;
 $$;
@@ -634,9 +635,18 @@ SELECT
   COUNT(fp.id) FILTER (WHERE fp.status = 'open')   AS open_periods,
   COUNT(fp.id) FILTER (WHERE fp.status = 'closed') AS soft_closed_periods,
   COUNT(fp.id) FILTER (WHERE fp.status = 'locked') AS hard_closed_periods,
-  -- Year-end period
-  MAX(fp.id) FILTER (WHERE fp.is_year_end_period = true)       AS year_end_period_id,
-  MAX(fp.status::text) FILTER (WHERE fp.is_year_end_period = true) AS year_end_period_status,
+  -- Year-end period — correlated scalar subqueries because is_year_end_period = true
+  -- matches at most one period per fiscal year (enforced by assign_period_to_fiscal_year).
+  -- MAX(uuid) has no defined aggregate in PostgreSQL; MAX(text) on status has no fiscal
+  -- ordering meaning. Both are 1:0-1 lookups, not aggregates.
+  (SELECT fp2.id
+   FROM public.financial_periods fp2
+   WHERE fp2.fiscal_year_id = fy.id AND fp2.is_year_end_period = true
+   LIMIT 1)                                                     AS year_end_period_id,
+  (SELECT fp2.status::text
+   FROM public.financial_periods fp2
+   WHERE fp2.fiscal_year_id = fy.id AND fp2.is_year_end_period = true
+   LIMIT 1)                                                     AS year_end_period_status,
   MIN(fp.period_start) AS first_period_start,
   MAX(fp.period_end)   AS last_period_end,
   -- Amendment totals

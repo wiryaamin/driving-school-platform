@@ -9,6 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Button,
   Separator,
+  toast,
 } from '@platform/ui';
 import { useCreateStudent, useUpdateStudent } from '../hooks/useStudents.js';
 import { STUDENT_STATUS_OPTIONS } from './StudentStatusBadge.js';
@@ -107,16 +108,26 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
         { id: student.id, input: clean },
         {
           onSuccess: (updated) => {
+            toast({ title: 'Ändringar sparade' });
             onSuccess?.(updated);
             onOpenChange(false);
+          },
+          onError: (e) => {
+            const msg = e instanceof Error ? e.message : 'Försök igen';
+            toast({ title: 'Kunde inte spara ändringar', description: msg, variant: 'destructive' });
           },
         }
       );
     } else {
       createMutation.mutate(clean, {
         onSuccess: (created) => {
+          toast({ title: 'Elev skapad' });
           onSuccess?.(created);
           onOpenChange(false);
+        },
+        onError: (e) => {
+          const msg = e instanceof Error ? e.message : 'Försök igen';
+          toast({ title: 'Kunde inte skapa elev', description: msg, variant: 'destructive' });
         },
       });
     }

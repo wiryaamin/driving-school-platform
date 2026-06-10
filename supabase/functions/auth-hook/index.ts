@@ -2,38 +2,113 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import type { AuthHookPayload, AuthHookResponse, CustomClaims } from '../_shared/types.ts';
 
-// Loaded once at cold-start — avoids per-request env lookups
+// Loaded once at cold-start — avoids per-request env lookups.
+// Format: "v1,whsec_<base64_key>" — Supabase standard-webhook signing key.
 const HOOK_SECRET = Deno.env.get('AUTH_HOOK_SECRET');
 
 // Warn when JWT payload exceeds this byte threshold — large JWTs slow down every
 // authenticated request since the token is sent in every Authorization header.
 const JWT_SIZE_WARNING_BYTES = 4096;
 
+// GoTrue v2.188.1+ uses standard-webhook signing (NOT Bearer token) for auth hooks.
+// It sends three headers:
+//   webhook-id:        unique message ID per invocation
+//   webhook-timestamp: Unix seconds (used in signed content + replay guard)
+//   webhook-signature: "v1,<base64(HMAC-SHA256(msgId.timestamp.body, key))>"
+//
+// The secret in config.toml / GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_SECRETS is the
+// signing key in "v1,whsec_<base64_raw_key>" format. We decode the raw key,
+// recompute the HMAC over the same signed content, and compare with the received
+// signature. This replaces the old "Authorization: Bearer <raw_secret>" check
+// which GoTrue no longer sends.
+async function verifyStandardWebhook(
+  req: Request,
+  rawBody: string,
+  secret: string,
+): Promise<boolean> {
+  const WHSEC_PREFIX = 'v1,whsec_';
+  if (!secret.startsWith(WHSEC_PREFIX)) return false;
+
+  const msgId        = req.headers.get('webhook-id');
+  const msgTimestamp = req.headers.get('webhook-timestamp');
+  const msgSignature = req.headers.get('webhook-signature');
+
+  if (!msgId || !msgTimestamp || !msgSignature) return false;
+
+  // Replay-attack guard: reject requests older than 5 minutes.
+  const ts  = parseInt(msgTimestamp, 10);
+  const now = Math.floor(Date.now() / 1000);
+  if (isNaN(ts) || Math.abs(now - ts) > 300) return false;
+
+  // Decode the raw signing key from the whsec_ base64 payload.
+  const b64Key   = secret.slice(WHSEC_PREFIX.length);
+  const rawKey   = Uint8Array.from(atob(b64Key), c => c.charCodeAt(0));
+
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    rawKey,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+
+  // Signed content = "<webhook-id>.<webhook-timestamp>.<raw-body>"
+  const signedContent = `${msgId}.${msgTimestamp}.${rawBody}`;
+  const sigBytes      = await crypto.subtle.sign(
+    'HMAC',
+    cryptoKey,
+    new TextEncoder().encode(signedContent),
+  );
+  const computedSig = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+
+  // webhook-signature may contain multiple space-separated "v1,<sig>" values.
+  return msgSignature
+    .split(' ')
+    .some(s => {
+      const comma = s.indexOf(',');
+      if (comma === -1) return false;
+      return s.slice(0, comma) === 'v1' && s.slice(comma + 1) === computedSig;
+    });
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
-  // Correlation ID ties together all log lines for a single hook invocation
   const correlationId = crypto.randomUUID();
 
   if (req.method !== 'POST') {
     return json({ error: 'Method Not Allowed' }, 405);
   }
 
-  // ── 1. Verify Supabase hook secret ──────────────────────────────────────────
-  // Supabase sends the secret configured in config.toml as `Bearer <secret>`.
-  // Any request that fails this check is rejected — the hook is not a public API.
-  const authHeader = req.headers.get('Authorization');
-  if (!HOOK_SECRET || authHeader !== `Bearer ${HOOK_SECRET}`) {
-    logger.warn('auth-hook: unauthorized request', {
+  // ── 1. Read raw body (needed for signature verification before JSON parse) ──
+  let rawBody: string;
+  try {
+    rawBody = await req.text();
+  } catch {
+    return json({ error: 'Failed to read request body' }, 400);
+  }
+
+  // ── 2. Verify standard-webhook HMAC-SHA256 signature ────────────────────────
+  // GoTrue sends webhook-id / webhook-timestamp / webhook-signature headers.
+  // Reject immediately if the signature is absent or doesn't match.
+  if (!HOOK_SECRET) {
+    logger.error('auth-hook: AUTH_HOOK_SECRET env var is not set', { correlation_id: correlationId });
+    return json({ error: 'Hook misconfigured' }, 500);
+  }
+
+  const signatureValid = await verifyStandardWebhook(req, rawBody, HOOK_SECRET);
+  if (!signatureValid) {
+    logger.warn('auth-hook: unauthorized request — invalid or missing webhook signature', {
       correlation_id: correlationId,
-      has_header: !!authHeader,
-      ip: req.headers.get('x-forwarded-for') ?? 'unknown',
+      has_webhook_id:        !!req.headers.get('webhook-id'),
+      has_webhook_timestamp: !!req.headers.get('webhook-timestamp'),
+      has_webhook_signature: !!req.headers.get('webhook-signature'),
     });
     return json({ error: 'Unauthorized' }, 401);
   }
 
-  // ── 2. Parse payload ─────────────────────────────────────────────────────────
+  // ── 3. Parse payload ─────────────────────────────────────────────────────────
   let payload: AuthHookPayload;
   try {
-    payload = (await req.json()) as AuthHookPayload;
+    payload = JSON.parse(rawBody) as AuthHookPayload;
   } catch {
     return json({ error: 'Invalid JSON body' }, 400);
   }
@@ -44,12 +119,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return json({ error: 'Missing user_id' }, 400);
   }
 
-  // ── 3. Build custom claims via DB function ────────────────────────────────────
+  // ── 4. Build custom claims via DB function ────────────────────────────────────
   try {
     const supabase = createServiceClient();
 
-    // preferred_org_id is set by /switch-tenant and persisted in app_metadata.
-    // The auth hook reads it here so tenant switches take effect on next token refresh.
     const preferredOrgId = (claims.app_metadata?.preferred_org_id as string) ?? null;
 
     const { data: customClaims, error: claimsError } = await supabase
@@ -59,8 +132,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
 
     if (claimsError) {
-      // Log the failure but never block sign-in — return unmodified claims with
-      // auth_degraded flag so the client can show a degraded-session warning.
       logger.error('auth-hook: get_user_jwt_claims failed — degraded fallback', {
         correlation_id: correlationId,
         user_id,
@@ -80,17 +151,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       is_platform_admin: custom?.is_platform_admin ?? false,
     });
 
-    // ── 4. Impersonation gate (foundation — not yet active) ────────────────────
-    // When impersonation is implemented:
-    //   - Validate impersonator_id claim against platform_admins table
-    //   - Cap JWT expiry to 30 minutes
-    //   - Emit audit event via event_outbox
-    //   - Ensure permissions do not exceed target user's actual grants
-    // For now: strip any impersonator_id that somehow reaches the hook
-    // to prevent privilege escalation via a crafted request.
-    const safeImpersonatorId: string | undefined = undefined; // locked until implemented
+    // ── 5. Impersonation gate (foundation — not yet active) ────────────────────
+    const safeImpersonatorId: string | undefined = undefined;
 
-    // ── 5. Merge and return enriched claims ───────────────────────────────────
+    // ── 6. Merge and return enriched claims ───────────────────────────────────
     const enriched: AuthHookResponse['claims'] = {
       ...claims,
       organization_id:      custom?.organization_id       ?? null,
@@ -103,9 +167,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       ...(safeImpersonatorId !== undefined && { impersonator_id: safeImpersonatorId }),
     };
 
-    // ── 6. JWT size guard ─────────────────────────────────────────────────────
-    // Large JWTs increase latency on every authenticated API call. Warn early
-    // so we can prune the permission set before it becomes a production issue.
+    // ── 7. JWT size guard ─────────────────────────────────────────────────────
     const payloadBytes = new TextEncoder().encode(JSON.stringify(enriched)).length;
     if (payloadBytes > JWT_SIZE_WARNING_BYTES) {
       logger.warn('auth-hook: JWT payload exceeds size threshold', {
@@ -125,7 +187,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       user_id,
       error: message,
     });
-    // Fail open — never lock users out on unexpected errors
     return json({ claims: { ...claims, auth_degraded: true } }, 200);
   }
 });

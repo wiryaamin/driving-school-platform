@@ -5,13 +5,17 @@ import {
   Calendar, User, Shield, Info,
 } from 'lucide-react';
 import { StudentFinancePanel } from '@modules/finance/index.js';
+import { useInstructor } from '@modules/instructors/index.js';
+import { useStudentUpcomingBookings, BookingStatusBadge, StudentBookingDialog } from '@modules/scheduling/index.js';
 import {
-  Button, Badge,
+  Button, Badge, Skeleton,
   Card, CardContent, CardHeader, CardTitle,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { formatTime } from '@platform/utils';
+import type { LessonBooking } from '@platform/types';
 import { useStudent } from '../hooks/useStudents.js';
 import { StudentStatusBadge, PermitStageBadge, permitStageLabel } from '../components/StudentStatusBadge.js';
 import { StudentForm } from '../components/StudentForm.js';
@@ -53,7 +57,7 @@ function stageIndex(stage: string): number {
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start gap-4 py-2 border-b border-border last:border-0">
-      <span className="text-sm text-muted-foreground w-40 shrink-0">{label}</span>
+      <span className="text-sm text-muted-foreground w-28 sm:w-40 shrink-0">{label}</span>
       <span className="text-sm text-foreground">{value ?? '—'}</span>
     </div>
   );
@@ -64,16 +68,23 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 export function StudentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [editOpen, setEditOpen] = useState(false);
+  const [editOpen,    setEditOpen]    = useState(false);
+  const [bookingOpen, setBookingOpen] = useState(false);
 
   const { data: student, isLoading, error } = useStudent(id ?? null);
+  const instructor       = useInstructor(student?.assigned_instructor_id ?? null);
+  const upcomingBookings = useStudentUpcomingBookings(student?.id);
 
   if (isLoading) {
     return (
       <PageLayout>
-        <div className="flex items-center justify-center py-32 text-muted-foreground text-sm">
-          Laddar elevuppgifter...
-        </div>
+        <PageHeader
+          title="Laddar elev..."
+          breadcrumbs={[{ label: 'Hem' }, { label: 'Elever', href: '/students' }]}
+        />
+        <PageContent>
+          <StudentDetailSkeleton />
+        </PageContent>
       </PageLayout>
     );
   }
@@ -272,17 +283,35 @@ export function StudentDetailPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {student.assigned_instructor_id ? (
-                  <div className="text-sm text-muted-foreground">
-                    <Badge variant="outline" className="font-mono text-xs">
-                      {student.assigned_instructor_id.slice(0, 8)}…
-                    </Badge>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Lärarnamn hämtas i nästa fas
-                    </p>
+                {!student.assigned_instructor_id ? (
+                  <div className="space-y-1.5">
+                    <p className="text-sm text-muted-foreground">Ingen lärare tilldelad</p>
+                    <Link to="/instructors" className="text-xs text-primary hover:underline">
+                      Visa lärare
+                    </Link>
+                  </div>
+                ) : instructor.isLoading ? (
+                  <div className="space-y-2">
+                    <div className="h-4 bg-muted rounded animate-pulse w-36" />
+                    <div className="h-3 bg-muted rounded animate-pulse w-48" />
+                  </div>
+                ) : instructor.data ? (
+                  <div className="space-y-1.5">
+                    <Link
+                      to={`/instructors/${instructor.data.id}`}
+                      className="block text-sm font-medium text-foreground hover:text-primary transition-colors"
+                    >
+                      {instructor.data.first_name} {instructor.data.last_name}
+                    </Link>
+                    {instructor.data.email && (
+                      <p className="text-xs text-muted-foreground">{instructor.data.email}</p>
+                    )}
+                    {instructor.data.phone && (
+                      <p className="text-xs text-muted-foreground">{instructor.data.phone}</p>
+                    )}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Ingen lärare tilldelad</p>
+                  <p className="text-sm text-muted-foreground">Läraren hittades inte</p>
                 )}
               </CardContent>
             </Card>
@@ -331,31 +360,60 @@ export function StudentDetailPage() {
               <CardContent className="space-y-0">
                 <DetailRow label="Skapad"     value={formatDateTime(student.created_at)} />
                 <DetailRow label="Uppdaterad" value={formatDateTime(student.updated_at)} />
-                <DetailRow label="Inskrivningsdatum" value={formatDate(student.enrolled_at)} />
               </CardContent>
             </Card>
 
           </div>
         </div>
 
-        {/* ── Upcoming lessons placeholder ──────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-muted-foreground" />
-              Kommande lektioner
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
-              <Calendar className="w-8 h-8 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">Lektionsbokning aktiveras i UI-3</p>
-              <Link to="/scheduling" className="text-xs text-primary hover:underline">
-                Gå till schema
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+        {/* ── Upcoming lessons ──────────────────────────────────────────── */}
+        <PermissionGate permission={Permissions.SCHEDULING_READ}>
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-muted-foreground" />
+                  Kommande lektioner
+                </CardTitle>
+                <div className="flex items-center gap-3">
+                  <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBookingOpen(true)}>
+                      + Boka lektion
+                    </Button>
+                  </PermissionGate>
+                  <Link to="/scheduling" className="text-xs text-primary hover:underline">
+                    Visa i schema
+                  </Link>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {upcomingBookings.isLoading ? (
+                <UpcomingBookingsSkeleton />
+              ) : upcomingBookings.data?.data && upcomingBookings.data.data.length > 0 ? (
+                <div>
+                  {upcomingBookings.data.data.map((booking) => (
+                    <UpcomingBookingRow key={booking.id} booking={booking} />
+                  ))}
+                  {upcomingBookings.data.meta.has_more && (
+                    <p className="pt-3 text-center text-xs text-muted-foreground">
+                      Fler lektioner finns i{' '}
+                      <Link to="/scheduling" className="text-primary hover:underline">schemat</Link>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 gap-2 text-center">
+                  <Calendar className="w-8 h-8 text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">Inga kommande lektioner</p>
+                  <Link to="/scheduling" className="text-xs text-primary hover:underline">
+                    Gå till schema
+                  </Link>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </PermissionGate>
 
         {/* ── Finance panel ────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -370,6 +428,88 @@ export function StudentDetailPage() {
         onOpenChange={setEditOpen}
         student={student}
       />
+
+      {/* Booking dialog */}
+      <StudentBookingDialog
+        open={bookingOpen}
+        onClose={() => setBookingOpen(false)}
+        studentId={student.id}
+        studentName={fullName}
+      />
     </PageLayout>
+  );
+}
+
+// ─── Detail page skeleton ─────────────────────────────────────────────────────
+
+function StudentDetailSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="lg:col-span-2 space-y-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-3">
+              <div className="h-4 bg-muted rounded animate-pulse w-32" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[1, 2, 3, 4].map((j) => (
+                <div key={j} className="h-8 bg-muted rounded animate-pulse" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="space-y-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i}>
+            <CardHeader className="pb-3">
+              <div className="h-4 bg-muted rounded animate-pulse w-24" />
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {[1, 2, 3].map((j) => (
+                <div key={j} className="h-6 bg-muted rounded animate-pulse" />
+              ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Upcoming booking row ─────────────────────────────────────────────────────
+
+function UpcomingBookingRow({ booking }: { booking: LessonBooking }) {
+  const date = new Date(booking.starts_at).toLocaleDateString('sv-SE', {
+    weekday: 'short', month: 'short', day: 'numeric',
+  });
+  return (
+    <div className="flex items-center justify-between py-2.5 border-b border-border last:border-0">
+      <div className="min-w-0">
+        <p className="text-sm text-foreground capitalize">{date}</p>
+        <p className="text-xs text-muted-foreground">
+          {formatTime(booking.starts_at)} – {formatTime(booking.ends_at)}
+        </p>
+      </div>
+      <BookingStatusBadge status={booking.status} />
+    </div>
+  );
+}
+
+// ─── Upcoming bookings skeleton ───────────────────────────────────────────────
+
+function UpcomingBookingsSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="flex items-center justify-between py-2.5">
+          <div className="space-y-1.5">
+            <div className="h-4 bg-muted rounded animate-pulse w-28" />
+            <div className="h-3 bg-muted rounded animate-pulse w-20" />
+          </div>
+          <div className="h-5 bg-muted rounded animate-pulse w-16" />
+        </div>
+      ))}
+    </div>
   );
 }

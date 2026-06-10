@@ -219,3 +219,92 @@ export function useStudentPackages(studentId: string | null) {
     enabled:  !!studentId,
   });
 }
+
+// ─── Payment recording ────────────────────────────────────────────────────────
+
+export interface RecordPaymentInput {
+  invoice_id:          string;
+  amount:              number;
+  payment_method:      PaymentMethod;
+  provider_reference?: string | null;
+}
+
+async function apiRecordPayment(input: RecordPaymentInput): Promise<Payment> {
+  const { data, error } = await supabase.functions.invoke<Payment>('payments', {
+    method: 'POST',
+    body:   { ...input },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data;
+}
+
+export function useRecordPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RecordPaymentInput) => apiRecordPayment(input),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: financeKeys.invoiceDetail(variables.invoice_id) });
+      void qc.invalidateQueries({ queryKey: financeKeys.payments() });
+      void qc.invalidateQueries({ queryKey: financeKeys.invoices() });
+    },
+  });
+}
+
+// ─── Invoice creation ─────────────────────────────────────────────────────────
+
+export interface CreateInvoiceInput {
+  student_id: string;
+  currency?:  string;
+  due_date?:  string | null;
+  notes?:     string | null;
+}
+
+export interface AddInvoiceLineInput {
+  invoiceId:   string;
+  line_type?:  InvoiceLineType;
+  description: string;
+  quantity?:   number;
+  unit_price:  number;
+  vat_rate?:   number;
+}
+
+async function apiCreateInvoice(input: CreateInvoiceInput): Promise<Invoice> {
+  const { data, error } = await supabase.functions.invoke<Invoice>('invoices', {
+    method: 'POST',
+    body:   { ...input },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data;
+}
+
+async function apiAddInvoiceLine({ invoiceId, ...body }: AddInvoiceLineInput): Promise<InvoiceLineItem> {
+  const { data, error } = await supabase.functions.invoke<InvoiceLineItem>(
+    `invoices/${invoiceId}/lines`,
+    { method: 'POST', body },
+  );
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data;
+}
+
+export function useCreateInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateInvoiceInput) => apiCreateInvoice(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: financeKeys.invoices() });
+    },
+  });
+}
+
+export function useAddInvoiceLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddInvoiceLineInput) => apiAddInvoiceLine(input),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: financeKeys.invoiceDetail(variables.invoiceId) });
+    },
+  });
+}

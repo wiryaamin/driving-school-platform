@@ -67,7 +67,6 @@ enable_signup = false       # Signup via invite only for admin users
 enable_anonymous_sign_ins = false
 
 [auth.email]
-enable_signup = false
 double_confirm_changes = true
 enable_confirmations = false
 secure_password_change = true
@@ -79,10 +78,16 @@ enable_signup = false
 enabled = false
 
 [auth.hook.custom_access_token]
-enabled = false
-# For local dev: Supabase routes this to the running Edge Function runtime.
-# For production: replace with https://<project-ref>.supabase.co/functions/v1/auth-hook
-uri = "http://127.0.0.1:54321/functions/v1/auth-hook"
+# REQUIRED: set AUTH_HOOK_SECRET before enabling.
+# Run: openssl rand -base64 32
+# Then create supabase/functions/.env (gitignored) with: AUTH_HOOK_SECRET=<output>
+enabled = true
+# Local dev: GoTrue runs inside Docker and cannot reach 127.0.0.1 (container loopback).
+# host.docker.internal resolves to the Docker host machine on Windows/macOS Docker Desktop,
+# allowing GoTrue to reach Kong (54321 on host → Kong:8000 → Edge Runtime) without HTTPS.
+# Supabase's GoTrue fork whitelists host.docker.internal for HTTP auth hooks.
+# Production: configure via Dashboard → Authentication → Hooks (not this file).
+uri = "http://host.docker.internal:54321/functions/v1/auth-hook"
 # Must match AUTH_HOOK_SECRET in supabase secrets (local: supabase/functions/.env)
 secrets = "env(AUTH_HOOK_SECRET)"
 

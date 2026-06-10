@@ -289,3 +289,31 @@
   background-color: hsl(var(--border));
   border-radius: 3px;
 }
+
+/* ─── Mobile calendar compaction ──────────────────────────────────────────── */
+@media (max-width: 639px) {
+  /* Compact column headers (Mon, Tue...) */
+  .fc .fc-col-header-cell-cushion {
+    font-size: 0.6rem;
+    padding: 3px 2px;
+    letter-spacing: 0;
+  }
+
+  /* Compact time axis labels */
+  .fc .fc-timegrid-slot-label-cushion {
+    font-size: 0.6rem;
+    padding-right: 2px;
+  }
+
+  /* Touch-friendly minimum event height */
+  .fc .fc-timegrid-event {
+    min-height: 24px;
+  }
+
+  /* Week view: enforce minimum column width so it scrolls rather than crushes */
+  .fc-scheduling-wrapper .fc-timeGridWeek-view .fc-col-header-cell,
+  .fc-scheduling-wrapper .fc-timeGridWeek-view .fc-daygrid-day,
+  .fc-scheduling-wrapper .fc-timeGridWeek-view .fc-timegrid-col {
+    min-width: 52px;
+  }
+}

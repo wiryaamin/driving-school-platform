@@ -15,4 +15,14 @@ initAdminI18n().then(() => {
       <App />
     </React.StrictMode>
   );
+}).catch((err: unknown) => {
+  console.error('[Platform] Bootstrap failed:', err);
+  const root = document.getElementById('root');
+  if (root) {
+    root.innerHTML =
+      '<div style="font-family:system-ui;padding:2rem;color:#dc2626">' +
+      '<strong>Startfel</strong>' +
+      '<p style="margin-top:0.5rem">Appen kunde inte starta. Kontrollera konsolen och .env.local för mer information.</p>' +
+      '</div>';
+  }
 });

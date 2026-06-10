@@ -19,6 +19,8 @@ import { cn } from '@/lib/utils.js';
 import { useUiStore } from '@core/store/ui.store.js';
 import { usePermissions } from '@core/rbac/hooks.js';
 import type { Permission } from '@core/rbac/permissions.js';
+import { useSession } from '@shared/hooks/useSession.js';
+import type { Organization } from '@platform/types';
 
 // ─── Navigation Configuration ─────────────────────────────────────────────────
 
@@ -71,7 +73,7 @@ export const NAVIGATION: NavSection[] = [
         labelSv: 'Schema',
         icon: Calendar,
         path: '/scheduling',
-        permission: 'scheduling:lesson:read' as Permission,
+        permission: 'scheduling:booking:read' as Permission,
       },
     ],
   },
@@ -97,7 +99,7 @@ export const NAVIGATION: NavSection[] = [
         labelSv: 'Företagskunder',
         icon: Building2,
         path: '/corporate',
-        permission: 'corporate:account:read' as Permission,
+        permission: 'corporate:contract:read' as Permission,
       },
     ],
   },
@@ -192,6 +194,11 @@ export function SidebarNavContent({ collapsed = false, onNavClick }: SidebarNavC
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebarCollapsed } = useUiStore();
+  const { organization, isLoading } = useSession();
+
+  const orgInitials = organization?.name
+    ? organization.name.split(' ').slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('')
+    : null;
 
   return (
     <aside
@@ -206,16 +213,27 @@ export function Sidebar() {
       <div className="flex items-center h-14 px-4 border-b border-sidebar-border shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
+            {orgInitials && sidebarCollapsed ? (
+              <span className="text-xs font-bold text-primary-foreground">{orgInitials}</span>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            )}
           </div>
           {!sidebarCollapsed && (
-            <span className="text-sm font-semibold text-sidebar-primary-foreground truncate">
-              Körskola
-            </span>
+            <div className="min-w-0 flex-1">
+              {isLoading ? (
+                <div className="h-4 w-24 bg-sidebar-accent/30 rounded animate-pulse" />
+              ) : (
+                <span className="text-sm font-semibold text-sidebar-primary-foreground truncate block">
+                  {organization?.name ?? 'Körskola'}
+                </span>
+              )}
+              {!isLoading && organization && <OrgStatusChip org={organization} />}
+            </div>
           )}
         </div>
       </div>
@@ -283,4 +301,19 @@ function SidebarItem({
       )}
     </NavLink>
   );
+}
+
+// ─── Org Status Chip ──────────────────────────────────────────────────────────
+
+function OrgStatusChip({ org }: { org: Organization }) {
+  if (org.subscription_status === 'trialing') {
+    return <span className="text-[10px] font-medium text-amber-500 leading-none">Testperiod</span>;
+  }
+  if (org.subscription_status === 'past_due') {
+    return <span className="text-[10px] font-medium text-destructive leading-none">Betalning försenad</span>;
+  }
+  if (org.status === 'suspended') {
+    return <span className="text-[10px] font-medium text-destructive leading-none">Inaktivt konto</span>;
+  }
+  return null;
 }

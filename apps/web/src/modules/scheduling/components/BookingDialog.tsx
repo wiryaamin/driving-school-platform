@@ -118,7 +118,7 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
             />
           </div>
 
-          <ScrollArea className="h-52 rounded-md border">
+          <ScrollArea className="h-44 sm:h-52 rounded-md border">
             {studentsLoading ? (
               <div className="p-3 space-y-2">
                 {[...Array(5)].map((_, i) => (

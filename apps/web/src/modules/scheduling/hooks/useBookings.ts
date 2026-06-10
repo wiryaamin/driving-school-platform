@@ -94,3 +94,43 @@ export function useBookingsForSlot(slotId: string | null) {
     enabled: slotId !== null && slotId !== '',
   });
 }
+
+export function useInstructorUpcomingBookings(instructorId: string | null | undefined) {
+  const from  = new Date().toISOString();
+  const to    = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  const today = from.slice(0, 10);
+
+  return useQuery({
+    queryKey: [...bookingKeys.all, 'instructor-upcoming', instructorId ?? '', today],
+    queryFn:  () => apiFetchBookings({
+      instructor_id: instructorId!,
+      from,
+      to,
+      per_page:  50,
+      sort_by:   'starts_at',
+      sort_dir:  'asc',
+    }),
+    enabled:   Boolean(instructorId),
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useStudentUpcomingBookings(studentId: string | null | undefined) {
+  const from  = new Date().toISOString();
+  const to    = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  const today = from.slice(0, 10);
+
+  return useQuery({
+    queryKey: [...bookingKeys.all, 'student-upcoming', studentId ?? '', today],
+    queryFn:  () => apiFetchBookings({
+      student_id: studentId!,
+      from,
+      to,
+      per_page:   10,
+      sort_by:    'starts_at',
+      sort_dir:   'asc',
+    }),
+    enabled:   Boolean(studentId),
+    staleTime: 2 * 60 * 1000,
+  });
+}

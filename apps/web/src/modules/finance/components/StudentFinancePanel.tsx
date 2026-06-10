@@ -15,7 +15,16 @@ function WalletSection({ studentId }: { studentId: string }) {
   const { data, isLoading } = useStudentWallet(studentId);
 
   if (isLoading) {
-    return <p className="text-sm text-muted-foreground">Laddar saldo...</p>;
+    return (
+      <div className="space-y-2">
+        {[1, 2].map((i) => (
+          <div key={i} className="flex items-center justify-between">
+            <div className="h-4 bg-muted rounded animate-pulse w-16" />
+            <div className="h-5 bg-muted rounded animate-pulse w-20" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   if (!data || data.balances.length === 0) {
@@ -48,7 +57,20 @@ function PackagesSection({ studentId }: { studentId: string }) {
   const { data, isLoading } = useStudentPackages(studentId);
 
   if (isLoading) {
-    return <p className="text-sm text-muted-foreground">Laddar paket...</p>;
+    return (
+      <div className="space-y-3">
+        {[1, 2].map((i) => (
+          <div key={i} className="space-y-2">
+            <div className="flex justify-between">
+              <div className="h-4 bg-muted rounded animate-pulse w-28" />
+              <div className="h-4 bg-muted rounded animate-pulse w-14" />
+            </div>
+            <div className="h-1.5 bg-muted rounded-full animate-pulse" />
+            <div className="h-3 bg-muted rounded animate-pulse w-36" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   const packages = data?.data ?? [];
@@ -97,7 +119,19 @@ function RecentInvoicesSection({ studentId }: { studentId: string }) {
   const { data, isLoading } = useInvoiceList({ student_id: studentId, per_page: 5 });
 
   if (isLoading) {
-    return <p className="text-sm text-muted-foreground">Laddar fakturor...</p>;
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center justify-between py-1">
+            <div className="flex items-center gap-2">
+              <div className="h-5 bg-muted rounded animate-pulse w-14" />
+              <div className="h-4 bg-muted rounded animate-pulse w-20" />
+            </div>
+            <div className="h-4 bg-muted rounded animate-pulse w-16" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   const invoices = data?.data ?? [];
@@ -143,7 +177,7 @@ interface Props {
 export function StudentFinancePanel({ studentId }: Props) {
   return (
     <>
-      <PermissionGate permission={Permissions.FINANCE_WALLET_READ}>
+      <PermissionGate permission={Permissions.FINANCE_PAYMENT_READ}>
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">

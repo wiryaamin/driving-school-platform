@@ -67,7 +67,7 @@ export function CalendarToolbar({
         </div>
 
         {/* Current period title */}
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
           {isLoading ? (
             <div className="h-4 w-32 bg-muted animate-pulse rounded" />
           ) : (

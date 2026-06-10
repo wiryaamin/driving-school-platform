@@ -37,7 +37,7 @@ interface BreadcrumbItem {
 
 export function PageHeader({ title, description, actions, breadcrumbs, className }: PageHeaderProps) {
   return (
-    <div className={cn('flex items-start justify-between gap-4', className)}>
+    <div className={cn('flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4', className)}>
       <div className="min-w-0">
         {breadcrumbs && breadcrumbs.length > 0 && (
           <nav className="flex items-center gap-1 mb-1" aria-label="Brödsmulor">
