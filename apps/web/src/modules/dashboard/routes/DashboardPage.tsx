@@ -54,6 +54,7 @@ export function DashboardPage() {
               description={t('stat.active_students_description')}
               icon={GraduationCap}
               isLoading={activeStudents.isLoading}
+              onClick={() => navigate('/students')}
             />
           </PermissionGate>
 
@@ -64,6 +65,7 @@ export function DashboardPage() {
               description={t('stat.lessons_today_description')}
               icon={Calendar}
               isLoading={todaySlots.isLoading}
+              onClick={() => navigate('/scheduling')}
             />
           </PermissionGate>
 
@@ -78,6 +80,7 @@ export function DashboardPage() {
               }
               icon={Receipt}
               isLoading={pendingInvoices.isLoading}
+              onClick={() => navigate('/finance/invoices')}
             />
           </PermissionGate>
 
@@ -88,6 +91,7 @@ export function DashboardPage() {
               description={t('stat.monthly_revenue_description')}
               icon={TrendingUp}
               isLoading={monthlyRevenue.isLoading}
+              onClick={() => navigate('/finance/invoices')}
             />
           </PermissionGate>
         </div>

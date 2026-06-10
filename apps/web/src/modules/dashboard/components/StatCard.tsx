@@ -12,19 +12,27 @@ interface StatCardProps {
   };
   isLoading?: boolean;
   className?: string;
+  onClick?: () => void;
 }
 
 /**
  * StatCard — a KPI metric card for the dashboard.
  * Displays a key metric with optional trend indicator.
  */
-export function StatCard({ title, value, description, icon: Icon, trend, isLoading, className }: StatCardProps) {
+export function StatCard({ title, value, description, icon: Icon, trend, isLoading, className, onClick }: StatCardProps) {
   return (
-    <div className={cn(
-      'bg-card border border-border rounded-xl p-5',
-      'hover:shadow-sm transition-shadow',
-      className
-    )}>
+    <div
+      className={cn(
+        'bg-card border border-border rounded-xl p-5',
+        'hover:shadow-sm transition-shadow',
+        onClick && 'cursor-pointer hover:border-primary/40',
+        className
+      )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-muted-foreground truncate">{title}</p>

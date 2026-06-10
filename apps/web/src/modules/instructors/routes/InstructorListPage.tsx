@@ -251,6 +251,7 @@ export function InstructorListPage() {
             isLoading={isLoading}
             emptyMessage="Inga lärare hittades. Skapa en ny lärare för att komma igång."
             defaultPageSize={20}
+            onRowClick={(instructor) => navigate(`/instructors/${instructor.id}`)}
             toolbar={
               <InstructorTableToolbar
                 search={search}

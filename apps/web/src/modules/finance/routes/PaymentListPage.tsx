@@ -53,9 +53,9 @@ function buildColumns(): ColumnDef<Payment>[] {
       cell:   ({ row }) => (
         <Link
           to={`/finance/invoices/${row.original.invoice_id}`}
-          className="text-xs font-mono text-primary hover:underline"
+          className="text-xs text-primary hover:underline"
         >
-          {row.original.invoice_id.slice(0, 8)}…
+          Visa faktura
         </Link>
       ),
     },
