@@ -21,15 +21,18 @@ pnpm install
 ```bash
 # Generate auth hook secret
 openssl rand -base64 32
+# Example output: mK4Lp2Rx7vNqY8Z0jW3sUeHdFcTbGnOi9AkXm1BpQ2E=
 
-# Copy env files and fill in the generated secret
+# Copy env files
 cp supabase/functions/.env.example supabase/functions/.env
 cp apps/web/.env.example apps/web/.env.local
 ```
 
 `supabase/functions/.env`:
 ```
-AUTH_HOOK_SECRET=<value from openssl above>
+# IMPORTANT: prefix with v1,whsec_ — the raw base64 alone will not work
+AUTH_HOOK_SECRET=v1,whsec_<value from openssl above>
+WORKER_SECRET=any-random-string-for-local-dev
 ```
 
 `apps/web/.env.local`:
@@ -60,57 +63,43 @@ pnpm --filter @platform/web dev
 
 ---
 
-## Creating Test Users
+## Bootstrap: First Organization and Admin
 
-Connect to the local database (`psql postgresql://postgres:postgres@127.0.0.1:54322/postgres`) or use the Supabase Studio at `http://127.0.0.1:54323`.
+Use the seed script rather than manual SQL inserts. The seed handles all steps atomically with full guards.
 
-### Regular org user
+**Full instructions:** See `docs/DEPLOY.md` — Part 1, Steps 6–7.
 
-1. Create an organization:
-```sql
-INSERT INTO public.organizations (name, slug, subscription_tier)
-VALUES ('Test Driving School', 'test-driving-school', 'professional')
-RETURNING id;
+Quick summary:
+1. Create an auth user in Studio → Authentication → Users → Add User
+2. Copy the UUID shown after creation
+3. Open `supabase/seed/bootstrap_org_admin.sql` and update `v_user_id` and `v_user_email`
+4. Run:
+```bash
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  -f supabase/seed/bootstrap_org_admin.sql
 ```
 
-2. Sign up a user via Supabase Auth (use Studio → Authentication → Users → Add User).
+For demo data:
+```bash
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  -f supabase/seed/demo_data.sql
 
-3. Create a profile (auto-created by trigger if configured, otherwise):
-```sql
-INSERT INTO public.profiles (id, first_name, last_name, email, language_preference)
-VALUES ('<user-uuid>', 'Test', 'User', 'test@example.com', 'sv');
+psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  -f supabase/seed/demo_continuity.sql
 ```
-
-4. Create a membership:
-```sql
-INSERT INTO public.memberships (user_id, organization_id, status)
-VALUES ('<user-uuid>', '<org-uuid>', 'active')
-RETURNING id;
-```
-
-5. Assign a role:
-```sql
--- First find the role ID
-SELECT id FROM public.roles WHERE name = 'org_admin' AND is_system_role = true;
-
--- Then assign it
-INSERT INTO public.membership_roles (membership_id, role_id)
-VALUES ('<membership-uuid>', '<role-uuid>');
-```
-
-6. Sign in via the web app — the JWT should now contain `organization_id`, `permissions`, and `role`.
 
 ---
 
 ## Platform Admin Bootstrap
 
-Platform admins have full cross-tenant access. Bootstrap the first one with direct SQL:
+Platform admins have cross-tenant access. To create a platform admin after running the org bootstrap:
 
 ```sql
--- 1. Create the auth user via Studio or supabase CLI
--- 2. Create their profile
-INSERT INTO public.profiles (id, first_name, last_name, email, language_preference)
-VALUES ('<user-uuid>', 'Platform', 'Admin', 'admin@internal.com', 'sv');
+-- 1. Create the auth user via Studio
+-- 2. Create their profile (or it was already created by the bootstrap seed)
+INSERT INTO public.profiles (id, first_name, last_name, email)
+VALUES ('<user-uuid>', 'Platform', 'Admin', 'admin@internal.com')
+ON CONFLICT (id) DO NOTHING;
 
 -- 3. Register as platform admin
 INSERT INTO public.platform_admins (user_id, role, is_active)
@@ -219,7 +208,10 @@ Log line pattern:
 ## Useful Local Commands
 
 ```bash
-# Apply new migrations
+# Apply new migrations (non-destructive — skips already-applied)
+supabase db push
+
+# Reset the database completely (WIPES ALL DATA — use only to start fresh)
 supabase db reset
 
 # Check migration status
