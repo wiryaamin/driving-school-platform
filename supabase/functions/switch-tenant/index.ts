@@ -1,5 +1,5 @@
 import { createSupabaseClient, createServiceClient } from '../_shared/supabase.ts';
-import { getCorsHeaders, handleCors } from '../_shared/cors.ts';
+import { serveCors } from '../_shared/cors.ts';
 import { logger } from '../_shared/logger.ts';
 import type {
   SwitchTenantRequest,
@@ -8,16 +8,11 @@ import type {
   CustomClaims,
 } from '../_shared/types.ts';
 
-Deno.serve(async (req: Request): Promise<Response> => {
-  // ── CORS preflight ──────────────────────────────────────────────────────────
-  const preflightResponse = handleCors(req);
-  if (preflightResponse) return preflightResponse;
-
-  const cors = getCorsHeaders(req);
+Deno.serve((req: Request) => serveCors(req, async () => {
   const correlationId = crypto.randomUUID();
 
   if (req.method !== 'POST') {
-    return json({ error: 'Method Not Allowed' }, 405, cors);
+    return json({ error: 'Method Not Allowed' }, 405);
   }
 
   // ── 1. Authenticate the caller ──────────────────────────────────────────────
@@ -27,7 +22,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const { data: { user }, error: authError } = await userClient.auth.getUser();
 
   if (authError || !user) {
-    return json({ error: 'Unauthenticated' }, 401, cors);
+    return json({ error: 'Unauthenticated' }, 401);
   }
 
   // ── 2. Parse and validate request body ────────────────────────────────────
@@ -35,19 +30,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
   try {
     body = (await req.json()) as SwitchTenantRequest;
   } catch {
-    return json({ error: 'Invalid JSON body' }, 400, cors);
+    return json({ error: 'Invalid JSON body' }, 400);
   }
 
   const { target_org_id } = body;
 
   if (!target_org_id || typeof target_org_id !== 'string') {
-    return json({ error: 'Missing or invalid target_org_id' }, 400, cors);
+    return json({ error: 'Missing or invalid target_org_id' }, 400);
   }
 
   // Basic UUID format guard — prevents trivially malformed inputs reaching the DB
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!UUID_RE.test(target_org_id)) {
-    return json({ error: 'Invalid target_org_id format' }, 400, cors);
+    return json({ error: 'Invalid target_org_id format' }, 400);
   }
 
   try {
@@ -70,7 +65,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         target_org_id,
         error:          claimsError.message,
       });
-      return json({ error: 'Failed to validate organization access' }, 500, cors);
+      return json({ error: 'Failed to validate organization access' }, 500);
     }
 
     const custom = claims as CustomClaims | null;
@@ -85,7 +80,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json<EdgeFunctionError>(
         { error: 'No active membership in the requested organization' },
         403,
-        cors,
       );
     }
 
@@ -106,7 +100,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         user_id:        user.id,
         error:          updateError.message,
       });
-      return json({ error: 'Failed to initiate tenant switch' }, 500, cors);
+      return json({ error: 'Failed to initiate tenant switch' }, 500);
     }
 
     // ── 5. Audit via event outbox ─────────────────────────────────────────────
@@ -141,7 +135,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       message: 'Tenant switch staged. Call supabase.auth.refreshSession() to apply.',
     };
 
-    return json(response, 200, cors);
+    return json(response, 200);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error('switch-tenant: unexpected error', {
@@ -149,13 +143,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       user_id:        user.id,
       error:          message,
     });
-    return json({ error: 'Internal server error' }, 500, cors);
+    return json({ error: 'Internal server error' }, 500);
   }
-});
+}));
 
-function json<T>(body: T, status: number, cors: Record<string, string> = {}): Response {
+function json<T>(body: T, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json', ...cors },
+    headers: { 'Content-Type': 'application/json' },
   });
 }

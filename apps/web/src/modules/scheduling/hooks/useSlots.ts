@@ -69,7 +69,7 @@ async function apiFetchSlot(id: string): Promise<LessonSlot> {
 export function useSlotList(params: LessonSlotListQueryInput = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: slotKeys.list(params),
-    queryFn: () => apiFetchSlots({ per_page: 100, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
+    queryFn: () => apiFetchSlots({ per_page: 200, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
     enabled: options?.enabled !== false && Boolean(params.from && params.to),
   });
 }

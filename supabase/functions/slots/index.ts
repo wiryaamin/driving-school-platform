@@ -1,5 +1,5 @@
 import { z } from 'npm:zod@3';
-import { handleCors } from '../_shared/cors.ts';
+import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
@@ -40,7 +40,7 @@ const UpdateSlotSchema = z.object({
 
 const ListQuerySchema = z.object({
   page:           z.coerce.number().int().positive().max(1000).default(1),
-  per_page:       z.coerce.number().int().positive().max(100).default(25),
+  per_page:       z.coerce.number().int().positive().max(500).default(25),
   sort_by:        z.string().optional(),
   sort_dir:       z.enum(['asc', 'desc']).optional(),
   instructor_id:  z.string().uuid().optional(),
@@ -146,24 +146,27 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   const dto = parsed.data;
   const client = createSupabaseClient(req);
 
-  // Pre-flight: instructor availability
-  const { data: instrAvail, error: instrErr } = await (client as any).rpc('check_instructor_availability', {
-    p_instructor_id: dto.instructor_id,
-    p_starts_at:     dto.starts_at,
-    p_ends_at:       dto.ends_at,
-  });
-  if (instrErr) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check instructor availability');
-  if (!instrAvail) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
-
-  // Pre-flight: vehicle availability
-  if (dto.vehicle_id !== undefined && dto.vehicle_id !== null) {
-    const { data: vehAvail, error: vehErr } = await (client as any).rpc('check_vehicle_availability', {
-      p_vehicle_id: dto.vehicle_id,
-      p_starts_at:  dto.starts_at,
-      p_ends_at:    dto.ends_at,
-    });
-    if (vehErr) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check vehicle availability');
-    if (!vehAvail) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
+  // Pre-flight: availability checks in parallel
+  const hasVehicle = dto.vehicle_id !== undefined && dto.vehicle_id !== null;
+  const [instrResult, vehResult] = await Promise.all([
+    (client as any).rpc('check_instructor_availability', {
+      p_instructor_id: dto.instructor_id,
+      p_starts_at:     dto.starts_at,
+      p_ends_at:       dto.ends_at,
+    }),
+    hasVehicle
+      ? (client as any).rpc('check_vehicle_availability', {
+          p_vehicle_id: dto.vehicle_id,
+          p_starts_at:  dto.starts_at,
+          p_ends_at:    dto.ends_at,
+        })
+      : Promise.resolve({ data: true, error: null }),
+  ]);
+  if (instrResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check instructor availability');
+  if (!instrResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
+  if (hasVehicle) {
+    if (vehResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check vehicle availability');
+    if (!vehResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
   }
 
   const { data: slot, error } = await (client as any)
@@ -233,24 +236,30 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   const newInstructorId = dto.instructor_id ?? existing.instructor_id;
   const newVehicleId    = dto.vehicle_id !== undefined ? dto.vehicle_id : existing.vehicle_id;
 
-  if (dto.instructor_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined) {
-    const { data: avail } = await (client as any).rpc('check_instructor_availability', {
-      p_instructor_id:   newInstructorId,
-      p_starts_at:       newStartsAt,
-      p_ends_at:         newEndsAt,
-      p_exclude_slot_id: id,
-    });
-    if (!avail) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
-  }
+  const instrChanged = dto.instructor_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined;
+  const vehChanged   = newVehicleId !== null && (dto.vehicle_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined);
 
-  if (newVehicleId !== null && (dto.vehicle_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined)) {
-    const { data: avail } = await (client as any).rpc('check_vehicle_availability', {
-      p_vehicle_id:      newVehicleId,
-      p_starts_at:       newStartsAt,
-      p_ends_at:         newEndsAt,
-      p_exclude_slot_id: id,
-    });
-    if (!avail) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
+  if (instrChanged || vehChanged) {
+    const [instrAvail, vehAvail] = await Promise.all([
+      instrChanged
+        ? (client as any).rpc('check_instructor_availability', {
+            p_instructor_id:   newInstructorId,
+            p_starts_at:       newStartsAt,
+            p_ends_at:         newEndsAt,
+            p_exclude_slot_id: id,
+          })
+        : Promise.resolve({ data: true, error: null }),
+      vehChanged
+        ? (client as any).rpc('check_vehicle_availability', {
+            p_vehicle_id:      newVehicleId,
+            p_starts_at:       newStartsAt,
+            p_ends_at:         newEndsAt,
+            p_exclude_slot_id: id,
+          })
+        : Promise.resolve({ data: true, error: null }),
+    ]);
+    if (instrChanged && !instrAvail.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
+    if (vehChanged   && !vehAvail.data)   return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
   }
 
   const { data: slot, error } = await (client as any)
@@ -287,8 +296,9 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Slot '${id}' not found`);
   if (existing.status === 'cancelled') return errorResp(ctx, 409, 'CONFLICT', 'Slot is already cancelled');
 
-  // Block if active bookings exist
-  const { data: activeBookings } = await (client as any)
+  // Block if active bookings exist.
+  // head: true returns data: null and count: <number> — destructure count, not data.
+  const { count: activeCount } = await (client as any)
     .from('lesson_bookings')
     .select('id', { count: 'exact', head: true })
     .eq('slot_id', id)
@@ -296,9 +306,8 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
     .is('deleted_at', null)
     .not('status', 'in', '("cancelled","no_show","rescheduled")');
 
-  const activeCount = activeBookings ?? 0;
-  if (activeCount > 0) {
-    return errorResp(ctx, 409, 'CONFLICT', `Cannot cancel slot with ${activeCount} active booking(s). Cancel or reschedule them first.`);
+  if ((activeCount ?? 0) > 0) {
+    return errorResp(ctx, 409, 'CONFLICT', `Cannot cancel slot with ${activeCount ?? 0} active booking(s). Cancel or reschedule them first.`);
   }
 
   const { data: slot, error } = await (client as any)
@@ -317,10 +326,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
-  const corsResp = handleCors(req);
-  if (corsResp) return corsResp;
-
+Deno.serve((req: Request) => serveCors(req, async () => {
   const ctxResult = await buildEdgeContext(req);
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
@@ -380,4 +386,4 @@ Deno.serve(async (req: Request) => {
   });
 
   return response;
-});
+}));

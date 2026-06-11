@@ -919,10 +919,19 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  // Fail-closed: refuse all requests if WORKER_SECRET is not configured.
+  // An absent secret means no valid token can exist — open access is never correct.
+  if (!WORKER_SECRET) {
+    return new Response(JSON.stringify({ error: 'Worker not configured — WORKER_SECRET missing' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   const authHeader = req.headers.get('Authorization') ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
-  if (WORKER_SECRET !== undefined && WORKER_SECRET !== '' && token !== WORKER_SECRET) {
+  if (token !== WORKER_SECRET) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
