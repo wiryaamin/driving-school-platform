@@ -1,4 +1,4 @@
-/**
+﻿/**
  * fortnox — Fortnox sync queue and state management.
  *
  * Routes:
@@ -13,6 +13,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,7 +44,7 @@ function parsePath(req: Request): { resource: string | null; entityId: string | 
   };
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -62,10 +64,11 @@ Deno.serve(async (req: Request) => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (!orgId) return err('No organization context', 403, 'NO_ORG');
 
   if (!hasPermission(user, 'finance:fortnox:manage')) return err('Forbidden', 403, 'FORBIDDEN');
@@ -198,4 +201,4 @@ Deno.serve(async (req: Request) => {
     console.error('[fortnox]', msg);
     return err('Internal server error', 500, 'INTERNAL_ERROR');
   }
-});
+}));

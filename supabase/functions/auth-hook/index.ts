@@ -125,14 +125,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     const preferredOrgId = (claims.app_metadata?.preferred_org_id as string) ?? null;
 
-    const { data: customClaims, error: claimsError } = await supabase
-      .rpc('get_user_jwt_claims', {
+    const firstAttempt = await supabase.rpc('get_user_jwt_claims', {
+      p_user_id:       user_id,
+      p_target_org_id: preferredOrgId,
+    });
+
+    let claimsData = firstAttempt.data;
+    let claimsError = firstAttempt.error;
+
+    if (claimsError) {
+      // Retry once — cold start may have caused the initial DB connection to fail.
+      logger.warn('auth-hook: claims attempt 1 failed — retrying in 500 ms', {
+        correlation_id: correlationId,
+        user_id,
+        error: claimsError.message,
+      });
+      await new Promise(r => setTimeout(r, 500));
+      const retry = await supabase.rpc('get_user_jwt_claims', {
         p_user_id:       user_id,
         p_target_org_id: preferredOrgId,
       });
+      claimsData  = retry.data;
+      claimsError = retry.error;
+    }
 
     if (claimsError) {
-      logger.error('auth-hook: get_user_jwt_claims failed — degraded fallback', {
+      logger.error('auth-hook: get_user_jwt_claims failed after retry — degraded fallback', {
         correlation_id: correlationId,
         user_id,
         error: claimsError.message,
@@ -141,7 +159,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ claims: { ...claims, auth_degraded: true } }, 200);
     }
 
-    const custom = customClaims as CustomClaims | null;
+    const custom = claimsData as CustomClaims | null;
 
     logger.info('auth-hook: claims built', {
       correlation_id:    correlationId,

@@ -403,6 +403,16 @@ CREATE TRIGGER organizations_set_updated_at
   BEFORE UPDATE ON public.organizations
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
+-- Platform system sentinel: required by compliance_events FK for platform-level events.
+-- Never used as a tenant; exists only so SECURITY DEFINER functions can log system events.
+INSERT INTO public.organizations (id, slug, name, legal_name)
+VALUES (
+  '00000000-0000-0000-0000-000000000000',
+  'platform-system',
+  'Platform System',
+  'Platform System'
+) ON CONFLICT (id) DO NOTHING;
+
 CREATE TRIGGER organizations_audit
   AFTER INSERT OR UPDATE OR DELETE ON public.organizations
   FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_fn('id');

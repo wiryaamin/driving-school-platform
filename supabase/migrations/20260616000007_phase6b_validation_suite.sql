@@ -12,42 +12,42 @@ END $$;
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'replay_ci_run_v1', '6B.1',
   encode(sha256(('replay_ci_run_v1|6B.1|sha256_pipe_concat_5field')::bytea), 'hex'),
-  'sha256_pipe_concat_5field', true, true, now()
+  'sha256_pipe_concat_5field', true, true, '6B'
 WHERE NOT EXISTS (SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'replay_ci_run_v1');
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'shadow_rebuild_run_v1', '6B.1',
   encode(sha256(('shadow_rebuild_run_v1|6B.1|sha256_pipe_concat_5field')::bytea), 'hex'),
-  'sha256_pipe_concat_5field', true, true, now()
+  'sha256_pipe_concat_5field', true, true, '6B'
 WHERE NOT EXISTS (SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'shadow_rebuild_run_v1');
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'restore_simulation_run_v1', '6B.1',
   encode(sha256(('restore_simulation_run_v1|6B.1|sha256_pipe_concat_5field')::bytea), 'hex'),
-  'sha256_pipe_concat_5field', true, true, now()
+  'sha256_pipe_concat_5field', true, true, '6B'
 WHERE NOT EXISTS (SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'restore_simulation_run_v1');
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'replay_archive_batch_v1', '6B.1',
   encode(sha256(('replay_archive_batch_v1|6B.1|sha256_pipe_concat_5field')::bytea), 'hex'),
-  'sha256_pipe_concat_5field', true, true, now()
+  'sha256_pipe_concat_5field', true, true, '6B'
 WHERE NOT EXISTS (SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'replay_archive_batch_v1');
 
 -- ── run_phase6b_validation_suite ──────────────────────────────────────────────

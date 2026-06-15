@@ -1,6 +1,11 @@
 // ─── Routes ───────────────────────────────────────────────────────────────────
 export { SchedulingPage } from './routes/SchedulingPage.js';
 export { SchedulingCalendarPage } from './routes/SchedulingCalendarPage.js';
+export { MySchedulePage } from './routes/MySchedulePage.js';
+export { BookingListPage } from './routes/BookingListPage.js';
+export { BokningarPage } from './routes/BokningarPage.js';
+export { WaitlistPage } from './routes/WaitlistPage.js';
+export { TrafikPlatsPage } from './routes/TrafikPlatsPage.js';
 
 // ─── Slot query hooks + keys ──────────────────────────────────────────────────
 export { useSlot, useSlotList, useInstructorUpcomingSlots, slotKeys } from './hooks/useSlots.js';
@@ -11,8 +16,11 @@ export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBooki
 export type { BookingListResponse, BookingListMeta } from './hooks/useBookings.js';
 
 // ─── Waitlist query hooks + keys ──────────────────────────────────────────────
-export { useWaitlistForSlot, waitlistKeys } from './hooks/useWaitlist.js';
-export type { WaitlistEntry, WaitlistStatus } from './hooks/useWaitlist.js';
+export { useWaitlistForSlot, useWaitlistList, waitlistKeys } from './hooks/useWaitlist.js';
+export type {
+  WaitlistEntry, WaitlistStatus, WaitlistTab,
+  WaitlistEntryRich, WaitlistListParams, WaitlistListResponse,
+} from './hooks/useWaitlist.js';
 
 // ─── Scheduling mutation hooks ────────────────────────────────────────────────
 export {

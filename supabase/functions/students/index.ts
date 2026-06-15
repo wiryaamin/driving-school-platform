@@ -1,5 +1,5 @@
 import { z } from 'npm:zod@3';
-import { handleCors } from '../_shared/cors.ts';
+import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
@@ -182,34 +182,33 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   const dto = parsed.data;
   const client = createSupabaseClient(req);
 
-  // Duplicate check: email
-  if (dto.email !== undefined) {
-    const { data: existing } = await (client as any)
-      .from('students')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('email', dto.email)
-      .is('deleted_at', null)
-      .maybeSingle();
+  // Duplicate checks in parallel
+  const [emailDup, pnrDup] = await Promise.all([
+    dto.email !== undefined
+      ? (client as any)
+          .from('students')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('email', dto.email)
+          .is('deleted_at', null)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    dto.personnummer_hash !== undefined
+      ? (client as any)
+          .from('students')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('personnummer_hash', dto.personnummer_hash)
+          .is('deleted_at', null)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
 
-    if (existing !== null) {
-      return errorResp(ctx, 409, 'CONFLICT', `A student with email ${dto.email} already exists in this organisation`);
-    }
+  if (dto.email !== undefined && emailDup.data !== null) {
+    return errorResp(ctx, 409, 'CONFLICT', `A student with email ${dto.email} already exists in this organisation`);
   }
-
-  // Duplicate check: personnummer
-  if (dto.personnummer_hash !== undefined) {
-    const { data: existing } = await (client as any)
-      .from('students')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('personnummer_hash', dto.personnummer_hash)
-      .is('deleted_at', null)
-      .maybeSingle();
-
-    if (existing !== null) {
-      return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
-    }
+  if (dto.personnummer_hash !== undefined && pnrDup.data !== null) {
+    return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
   }
 
   const { data: student, error } = await (client as any)
@@ -234,6 +233,36 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   });
 
   return successResp(ctx, student, 201);
+}
+
+async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Response> {
+  const guard = requirePerm(ctx, 'students:student:read');
+  if (guard) return guard;
+
+  const idsParam = new URL(req.url).searchParams.get('ids') ?? '';
+  const ids = idsParam.split(',').map(s => s.trim()).filter(s => UUID_RE.test(s));
+
+  if (ids.length === 0) {
+    return successResp(ctx, []);
+  }
+  if (ids.length > 50) {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'ids parameter supports a maximum of 50 IDs');
+  }
+
+  const client = createSupabaseClient(req);
+  const { data, error } = await (client as any)
+    .from('students')
+    .select('*')
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .in('id', ids);
+
+  if (error) {
+    logger.error('students.batch_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch students');
+  }
+
+  return successResp(ctx, data ?? []);
 }
 
 async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
@@ -279,33 +308,33 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   const dto = parsed.data;
   const client = createSupabaseClient(req);
 
-  // Duplicate checks for mutable unique fields
-  if (dto.email !== undefined) {
-    const { data: dup } = await (client as any)
-      .from('students')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('email', dto.email)
-      .is('deleted_at', null)
-      .maybeSingle();
+  // Duplicate checks for mutable unique fields (parallel)
+  const [emailDup, pnrDup] = await Promise.all([
+    dto.email !== undefined
+      ? (client as any)
+          .from('students')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('email', dto.email)
+          .is('deleted_at', null)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    dto.personnummer_hash !== undefined
+      ? (client as any)
+          .from('students')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('personnummer_hash', dto.personnummer_hash)
+          .is('deleted_at', null)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
 
-    if (dup !== null && dup.id !== id) {
-      return errorResp(ctx, 409, 'CONFLICT', `A student with email ${dto.email} already exists in this organisation`);
-    }
+  if (dto.email !== undefined && emailDup.data !== null && emailDup.data.id !== id) {
+    return errorResp(ctx, 409, 'CONFLICT', `A student with email ${dto.email} already exists in this organisation`);
   }
-
-  if (dto.personnummer_hash !== undefined) {
-    const { data: dup } = await (client as any)
-      .from('students')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('personnummer_hash', dto.personnummer_hash)
-      .is('deleted_at', null)
-      .maybeSingle();
-
-    if (dup !== null && dup.id !== id) {
-      return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
-    }
+  if (dto.personnummer_hash !== undefined && pnrDup.data !== null && pnrDup.data.id !== id) {
+    return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
   }
 
   const { data: student, error } = await (client as any)
@@ -382,12 +411,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
-  // CORS preflight
-  const corsResp = handleCors(req);
-  if (corsResp) return corsResp;
-
-  // Auth + tenant context
+Deno.serve((req: Request) => serveCors(req, async () => {
   const ctxResult = await buildEdgeContext(req);
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
@@ -408,7 +432,9 @@ Deno.serve(async (req: Request) => {
 
     if (!id) {
       // Collection routes
-      if (req.method === 'GET')  { response = await handleList(req, ctx); }
+      const idsParam = new URL(req.url).searchParams.get('ids');
+      if (req.method === 'GET' && idsParam !== null) { response = await handleBatch(req, ctx); }
+      else if (req.method === 'GET')  { response = await handleList(req, ctx); }
       else if (req.method === 'POST') { response = await handleCreate(req, ctx); }
       else {
         response = new Response(
@@ -449,4 +475,4 @@ Deno.serve(async (req: Request) => {
   });
 
   return response;
-});
+}));

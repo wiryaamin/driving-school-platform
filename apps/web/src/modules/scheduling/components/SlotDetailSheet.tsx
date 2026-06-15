@@ -1,13 +1,13 @@
-import { useState } from 'react';
-import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
   Button, Badge, Separator, ScrollArea, Skeleton,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
-import type { LessonSlot, BookingStatus } from '@platform/types';
-import type { LessonBooking } from '@platform/types';
-import { useStudent } from '@modules/students/hooks/useStudents.js';
+import type { LessonSlot, LessonBooking, BookingStatus, Student } from '@platform/types';
+import { useStudentsBatch } from '@modules/students/hooks/useStudents.js';
 import { useInstructor } from '@modules/instructors/index.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
@@ -18,37 +18,70 @@ import { SlotStatusBadge } from './SlotStatusBadge.js';
 import { BookingStatusBadge, isTerminalBookingStatus } from './BookingStatusBadge.js';
 import { CancelBookingDialog } from './CancelBookingDialog.js';
 import { BookingDialog } from './BookingDialog.js';
+import { RescheduleBookingDialog } from './RescheduleBookingDialog.js';
 import { formatSlotDate, formatSlotTime, formatCapacity, slotDurationMinutes, isSlotFull } from '../lib/calendarUtils.js';
 
-// ─── Student name (single-student fetch, cached by React Query) ───────────────
+// ─── Student name — clickable link to student detail ─────────────────────────
 
-function StudentName({ id }: { id: string }) {
-  const { data: student, isLoading } = useStudent(id);
+function StudentName({
+  id, student, isLoading, onNavigate,
+}: {
+  id: string;
+  student?: Student;
+  isLoading: boolean;
+  onNavigate?: (path: string) => void;
+}) {
   if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
-  if (!student)  return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
-  return <span className="font-medium">{student.first_name} {student.last_name}</span>;
+  if (!student) return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
+  const name = `${student.first_name} ${student.last_name}`;
+  if (!onNavigate) return <span className="font-medium">{name}</span>;
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(`/students/${id}`)}
+      className="font-medium text-primary hover:underline inline-flex items-center gap-1"
+    >
+      {name}
+      <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+    </button>
+  );
 }
 
-// ─── Instructor name (single-instructor fetch, cached by React Query) ─────────
+// ─── Instructor name — clickable link to instructor detail ───────────────────
 
-function InstructorName({ id }: { id: string }) {
+function InstructorName({ id, onNavigate }: { id: string; onNavigate?: (path: string) => void }) {
   const { data: instructor, isLoading } = useInstructor(id);
   if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
   if (!instructor) return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
-  return <span className="font-medium">{instructor.first_name} {instructor.last_name}</span>;
+  const name = `${instructor.first_name} ${instructor.last_name}`;
+  if (!onNavigate) return <span className="font-medium">{name}</span>;
+  return (
+    <button
+      type="button"
+      onClick={() => onNavigate(`/instructors/${id}`)}
+      className="font-medium text-primary hover:underline"
+    >
+      {name}
+    </button>
+  );
 }
 
 // ─── Booking row ──────────────────────────────────────────────────────────────
 
 interface BookingRowProps {
-  booking:  LessonBooking;
-  slotId:   string;
-  onCancel: (id: string) => void;
+  booking:         LessonBooking;
+  slotId:          string;
+  onCancel:        (id: string) => void;
+  onReschedule:    (id: string, studentName: string) => void;
+  onNavigate:      (path: string) => void;
+  student?:        Student;
+  studentsLoading: boolean;
 }
 
-function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
+function BookingRow({ booking, slotId, onCancel, onReschedule, onNavigate, student, studentsLoading }: BookingRowProps) {
   const updateStatus = useUpdateBookingStatus();
   const terminal     = isTerminalBookingStatus(booking.status);
+  const studentName  = student ? `${student.first_name} ${student.last_name}` : '';
 
   function handleStatus(status: BookingStatus) {
     updateStatus.mutate(
@@ -75,13 +108,46 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
             <Users className="w-3.5 h-3.5 text-muted-foreground" />
           </div>
           <span className="text-sm truncate">
-            <StudentName id={booking.student_id} />
+            <StudentName
+              id={booking.student_id}
+              student={student}
+              isLoading={studentsLoading}
+              onNavigate={onNavigate}
+            />
           </span>
         </div>
         <BookingStatusBadge status={booking.status} />
       </div>
 
-      {/* Action buttons — only for non-terminal bookings */}
+      {/* Attendance row — prominent for confirmed bookings */}
+      {booking.status === 'confirmed' && !terminal && (
+        <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
+          <div className="ml-9 flex items-center gap-1.5 p-2 bg-muted/40 rounded-lg border border-border">
+            <span className="text-xs text-muted-foreground mr-1">Närvaro:</span>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 text-white border-0"
+              disabled={busy}
+              onClick={() => handleStatus('completed')}
+            >
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+              Närvaro
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1 text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-800 dark:hover:bg-amber-900/20"
+              disabled={busy}
+              onClick={() => handleStatus('no_show')}
+            >
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
+              Uteblev
+            </Button>
+          </div>
+        </PermissionGate>
+      )}
+
+      {/* Secondary actions */}
       {!terminal && (
         <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
           <div className="flex flex-wrap gap-1.5 ml-9">
@@ -90,7 +156,7 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 text-xs gap-1"
+                className="h-7 text-xs gap-1"
                 disabled={busy}
                 onClick={() => handleStatus('confirmed')}
               >
@@ -99,39 +165,23 @@ function BookingRow({ booking, slotId, onCancel }: BookingRowProps) {
               </Button>
             )}
 
-            {/* Närvaro — confirmed only */}
-            {booking.status === 'confirmed' && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs gap-1 text-green-700 border-green-200 hover:bg-green-50 dark:text-green-400 dark:border-green-900/40 dark:hover:bg-green-900/20"
-                disabled={busy}
-                onClick={() => handleStatus('completed')}
-              >
-                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
-                Närvaro
-              </Button>
-            )}
-
-            {/* Uteblev — confirmed only */}
-            {booking.status === 'confirmed' && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs gap-1 text-amber-700 border-amber-200 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-900/40 dark:hover:bg-amber-900/20"
-                disabled={busy}
-                onClick={() => handleStatus('no_show')}
-              >
-                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
-                Uteblev
-              </Button>
-            )}
+            {/* Omboka — available for all non-terminal bookings */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1"
+              disabled={busy}
+              onClick={() => onReschedule(booking.id, studentName)}
+            >
+              <ArrowLeftRight className="w-3 h-3" />
+              Omboka
+            </Button>
 
             {/* Avboka */}
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
+              className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
               disabled={busy}
               onClick={() => onCancel(booking.id)}
             >
@@ -165,10 +215,43 @@ interface SlotDetailSheetProps {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetProps) {
-  const [bookingDialogOpen, setBookingDialogOpen]   = useState(false);
-  const [cancelBookingId,   setCancelBookingId]     = useState<string | null>(null);
-  const [cancelDialogOpen,  setCancelDialogOpen]    = useState(false);
-  const [waitlistExpanded,  setWaitlistExpanded]    = useState(false);
+  const navigate = useNavigate();
+  const [bookingDialogOpen,     setBookingDialogOpen]     = useState(false);
+  const [cancelBookingId,       setCancelBookingId]       = useState<string | null>(null);
+  const [cancelDialogOpen,      setCancelDialogOpen]      = useState(false);
+  const [rescheduleBookingId,   setRescheduleBookingId]   = useState<string | null>(null);
+  const [rescheduleStudentName, setRescheduleStudentName] = useState('');
+  const [rescheduleDialogOpen,  setRescheduleDialogOpen]  = useState(false);
+  const [waitlistExpanded,      setWaitlistExpanded]      = useState(false);
+
+  function handleNavigate(path: string) {
+    onOpenChange(false);
+    navigate(path);
+  }
+
+  // Reset all internal dialog state when the sheet closes or a different slot is opened.
+  // Prevents cancel/reschedule dialogs from a previous slot leaking into the next one.
+  useEffect(() => {
+    if (!open) {
+      setBookingDialogOpen(false);
+      setCancelBookingId(null);
+      setCancelDialogOpen(false);
+      setRescheduleBookingId(null);
+      setRescheduleStudentName('');
+      setRescheduleDialogOpen(false);
+      setWaitlistExpanded(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    setBookingDialogOpen(false);
+    setCancelBookingId(null);
+    setCancelDialogOpen(false);
+    setRescheduleBookingId(null);
+    setRescheduleStudentName('');
+    setRescheduleDialogOpen(false);
+    setWaitlistExpanded(false);
+  }, [slot?.id]);
 
   const { data: bookingsData, isLoading: bookingsLoading } = useBookingsForSlot(slot?.id ?? null);
   const { data: waitlistData }                              = useWaitlistForSlot(slot?.id ?? null);
@@ -178,9 +261,38 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const waitingCount  = waitlistItems.length;
   const full          = slot ? isSlotFull(slot) : false;
 
+  // Auto-expand waitlist when it's small enough to read at a glance
+  useEffect(() => {
+    if (waitingCount > 0 && waitingCount <= 4) {
+      setWaitlistExpanded(true);
+    }
+  }, [waitingCount]);
+
+  // Collect all unique student IDs from bookings + waitlist, then batch-fetch in one request.
+  const allStudentIds = useMemo(
+    () => [...new Set([
+      ...bookings.map(b => b.student_id),
+      ...waitlistItems.map(e => e.student_id),
+    ])],
+    [bookingsData, waitlistData],
+  );
+
+  const { data: studentsData, isLoading: studentsLoading } = useStudentsBatch(allStudentIds);
+
+  const studentMap = useMemo((): Record<string, Student> => {
+    if (!studentsData) return {};
+    return Object.fromEntries(studentsData.map(s => [s.id, s]));
+  }, [studentsData]);
+
   function openCancel(bookingId: string) {
     setCancelBookingId(bookingId);
     setCancelDialogOpen(true);
+  }
+
+  function openReschedule(bookingId: string, studentName: string) {
+    setRescheduleBookingId(bookingId);
+    setRescheduleStudentName(studentName);
+    setRescheduleDialogOpen(true);
   }
 
   if (!slot) return null;
@@ -196,7 +308,10 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         <SheetContent className="w-full sm:max-w-md flex flex-col p-0 gap-0">
           {/* Header */}
           <SheetHeader className="px-5 pt-5 pb-4 border-b border-border">
-            <SheetTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</SheetTitle>
+            <div className="flex items-start justify-between gap-3">
+              <SheetTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</SheetTitle>
+              <SlotStatusBadge status={slot.status} />
+            </div>
           </SheetHeader>
 
           <ScrollArea className="flex-1">
@@ -204,15 +319,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
               {/* ── Slot Info ─────────────────────────────────────── */}
               <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-0.5 min-w-0">
-                    <p className="text-sm font-semibold text-foreground capitalize">{dateLabel}</p>
-                    <p className="text-xl font-bold text-foreground tracking-tight">
-                      {startLabel}–{endLabel}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{duration} min</p>
-                  </div>
-                  <SlotStatusBadge status={slot.status} />
+                <div className="space-y-0.5">
+                  <p className="text-xl font-bold text-foreground tracking-tight">
+                    {startLabel}–{endLabel}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{duration} min</p>
                 </div>
 
                 {/* Capacity bar */}
@@ -233,7 +344,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                 {/* Instructor */}
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-                  <InstructorName id={slot.instructor_id} />
+                  <InstructorName id={slot.instructor_id} onNavigate={handleNavigate} />
                 </div>
 
                 {/* Timing detail */}
@@ -269,6 +380,10 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                         booking={booking}
                         slotId={slot.id}
                         onCancel={openCancel}
+                        onReschedule={openReschedule}
+                        onNavigate={handleNavigate}
+                        student={studentMap[booking.student_id]}
+                        studentsLoading={studentsLoading}
                       />
                     ))}
                   </div>
@@ -305,14 +420,20 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                             <span className="w-5 text-xs font-mono text-muted-foreground/50 shrink-0 text-right">
                               {idx + 1}.
                             </span>
-                            <span className="flex-1 min-w-0 text-muted-foreground">
-                              <StudentName id={entry.student_id} />
+                            <span className="flex-1 min-w-0">
+                              <StudentName
+                                id={entry.student_id}
+                                student={studentMap[entry.student_id]}
+                                isLoading={studentsLoading}
+                                onNavigate={handleNavigate}
+                              />
                             </span>
                             {/* Notified indicator */}
                             {entry.notified_at && (
                               <Bell
                                 className="w-3 h-3 text-blue-400 shrink-0"
                                 aria-label="Notifierad"
+                                title="Eleven har notifierats om ledig plats"
                               />
                             )}
                           </div>
@@ -327,7 +448,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
           </ScrollArea>
 
           {/* Footer action */}
-          {!full && slot.status === 'open' && (
+          {!full && slot.status === 'open' ? (
             <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
               <div className="px-5 py-4 border-t border-border">
                 <Button
@@ -338,6 +459,22 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                 </Button>
               </div>
             </PermissionGate>
+          ) : (
+            <div className="px-5 py-4 border-t border-border">
+              <p className="text-xs text-center text-muted-foreground">
+                {full
+                  ? 'Fullbokad – inga lediga platser.'
+                  : slot.status === 'in_progress'
+                  ? 'Lektion pågår – bokningsändringar hanteras av instruktören.'
+                  : slot.status === 'completed'
+                  ? 'Lektionen är avslutad.'
+                  : slot.status === 'cancelled'
+                  ? 'Passet är avbokat.'
+                  : slot.status === 'blocked'
+                  ? 'Passet är blockerat.'
+                  : 'Passet är inte öppet för bokning.'}
+              </p>
+            </div>
           )}
         </SheetContent>
       </Sheet>
@@ -359,6 +496,20 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         onSuccess={() => {
           setCancelDialogOpen(false);
           setCancelBookingId(null);
+        }}
+      />
+
+      {/* Nested: reschedule booking */}
+      <RescheduleBookingDialog
+        open={rescheduleDialogOpen}
+        onOpenChange={setRescheduleDialogOpen}
+        bookingId={rescheduleBookingId}
+        currentSlotId={slot.id}
+        studentName={rescheduleStudentName}
+        onSuccess={() => {
+          setRescheduleDialogOpen(false);
+          setRescheduleBookingId(null);
+          setRescheduleStudentName('');
         }}
       />
     </>

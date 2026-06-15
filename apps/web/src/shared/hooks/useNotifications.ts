@@ -39,10 +39,21 @@ export const notificationKeys = {
 
 async function apiFetchNotifications(qs: string): Promise<NotificationListResponse> {
   const fn = qs ? `notifications?${qs}` : 'notifications';
-  const { data, error } = await supabase.functions.invoke<NotificationListResponse>(fn, { method: 'GET' });
-  if (error) throw error;
-  if (!data) throw new Error('Inget svar från servern');
-  return data;
+  // Client-side timeout: abort after 10 s so a cold-starting Edge Function
+  // cannot hang for Supabase's full server-side 2-minute timeout.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const { data, error } = await supabase.functions.invoke<NotificationListResponse>(fn, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (error) throw error;
+    if (!data) throw new Error('Inget svar från servern');
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
@@ -54,6 +65,8 @@ export function useRecentActivity(limit = 8) {
       `per_page=${limit}&sort_by=created_at&sort_dir=desc`
     ),
     staleTime: 2 * 60 * 1000,
+    // 403 = permission not yet seeded in DB — retrying won't help until JWT is refreshed
+    retry: false,
   });
 }
 

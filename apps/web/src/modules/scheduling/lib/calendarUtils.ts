@@ -12,12 +12,12 @@ export interface SlotStatusConfig {
 }
 
 export const SLOT_STATUS_CONFIG: Record<LessonSlotStatus, SlotStatusConfig> = {
-  open:        { bg: '#16a34a', border: '#15803d', text: '#ffffff', label: 'Öppen',     dot: 'bg-green-500' },
-  full:        { bg: '#d97706', border: '#b45309', text: '#ffffff', label: 'Fullbokad', dot: 'bg-amber-500' },
-  in_progress: { bg: '#2563eb', border: '#1d4ed8', text: '#ffffff', label: 'Pågår',     dot: 'bg-blue-500' },
-  completed:   { bg: '#6b7280', border: '#4b5563', text: '#ffffff', label: 'Slutförd',  dot: 'bg-gray-500' },
-  cancelled:   { bg: '#dc2626', border: '#b91c1c', text: '#ffffff', label: 'Avbokad',   dot: 'bg-red-500' },
-  blocked:     { bg: '#374151', border: '#1f2937', text: '#d1d5db', label: 'Blockerad', dot: 'bg-gray-700' },
+  open:        { bg: '#16a34a',                    border: '#15803d',                   text: '#ffffff', label: 'Öppen',     dot: 'bg-green-500' },
+  full:        { bg: '#d97706',                    border: '#b45309',                   text: '#ffffff', label: 'Fullbokad', dot: 'bg-amber-500' },
+  in_progress: { bg: '#2563eb',                    border: '#3b82f6',                   text: '#ffffff', label: 'Pågår',     dot: 'bg-blue-500' },
+  completed:   { bg: 'rgba(107, 114, 128, 0.55)',  border: 'rgba(75, 85, 99, 0.5)',     text: '#ffffff', label: 'Slutförd',  dot: 'bg-gray-500' },
+  cancelled:   { bg: 'rgba(220, 38, 38, 0.45)',    border: 'rgba(185, 28, 28, 0.4)',    text: '#ffffff', label: 'Avbokad',   dot: 'bg-red-500' },
+  blocked:     { bg: 'rgba(55, 65, 81, 0.45)',     border: 'rgba(31, 41, 55, 0.4)',     text: '#d1d5db', label: 'Blockerad', dot: 'bg-gray-700' },
 };
 
 export function getSlotStatusConfig(status: LessonSlotStatus): SlotStatusConfig {

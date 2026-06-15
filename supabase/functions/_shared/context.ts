@@ -58,22 +58,29 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
     };
   }
 
-  // JWT claims are set by the Phase 1B.3 auth-hook Edge Function
-  // Structure mirrors packages/types/src/auth.types.ts JwtClaims
-  const meta = user.app_metadata as {
-    organization_id?: string | null;
-    role?: string | null;
-    permissions?: string[];
-    is_platform_admin?: boolean;
-  };
+  // Decode JWT payload directly to read custom claims set by the auth-hook.
+  // These claims (organization_id, role, permissions, is_platform_admin) are
+  // top-level fields in the JWT — they are NOT present in user.app_metadata on
+  // hosted Supabase, where getUser() returns the database record rather than
+  // merging all JWT claims into app_metadata.
+  const jwt = decodeJwtPayload(authHeader.slice(7));
+
+  // Forensic logging — remove after JWT claim extraction is verified.
+  logger.info('buildEdgeContext.jwt_debug', {
+    correlation_id:   correlationId,
+    jwt_keys:         Object.keys(jwt),
+    organization_id:  jwt['organization_id'] ?? null,
+    is_platform_admin: jwt['is_platform_admin'] ?? false,
+    permissions_count: Array.isArray(jwt['permissions']) ? (jwt['permissions'] as string[]).length : 0,
+  });
 
   const ctx: EdgeRequestContext = {
-    organizationId:  meta.organization_id ?? null,
+    organizationId:  (jwt['organization_id'] as string | null) ?? null,
     actorId:         user.id,
-    actorRole:       meta.role ?? null,
-    permissions:     meta.permissions ?? [],
+    actorRole:       (jwt['role'] as string | null) ?? null,
+    permissions:     (jwt['permissions'] as string[]) ?? [],
     correlationId,
-    isPlatformAdmin: meta.is_platform_admin ?? false,
+    isPlatformAdmin: (jwt['is_platform_admin'] as boolean) ?? false,
     isWorker:        false,
     requestId:       correlationId,
     userAgent:       req.headers.get('User-Agent'),
@@ -82,6 +89,17 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
   };
 
   return { ok: true, ctx };
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  try {
+    const b64url = token.split('.')[1] ?? '';
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = (4 - (b64.length % 4)) % 4;
+    return JSON.parse(atob(b64 + '='.repeat(padding))) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 function errorResponse(

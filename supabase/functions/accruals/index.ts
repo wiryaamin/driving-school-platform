@@ -1,4 +1,4 @@
-/**
+﻿/**
  * accruals — Accrual schedules, deferred revenue, and fiscal integrity.
  *
  * Routes:
@@ -21,6 +21,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -345,7 +347,7 @@ async function handleMultiYear(req: Request, client: any, orgId: string, user: a
 
 // ── Main Router ───────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request): Promise<Response> => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!;
   const authHeader  = req.headers.get('Authorization');
@@ -356,10 +358,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error: authError } = await client.auth.getUser();
-  if (authError || !user) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authError } = await client.auth.getUser();
+  if (authError || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (!orgId) return err('No organization context', 403, 'NO_ORG_CONTEXT');
 
   const method = req.method;
@@ -408,4 +411,4 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (method === 'POST') return handleCreateAccrual(req, client, orgId, user);
 
   return err('Method not allowed', 405, 'METHOD_NOT_ALLOWED');
-});
+}));

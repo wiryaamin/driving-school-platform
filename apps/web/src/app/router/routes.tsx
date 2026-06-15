@@ -17,9 +17,25 @@ const StudentsPage = lazy(() => import('@modules/students/index.js').then(m => (
 const SchedulingPage = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.SchedulingPage })));
 const InstructorsPage = lazy(() => import('@modules/instructors/index.js').then(m => ({ default: m.InstructorsPage })));
 const FinancePage = lazy(() => import('@modules/finance/index.js').then(m => ({ default: m.FinancePage })));
-
-// Future modules — uncomment as they're implemented:
-// const SettingsPage = lazy(() => import('@modules/settings/routes/SettingsPage.js').then(m => ({ default: m.SettingsPage })));
+const CorporatePage = lazy(() => import('@modules/corporate/index.js').then(m => ({ default: m.CorporatePage })));
+const LogsPage = lazy(() => import('@modules/logs/index.js').then(m => ({ default: m.LogsPage })));
+const WatchlistPage  = lazy(() => import('@modules/watchlist/index.js').then(m => ({ default: m.WatchlistPage })));
+const ClassListPage  = lazy(() => import('@modules/classlist/index.js').then(m => ({ default: m.ClassListPage })));
+const InsightsPage   = lazy(() => import('@modules/insights/index.js').then(m => ({ default: m.InsightsPage })));
+const TasksPage      = lazy(() => import('@modules/tasks/index.js').then(m => ({ default: m.TasksPage })));
+const RapporterPage  = lazy(() => import('@modules/reports/index.js').then(m => ({ default: m.RapporterPage })));
+const SettingsPage         = lazy(() => import('@modules/settings/index.js').then(m => ({ default: m.SettingsPage })));
+const KommunikationPage    = lazy(() => import('@modules/kommunikation/index.js').then(m => ({ default: m.KommunikationPage })));
+const CommunicationHubPage   = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.CommunicationHubPage })));
+const ComposeMessagePage     = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.ComposeMessagePage })));
+const DeliveryLogPage        = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.DeliveryLogPage })));
+const ChannelSettingsPage    = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.ChannelSettingsPage })));
+const TemplateManagementPage = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.TemplateManagementPage })));
+const ActivityCenterPage     = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.ActivityCenterPage })));
+const NotificationRulesPage  = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.NotificationRulesPage })));
+const QueueMonitorPage       = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.QueueMonitorPage })));
+const DataMigrationPage      = lazy(() => import('@modules/data-migration/index.js').then(m => ({ default: m.DataMigrationPage })));
+const MigrationDetailPage    = lazy(() => import('@modules/data-migration/index.js').then(m => ({ default: m.MigrationDetailPage })));
 
 // ─── Route Definitions ────────────────────────────────────────────────────────
 //
@@ -110,8 +126,159 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
-      // Future module routes — added here as modules are implemented:
-      // { path: 'settings/*', element: <Suspense fallback={<LoadingScreen />}><SettingsPage /></Suspense> },
+      {
+        path: 'corporate/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <CorporatePage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'logs',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <LogsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'watchlist',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <WatchlistPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'class-list',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ClassListPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'insights',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <InsightsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'tasks',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TasksPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'reports/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <RapporterPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'settings/*',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <SettingsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'kommunikation',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <KommunikationPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <CommunicationHubPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/compose',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ComposeMessagePage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/log',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <DeliveryLogPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/settings',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ChannelSettingsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/templates',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TemplateManagementPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/activity',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ActivityCenterPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/rules',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <NotificationRulesPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communication/queue',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <QueueMonitorPage />
+          </Suspense>
+        ),
+      },
+
+      {
+        path: 'settings/data-migration',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <DataMigrationPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'settings/data-migration/:id',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <MigrationDetailPage />
+          </Suspense>
+        ),
+      },
 
       // ── Authenticated fallback — MUST be last child ───────────────────────
       // Catches any path that passes ProtectedRoute but has no matching module

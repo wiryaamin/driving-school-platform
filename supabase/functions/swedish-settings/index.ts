@@ -1,4 +1,4 @@
-/**
+﻿/**
  * swedish-settings — Swedish organization finance settings and OCR references.
  *
  * Routes:
@@ -11,6 +11,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,7 +42,7 @@ function parsePath(req: Request): { sub: string | null; invoiceId: string | null
   };
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -60,10 +62,11 @@ Deno.serve(async (req: Request) => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (!orgId) return err('No organization context', 403, 'NO_ORG');
 
   const { sub, invoiceId } = parsePath(req);
@@ -151,4 +154,4 @@ Deno.serve(async (req: Request) => {
     console.error('[swedish-settings]', msg);
     return err('Internal server error', 500, 'INTERNAL_ERROR');
   }
-});
+}));

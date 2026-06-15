@@ -12,7 +12,7 @@ END $$;
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'replay_test_run_v1',
@@ -21,14 +21,14 @@ SELECT
   'sha256_pipe_concat_5field',
   true,
   true,
-  now()
+  '6A'
 WHERE NOT EXISTS (
   SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'replay_test_run_v1'
 );
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'serializer_drift_report_v1',
@@ -37,14 +37,14 @@ SELECT
   'sha256_pipe_concat_4field',
   true,
   true,
-  now()
+  '6A'
 WHERE NOT EXISTS (
   SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'serializer_drift_report_v1'
 );
 
 INSERT INTO canonical_serializer_registry (
   serializer_key, serializer_version, schema_hash, canonicalization_strategy,
-  replay_compatible, deterministic, registered_at
+  replay_compatible, deterministic, introduced_phase
 )
 SELECT
   'replay_health_check_v1',
@@ -53,7 +53,7 @@ SELECT
   'sha256_pipe_concat_4field',
   false,
   true,
-  now()
+  '6A'
 WHERE NOT EXISTS (
   SELECT 1 FROM canonical_serializer_registry WHERE serializer_key = 'replay_health_check_v1'
 );

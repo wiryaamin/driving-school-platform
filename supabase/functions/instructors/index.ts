@@ -1,5 +1,5 @@
 import { z } from 'npm:zod@3';
-import { handleCors } from '../_shared/cors.ts';
+import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
@@ -375,10 +375,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
-  const corsResp = handleCors(req);
-  if (corsResp) return corsResp;
-
+Deno.serve((req: Request) => serveCors(req, async () => {
   const ctxResult = await buildEdgeContext(req);
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
@@ -438,4 +435,4 @@ Deno.serve(async (req: Request) => {
   });
 
   return response;
-});
+}));

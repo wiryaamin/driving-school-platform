@@ -345,12 +345,22 @@ GRANT EXECUTE ON FUNCTION public.post_year_end_profit_transfer(uuid, uuid, uuid,
 
 -- ── Section 4: Views ──────────────────────────────────────────────────────────
 
+-- Drop dependent views before redefining v_trial_balance.
+-- PostgreSQL CREATE OR REPLACE VIEW cannot remove existing columns (error 42P16).
+-- Phase 4D defined v_trial_balance with period_name, period_start, period_end,
+-- period_status, last_entry_id, updated_at — all removed in this migration.
+-- v_income_statement and v_balance_sheet both reference those period columns
+-- through v_trial_balance, so the full dependency chain must be dropped first.
+DROP VIEW IF EXISTS public.v_balance_sheet;
+DROP VIEW IF EXISTS public.v_income_statement;
+DROP VIEW IF EXISTS public.v_trial_balance;
+
 -- v_trial_balance: Full trial balance per (org, period, account).
 -- Joins account_balances with bas_account_catalog for account metadata.
 -- natural_balance = closing_balance in the account's normal sign convention
 -- (positive = healthy balance for that account type).
 
-CREATE OR REPLACE VIEW public.v_trial_balance AS
+CREATE VIEW public.v_trial_balance AS
 SELECT
   ab.organization_id,
   ab.financial_period_id,
@@ -380,13 +390,78 @@ COMMENT ON VIEW public.v_trial_balance IS
 
 GRANT SELECT ON public.v_trial_balance TO authenticated;
 
+-- Recreate v_income_statement: period columns (period_name, period_start, period_end)
+-- now sourced from a direct financial_periods join since they were removed from
+-- v_trial_balance above.
+
+CREATE VIEW public.v_income_statement
+WITH (security_invoker = true)
+AS
+SELECT
+  tb.organization_id,
+  tb.financial_period_id,
+  fp.name          AS period_name,
+  fp.period_start,
+  fp.period_end,
+  tb.account_code,
+  tb.account_name,
+  tb.account_type,
+  tb.normal_balance,
+  tb.debit_movement,
+  tb.credit_movement,
+  CASE tb.account_type
+    WHEN 'revenue' THEN tb.credit_movement - tb.debit_movement
+    WHEN 'expense' THEN -(tb.debit_movement - tb.credit_movement)
+    ELSE                0
+  END AS net_contribution
+FROM public.v_trial_balance tb
+JOIN public.financial_periods fp ON fp.id = tb.financial_period_id
+WHERE tb.account_type IN ('revenue', 'expense');
+
+COMMENT ON VIEW public.v_income_statement IS
+  'Income statement (resultaträkning) per period. '
+  'net_contribution > 0 = profit contribution. '
+  'Total net income = SUM(net_contribution) across all rows for a period.';
+
+-- Recreate v_balance_sheet: period_name and period_end now sourced from a direct
+-- financial_periods join for the same reason as v_income_statement above.
+
+CREATE VIEW public.v_balance_sheet
+WITH (security_invoker = true)
+AS
+SELECT
+  tb.organization_id,
+  tb.financial_period_id,
+  fp.name     AS period_name,
+  fp.period_end,
+  tb.account_code,
+  tb.account_name,
+  tb.account_type,
+  tb.normal_balance,
+  tb.closing_balance,
+  ABS(tb.closing_balance) AS reported_balance,
+  CASE
+    WHEN tb.normal_balance = 'debit'  AND tb.closing_balance >= 0 THEN 'normal'
+    WHEN tb.normal_balance = 'credit' AND tb.closing_balance <= 0 THEN 'normal'
+    ELSE 'contra'
+  END AS balance_position
+FROM public.v_trial_balance tb
+JOIN public.financial_periods fp ON fp.id = tb.financial_period_id
+WHERE tb.account_type IN ('asset', 'liability', 'equity');
+
+COMMENT ON VIEW public.v_balance_sheet IS
+  'Balance sheet (balansräkning) accounts at period end. '
+  'Assets have debit normal_balance (positive closing = debit balance). '
+  'Liabilities/equity have credit normal_balance (negative closing = credit balance). '
+  'balance_position = ''contra'' indicates an unusual contra balance.';
+
 -- v_opening_balance_status: Per period — whether a formal OB entry exists.
 
 CREATE OR REPLACE VIEW public.v_opening_balance_status AS
 SELECT
   fp.id              AS period_id,
   fp.organization_id,
-  fp.period_name,
+  fp.name            AS period_name,
   fp.period_start,
   fp.period_end,
   fp.status          AS period_status,

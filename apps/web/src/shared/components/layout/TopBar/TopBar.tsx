@@ -1,26 +1,20 @@
-import { Bell, ChevronDown, LogOut, Menu, Moon, Settings, Sun, User } from 'lucide-react';
+import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
-import { useNotificationDot } from '@shared/hooks/useNotifications.js';
+import { useNotificationDot, useRecentActivity } from '@shared/hooks/useNotifications.js';
+import type { Notification } from '@shared/hooks/useNotifications.js';
 
 export function TopBar() {
   const { user, profile, organization, isLoading } = useSessionStore();
-  const { sidebarCollapsed, toggleMobileMenu, theme, toggleTheme } = useUiStore();
+  const { toggleMobileMenu, theme, toggleTheme } = useUiStore();
 
   return (
     <header
-      className={cn(
-        'h-14 bg-background border-b border-border',
-        'flex items-center px-4 gap-3',
-        'fixed top-0 right-0 z-30 transition-all duration-300',
-        /* Mobile: full width. Desktop: offset by sidebar */
-        'left-0',
-        sidebarCollapsed ? 'md:left-16' : 'md:left-64'
-      )}
+      className="h-14 bg-background border-b border-border flex items-center px-4 gap-3 fixed top-0 right-0 z-30 left-0 md:left-[280px]"
     >
       {/* Mobile hamburger — only visible on mobile */}
       <button
@@ -48,23 +42,42 @@ export function TopBar() {
       </div>
 
       {/* Right side controls */}
-      <div className="flex items-center gap-1 shrink-0">
-        {/* Dark mode toggle */}
-        <button
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          onClick={toggleTheme}
-          aria-label={theme === 'dark' ? 'Ljust läge' : 'Mörkt läge'}
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Kassa quick-access */}
+        <NavLink
+          to="/finance/cash"
+          className={({ isActive }) =>
+            cn(
+              'hidden sm:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-colors',
+              isActive
+                ? 'bg-amber-500 text-white'
+                : 'bg-amber-400 hover:bg-amber-500 text-white'
+            )
+          }
         >
-          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </button>
+          <ShoppingCart className="w-3.5 h-3.5" />
+          Kassa
+        </NavLink>
 
-        <NotificationBell />
+        <div className="flex items-center gap-1">
+          {/* Dark mode toggle */}
+          <button
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Ljust läge' : 'Mörkt läge'}
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
 
-        <UserMenu
-          displayName={profile ? `${profile.first_name} ${profile.last_name}` : (user?.email ?? '')}
-          email={user?.email ?? ''}
-          role={user?.role ?? ''}
-        />
+          <NotificationBell />
+          <HelpSupportMenu />
+
+          <UserMenu
+            displayName={profile ? `${profile.first_name} ${profile.last_name}` : (user?.email ?? '')}
+            email={user?.email ?? ''}
+            role={user?.role ?? ''}
+          />
+        </div>
       </div>
     </header>
   );
@@ -72,22 +85,265 @@ export function TopBar() {
 
 // ─── Notification Bell ────────────────────────────────────────────────────────
 
+const CHANNEL_ICON: Record<string, typeof Mail> = {
+  email: Mail,
+  sms:   MessageSquare,
+};
+
+const STATUS_ICON: Record<string, { icon: typeof CheckCircle; cls: string }> = {
+  sent:      { icon: CheckCircle, cls: 'text-green-500'  },
+  failed:    { icon: XCircle,     cls: 'text-destructive' },
+  pending:   { icon: Clock,       cls: 'text-amber-500'  },
+  cancelled: { icon: XCircle,     cls: 'text-muted-foreground' },
+};
+
+function notifRoute(n: Notification): string | null {
+  if (!n.reference_type || !n.reference_id) return null;
+  if (n.reference_type === 'student')  return `/students/${n.reference_id}`;
+  if (n.reference_type === 'invoice')  return `/finance/invoices/${n.reference_id}`;
+  if (n.reference_type === 'booking')  return '/scheduling';
+  if (n.reference_type === 'slot')     return '/scheduling';
+  return null;
+}
+
+function NotifRow({ n, onNavigate }: { n: Notification; onNavigate: (path: string) => void }) {
+  const ChannelIcon = CHANNEL_ICON[n.channel] ?? Mail;
+  const status      = STATUS_ICON[n.status] ?? STATUS_ICON['pending'];
+  const StatusIcon  = status.icon;
+  const when        = new Date(n.created_at).toLocaleString('sv-SE', {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+  const route = notifRoute(n);
+
+  const content = (
+    <>
+      <ChannelIcon className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium text-foreground truncate">
+          {n.subject ?? n.template_key}
+        </p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">{when}</p>
+      </div>
+      <StatusIcon className={cn('w-3.5 h-3.5 shrink-0 mt-0.5', status.cls)} />
+    </>
+  );
+
+  if (route) {
+    return (
+      <button
+        type="button"
+        onClick={() => onNavigate(route)}
+        className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-accent/40 transition-colors text-left"
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2.5 px-3 py-2.5">
+      {content}
+    </div>
+  );
+}
+
 function NotificationBell() {
   const hasUnread = useNotificationDot();
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useRecentActivity(10);
+  const navigate = useNavigate();
+
+  const notifications = data?.data ?? [];
+  const failedCount   = notifications.filter(n => n.status === 'failed').length;
+
+  function handleNotifNavigate(path: string) {
+    setOpen(false);
+    navigate(path);
+  }
 
   return (
-    <div
-      className={cn(
-        'relative w-9 h-9 rounded-lg flex items-center justify-center',
-        'text-muted-foreground',
-        hasUnread && 'text-foreground'
+    <div className="relative">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          'relative w-9 h-9 rounded-lg flex items-center justify-center',
+          'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+          (hasUnread || open) && 'text-foreground bg-accent'
+        )}
+        aria-label="Notiser"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        <Bell className="w-4 h-4" />
+        {hasUnread && !open && (
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-destructive rounded-full" aria-hidden />
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute right-0 top-full mt-1 w-72 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden">
+            <div className="px-3 py-2.5 border-b border-border flex items-center justify-between">
+              <p className="text-sm font-semibold text-popover-foreground">Notishistorik</p>
+              {failedCount > 0 && (
+                <span className="text-[10px] font-semibold bg-destructive/10 text-destructive px-1.5 py-0.5 rounded-full">
+                  {failedCount} misslyckades
+                </span>
+              )}
+            </div>
+
+            <div className="max-h-80 overflow-y-auto divide-y divide-border/60">
+              {isLoading && (
+                <div className="px-3 py-6 text-center">
+                  <p className="text-xs text-muted-foreground">Laddar notiser...</p>
+                </div>
+              )}
+              {!isLoading && notifications.length === 0 && (
+                <div className="px-3 py-6 text-center">
+                  <Bell className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-xs text-muted-foreground">Inga notiser de senaste dagarna</p>
+                </div>
+              )}
+              {notifications.map(n => <NotifRow key={n.id} n={n} onNavigate={handleNotifNavigate} />)}
+            </div>
+
+            <div className="border-t border-border px-3 py-2">
+              <p className="text-[10px] text-muted-foreground text-center">
+                Visar de {notifications.length} senaste notiserna
+              </p>
+            </div>
+          </div>
+        </>
       )}
-      title={hasUnread ? 'Du har nya notiser' : 'Inga nya notiser'}
-      aria-label={hasUnread ? 'Du har nya notiser' : 'Inga nya notiser'}
-    >
-      <Bell className="w-4 h-4" />
-      {hasUnread && (
-        <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-destructive rounded-full" />
+    </div>
+  );
+}
+
+// ─── Help & Support Menu ──────────────────────────────────────────────────────
+
+function HelpSupportMenu() {
+  const [open, setOpen] = useState(false);
+
+  const HELP_GROUPS: Array<{ heading?: string; items: Array<{
+    key:         string;
+    labelSv:     string;
+    icon:        typeof LifeBuoy;
+    href?:       string;
+    tel?:        string;
+    external?:   boolean;
+    comingSoon?: boolean;
+  }> }> = [
+    {
+      items: [
+        { key: 'help',      labelSv: 'Hjälpcenter',    icon: LifeBuoy,      comingSoon: true },
+        { key: 'feedback',  labelSv: 'Feedback portal', icon: MessageSquare, comingSoon: true },
+        { key: 'changelog', labelSv: 'Ändringslogg',   icon: History,       comingSoon: true },
+      ],
+    },
+    {
+      items: [
+        { key: 'chat',       labelSv: 'Chatta',         icon: MessageCircle, href: '#' },
+        { key: 'facebook',   labelSv: 'Facebook-grupp', icon: Globe,         href: 'https://www.facebook.com/', external: true },
+        { key: 'teamviewer', labelSv: 'TeamViewer',     icon: Monitor,       href: 'https://www.teamviewer.com/', external: true },
+      ],
+    },
+    {
+      items: [
+        { key: 'phone', labelSv: '08-38 33 30', icon: Phone, tel: '+4683833330' },
+      ],
+    },
+    {
+      heading: 'Resurser',
+      items: [
+        { key: 'news',    labelSv: 'Nyheter',        icon: Newspaper,  comingSoon: true },
+        { key: 'faq',     labelSv: 'Vanliga frågor', icon: HelpCircle, comingSoon: true },
+        { key: 'gallery', labelSv: 'Bildgalleri',    icon: ImageIcon,  comingSoon: true },
+        { key: 'shop',    labelSv: 'Köp online',     icon: Store,      comingSoon: true },
+      ],
+    },
+  ];
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
+          'text-muted-foreground hover:text-foreground hover:bg-accent',
+          open && 'text-foreground bg-accent',
+        )}
+        aria-label="Hjälp & Support"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        <LifeBuoy className="w-4 h-4" />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute right-0 top-full mt-1 w-60 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden py-1">
+            <div className="px-3 py-2 border-b border-border mb-1">
+              <p className="text-xs font-semibold text-popover-foreground">Hjälp & Support</p>
+            </div>
+
+            {HELP_GROUPS.map((group, gi) => (
+              <div key={gi}>
+                {gi > 0 && <div className="mx-2 my-1 h-px bg-border" />}
+                {group.heading && (
+                  <p className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                    {group.heading}
+                  </p>
+                )}
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const baseClass = cn(
+                    'w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-accent text-popover-foreground',
+                    item.comingSoon && 'opacity-40 cursor-default hover:bg-transparent',
+                  );
+
+                  if (item.comingSoon) {
+                    return (
+                      <div key={item.key} className={baseClass} title="Kommer snart" aria-disabled="true">
+                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">{item.labelSv}</span>
+                      </div>
+                    );
+                  }
+
+                  if (item.tel) {
+                    return (
+                      <a key={item.key} href={`tel:${item.tel}`} onClick={() => setOpen(false)} className={baseClass}>
+                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="flex-1 font-mono text-xs">{item.labelSv}</span>
+                      </a>
+                    );
+                  }
+
+                  if (item.href) {
+                    return (
+                      <a
+                        key={item.key}
+                        href={item.href}
+                        target={item.external ? '_blank' : undefined}
+                        rel={item.external ? 'noopener noreferrer' : undefined}
+                        onClick={() => setOpen(false)}
+                        className={baseClass}
+                      >
+                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="flex-1">{item.labelSv}</span>
+                        {item.external && <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />}
+                      </a>
+                    );
+                  }
+
+
+                  return null;
+                })}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

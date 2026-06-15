@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { useUiStore } from '@core/store/ui.store.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { SidebarNavContent } from './Sidebar.js';
@@ -18,23 +19,33 @@ export function MobileSidebar() {
       />
 
       {/* Slide-in panel */}
-      <div className="fixed left-0 top-0 h-full w-64 z-50 flex flex-col bg-sidebar border-r border-sidebar-border md:hidden animate-in slide-in-from-left duration-300">
+      <div className="fixed left-0 top-0 h-full w-[280px] z-50 flex flex-col bg-sidebar border-r border-sidebar-border md:hidden animate-in slide-in-from-left duration-300">
+
         {/* Header */}
-        <div className="flex items-center h-14 px-4 border-b border-sidebar-border shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
+        <div className="flex items-center h-[72px] px-4 border-b border-sidebar-border shrink-0 gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-sidebar-primary-foreground truncate leading-tight">
+              {organization?.name ?? 'Körskola'}
+            </span>
           </div>
-          <span className="ml-3 text-sm font-semibold text-sidebar-primary-foreground truncate">
-            {organization?.name ?? 'Körskola'}
-          </span>
+          <button
+            onClick={closeMobileMenu}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors shrink-0"
+            aria-label="Stäng meny"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Navigation — closes drawer on item click */}
-        <SidebarNavContent collapsed={false} onNavClick={closeMobileMenu} />
+        <SidebarNavContent onNavClick={closeMobileMenu} />
       </div>
     </>
   );

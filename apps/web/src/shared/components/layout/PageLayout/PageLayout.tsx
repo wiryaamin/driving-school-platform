@@ -14,7 +14,7 @@ interface PageLayoutProps {
  */
 export function PageLayout({ children, className }: PageLayoutProps) {
   return (
-    <div className={cn('max-w-screen-2xl mx-auto space-y-6', className)}>
+    <div className={cn('max-w-screen-2xl mx-auto space-y-5', className)}>
       {children}
     </div>
   );
@@ -73,5 +73,5 @@ export function PageHeader({ title, description, actions, breadcrumbs, className
 // ─── PageContent ──────────────────────────────────────────────────────────────
 
 export function PageContent({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('space-y-6', className)}>{children}</div>;
+  return <div className={cn('space-y-5', className)}>{children}</div>;
 }

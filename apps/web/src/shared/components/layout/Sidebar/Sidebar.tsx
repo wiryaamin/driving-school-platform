@@ -1,158 +1,98 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  GraduationCap,
-  UserCheck,
-  Calendar,
-  Receipt,
-  CreditCard,
-  FileText,
-  BarChart3,
-  Settings,
-  ChevronLeft,
-  Building2,
-  MessageSquare,
-  Users,
+  Users, Building2, ClipboardList, Bell, GraduationCap, BarChart2, BarChart3, ListChecks,
+  Calendar, CalendarDays, List, BookOpen, Clock, Route,
+  Receipt, CreditCard, Wallet, FileText, ShoppingBag, ShoppingCart, Gift,
+  Settings, UserCheck,
+  Mail, Send, Upload,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
-import { useUiStore } from '@core/store/ui.store.js';
 import { usePermissions } from '@core/rbac/hooks.js';
 import type { Permission } from '@core/rbac/permissions.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import type { Organization } from '@platform/types';
 
-// ─── Navigation Configuration ─────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface NavItem {
-  key: string;
-  labelSv: string;
-  icon: LucideIcon;
-  path: string;
-  permission: Permission | null;
-  badge?: number;
+  key:         string;
+  labelSv:     string;
+  icon:        LucideIcon;
+  path?:       string;
+  href?:       string;
+  tel?:        string;
+  permission?: Permission | null;
+  badge?:      number;
   comingSoon?: boolean;
 }
 
 interface NavSection {
-  labelSv: string | null;
-  items: NavItem[];
+  key:     string;
+  labelSv: string;
+  items:   NavItem[];
 }
+
+// ─── Navigation Configuration ─────────────────────────────────────────────────
+
+const OVERVIEW_ITEM: NavItem = {
+  key:        'dashboard',
+  labelSv:    'Översikt',
+  icon:       LayoutDashboard,
+  path:       '/dashboard',
+  permission: null,
+};
 
 export const NAVIGATION: NavSection[] = [
   {
-    labelSv: null,
+    key:     'generellt',
+    labelSv: 'GENERELLT',
     items: [
-      {
-        key: 'dashboard',
-        labelSv: 'Översikt',
-        icon: LayoutDashboard,
-        path: '/dashboard',
-        permission: null,
-      },
+      { key: 'customers',         labelSv: 'Kunder',            icon: Users,         path: '/students',             permission: 'students:student:read' as Permission },
+      { key: 'corporate',         labelSv: 'Företagskunder',    icon: Building2,     path: '/corporate',            permission: null },
+      { key: 'kommunikation',     labelSv: 'Kommunikation',     icon: Mail,          path: '/kommunikation',        permission: null },
+      { key: 'communication-hub', labelSv: 'Meddelandehubb',    icon: Send,          path: '/communication',        permission: null },
+      { key: 'logs',              labelSv: 'Loggar',            icon: ClipboardList, path: '/logs',                 permission: null },
+      { key: 'watchlist',         labelSv: 'Bevakningar',       icon: Bell,          path: '/watchlist',            permission: null },
+      { key: 'classlist',         labelSv: 'Klasslista',        icon: GraduationCap, path: '/class-list',           permission: null },
+      { key: 'reports',           labelSv: 'Rapporter',         icon: BarChart2,     path: '/reports',              permission: null },
+      { key: 'insights',          labelSv: 'Insikter',          icon: BarChart3,     path: '/insights',             permission: null },
+      { key: 'tasks',             labelSv: 'Uppgifter',         icon: ListChecks,    path: '/tasks',                permission: null },
     ],
   },
   {
-    labelSv: 'Elever & Utbildning',
+    key:     'bokningssystem',
+    labelSv: 'BOKNINGSSYSTEM',
     items: [
-      {
-        key: 'students',
-        labelSv: 'Elever',
-        icon: GraduationCap,
-        path: '/students',
-        permission: 'students:student:read' as Permission,
-      },
-      {
-        key: 'instructors',
-        labelSv: 'Lärare',
-        icon: UserCheck,
-        path: '/instructors',
-        permission: 'instructors:instructor:read' as Permission,
-      },
-      {
-        key: 'scheduling',
-        labelSv: 'Schema',
-        icon: Calendar,
-        path: '/scheduling',
-        permission: 'scheduling:booking:read' as Permission,
-      },
+      { key: 'scheduling',   labelSv: 'Bokningsschema',      icon: Calendar,     path: '/scheduling',           permission: 'scheduling:booking:read' as Permission },
+      { key: 'my-schedule',  labelSv: 'Mitt schema',         icon: CalendarDays, path: '/scheduling/mine',      permission: null },
+      { key: 'bokningar',    labelSv: 'Bokningar',           icon: BookOpen,     path: '/scheduling/bokningar', permission: null },
+      { key: 'booking-list', labelSv: 'Bokningslista',       icon: List,         path: '/scheduling/list',      permission: null },
+      { key: 'waitlist',     labelSv: 'Väntelista',          icon: Clock,        path: '/scheduling/waitlist',  permission: null },
+      { key: 'planner',      labelSv: 'Trafikövningsplatser', icon: Route,       path: '/scheduling/planner',   permission: null },
     ],
   },
   {
-    labelSv: 'Ekonomi',
+    key:     'ekonomi',
+    labelSv: 'EKONOMI',
     items: [
-      {
-        key: 'invoices',
-        labelSv: 'Fakturor',
-        icon: Receipt,
-        path: '/finance/invoices',
-        permission: 'finance:invoice:read' as Permission,
-      },
-      {
-        key: 'payments',
-        labelSv: 'Betalningar',
-        icon: CreditCard,
-        path: '/finance/payments',
-        permission: 'finance:payment:read' as Permission,
-      },
-      {
-        key: 'corporate',
-        labelSv: 'Företagskunder',
-        icon: Building2,
-        path: '/corporate',
-        permission: 'corporate:contract:read' as Permission,
-        comingSoon: true,
-      },
+      { key: 'invoices',    labelSv: 'Fakturor',            icon: Receipt,      path: '/finance/invoices',   permission: 'finance:invoice:read' as Permission },
+      { key: 'payments',    labelSv: 'Betalningar',         icon: CreditCard,   path: '/finance/payments',   permission: 'finance:payment:read' as Permission },
+      { key: 'cash',        labelSv: 'Kassa',               icon: Wallet,       path: '/finance/cash',       permission: null },
+      { key: 'pay-request', labelSv: 'Betalningsbegäran',   icon: FileText,     path: '/finance/requests',   permission: null },
+      { key: 'cash-orders', labelSv: 'Kassaordrar',         icon: ShoppingBag,  path: '/finance/orders',     permission: null },
+      { key: 'ecommerce',   labelSv: 'E-handelsordrar',     icon: ShoppingCart, path: '/finance/ecommerce',  permission: null },
+      { key: 'giftcards',   labelSv: 'Presentkort',         icon: Gift,         path: '/finance/gift-cards', permission: null },
     ],
   },
   {
-    labelSv: 'Administration',
+    key:     'systeminst',
+    labelSv: 'SYSTEMINSTÄLLNINGAR',
     items: [
-      {
-        key: 'messages',
-        labelSv: 'Meddelanden',
-        icon: MessageSquare,
-        path: '/messages',
-        permission: 'communications:message:read' as Permission,
-        comingSoon: true,
-      },
-      {
-        key: 'documents',
-        labelSv: 'Dokument',
-        icon: FileText,
-        path: '/documents',
-        permission: 'documents:document:read' as Permission,
-        comingSoon: true,
-      },
-      {
-        key: 'reports',
-        labelSv: 'Rapporter',
-        icon: BarChart3,
-        path: '/reports',
-        permission: 'reporting:report:read' as Permission,
-        comingSoon: true,
-      },
-      {
-        key: 'users',
-        labelSv: 'Användare',
-        icon: Users,
-        path: '/administration/users',
-        permission: 'administration:user:read' as Permission,
-        comingSoon: true,
-      },
-    ],
-  },
-  {
-    labelSv: null,
-    items: [
-      {
-        key: 'settings',
-        labelSv: 'Inställningar',
-        icon: Settings,
-        path: '/settings',
-        permission: null,
-        comingSoon: true,
-      },
+      { key: 'settings',       labelSv: 'Inställningar', icon: Settings,  path: '/settings',                permission: null },
+      { key: 'staff',          labelSv: 'Personal',      icon: UserCheck, path: '/instructors',             permission: 'instructors:instructor:read' as Permission },
+      { key: 'data-migration', labelSv: 'Dataimport',    icon: Upload,    path: '/settings/data-migration', permission: null },
     ],
   },
 ];
@@ -160,47 +100,55 @@ export const NAVIGATION: NavSection[] = [
 // ─── Shared Nav Content ───────────────────────────────────────────────────────
 
 interface SidebarNavContentProps {
-  collapsed?: boolean;
   onNavClick?: () => void;
 }
 
-export function SidebarNavContent({ collapsed = false, onNavClick }: SidebarNavContentProps) {
+export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   const { can } = usePermissions();
 
   return (
-    <nav className={cn('flex-1 overflow-y-auto py-4 px-2 space-y-1')}>
-      {NAVIGATION.map((section, sectionIdx) => {
-        const visibleItems = section.items.filter(
-          (item) => item.permission === null || can(item.permission)
-        );
-        if (visibleItems.length === 0) return null;
+    <div className="flex flex-col flex-1 min-h-0">
 
-        return (
-          <div key={sectionIdx} className="mb-2">
-            {section.labelSv && !collapsed && (
-              <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/50 select-none">
+      {/* Primary anchor — Översikt */}
+      <div className="px-3 pt-3 pb-2 shrink-0">
+        <SidebarItem item={OVERVIEW_ITEM} onNavClick={onNavClick} />
+      </div>
+
+      <div className="mx-3 h-px bg-sidebar-border shrink-0" />
+
+      {/* Scrollable operational sections */}
+      <div className="flex-1 overflow-y-auto px-3 py-1 scrollbar-none">
+        {NAVIGATION.map((section) => {
+          const visibleItems = section.items.filter((item) => {
+            if (item.comingSoon) return true;
+            if (item.permission == null) return true;
+            return can(item.permission);
+          });
+          if (visibleItems.length === 0) return null;
+
+          return (
+            <div key={section.key} className="mb-1">
+              <p className="px-2 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-widest select-none text-sidebar-foreground/50">
                 {section.labelSv}
               </p>
-            )}
-            {visibleItems.map((item) => (
-              <SidebarItem
-                key={item.key}
-                item={item}
-                collapsed={collapsed}
-                {...(onNavClick ? { onClick: onNavClick } : {})}
-              />
-            ))}
-          </div>
-        );
-      })}
-    </nav>
+              <div className="space-y-0.5">
+                {visibleItems.map((item) => (
+                  <SidebarItem key={item.key} item={item} onNavClick={onNavClick} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+
+      </div>
+
+    </div>
   );
 }
 
 // ─── Desktop Sidebar ──────────────────────────────────────────────────────────
 
 export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebarCollapsed } = useUiStore();
   const { organization, isLoading } = useSession();
 
   const orgInitials = organization?.name
@@ -208,64 +156,34 @@ export function Sidebar() {
     : null;
 
   return (
-    <aside
-      className={cn(
-        'fixed left-0 top-0 h-full flex-col bg-sidebar border-r border-sidebar-border',
-        'transition-all duration-300 ease-in-out z-40',
-        'hidden md:flex',
-        sidebarCollapsed ? 'w-16' : 'w-64'
-      )}
-    >
-      {/* Header */}
-      <div className="flex items-center h-14 px-4 border-b border-sidebar-border shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-            {orgInitials && sidebarCollapsed ? (
-              <span className="text-xs font-bold text-primary-foreground">{orgInitials}</span>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
-            )}
-          </div>
-          {!sidebarCollapsed && (
-            <div className="min-w-0 flex-1">
-              {isLoading ? (
-                <div className="h-4 w-24 bg-sidebar-accent/30 rounded animate-pulse" />
-              ) : (
-                <span className="text-sm font-semibold text-sidebar-primary-foreground truncate block">
-                  {organization?.name ?? 'Körskola'}
-                </span>
-              )}
-              {!isLoading && organization && <OrgStatusChip org={organization} />}
-            </div>
+    <aside className="fixed left-0 top-0 h-full w-[280px] flex-col bg-sidebar border-r border-sidebar-border hidden md:flex z-40">
+
+      {/* Workspace Header */}
+      <div className="flex items-center gap-3 h-[72px] px-4 border-b border-sidebar-border shrink-0">
+        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shrink-0">
+          {orgInitials ? (
+            <span className="text-sm font-bold text-primary-foreground">{orgInitials}</span>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
           )}
+        </div>
+        <div className="min-w-0 flex-1">
+          {isLoading ? (
+            <div className="h-4 w-28 bg-sidebar-accent/30 rounded animate-pulse" />
+          ) : (
+            <span className="text-sm font-semibold text-sidebar-primary-foreground truncate block leading-tight">
+              {organization?.name ?? 'Körskola'}
+            </span>
+          )}
+          {!isLoading && organization && <OrgStatusChip org={organization} />}
         </div>
       </div>
 
-      {/* Navigation */}
-      <SidebarNavContent collapsed={sidebarCollapsed} />
-
-      {/* Collapse Toggle */}
-      <div className="shrink-0 p-2 border-t border-sidebar-border">
-        <button
-          onClick={toggleSidebarCollapsed}
-          className={cn(
-            'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sidebar-foreground/60',
-            'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-            'transition-colors text-sm',
-            sidebarCollapsed && 'justify-center'
-          )}
-          aria-label={sidebarCollapsed ? 'Expandera meny' : 'Minimera meny'}
-        >
-          <ChevronLeft
-            className={cn('w-4 h-4 shrink-0 transition-transform', sidebarCollapsed && 'rotate-180')}
-          />
-          {!sidebarCollapsed && <span className="text-xs">Minimera meny</span>}
-        </button>
-      </div>
+      <SidebarNavContent />
     </aside>
   );
 }
@@ -274,58 +192,47 @@ export function Sidebar() {
 
 function SidebarItem({
   item,
-  collapsed,
-  onClick,
+  onNavClick,
 }: {
-  item: NavItem;
-  collapsed: boolean;
-  onClick?: () => void;
+  item:        NavItem;
+  onNavClick?: () => void;
 }) {
   const location = useLocation();
-  const isActive = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
+  const isActive = item.path
+    ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+    : false;
   const Icon = item.icon;
 
   if (item.comingSoon) {
     return (
       <div
-        className={cn(
-          'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium',
-          'opacity-40 cursor-default select-none',
-          collapsed && 'justify-center px-2'
-        )}
-        title={collapsed ? `${item.labelSv} (kommer snart)` : undefined}
+        className="flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium text-sidebar-foreground opacity-40 cursor-default select-none"
+        title="Kommer snart"
         aria-disabled="true"
       >
         <Icon className="w-4 h-4 shrink-0" />
-        {!collapsed && (
-          <>
-            <span className="truncate flex-1">{item.labelSv}</span>
-            <span className="ml-auto shrink-0 text-[10px] font-medium text-sidebar-foreground/60 bg-sidebar-accent/40 rounded px-1 py-0.5 leading-none">
-              Snart
-            </span>
-          </>
-        )}
+        <span className="truncate">{item.labelSv}</span>
       </div>
     );
   }
 
+  if (!item.path) return null;
+
   return (
     <NavLink
       to={item.path}
-      onClick={onClick}
+      onClick={onNavClick}
       className={cn(
-        'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium',
+        'flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium',
         'transition-colors duration-150',
         isActive
           ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-          : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
-        collapsed && 'justify-center px-2'
+          : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
       )}
-      title={collapsed ? item.labelSv : undefined}
     >
       <Icon className="w-4 h-4 shrink-0" />
-      {!collapsed && <span className="truncate">{item.labelSv}</span>}
-      {!collapsed && item.badge !== undefined && item.badge > 0 && (
+      <span className="truncate flex-1">{item.labelSv}</span>
+      {item.badge !== undefined && item.badge > 0 && (
         <span className="ml-auto shrink-0 text-xs font-semibold bg-primary text-primary-foreground rounded-full w-5 h-5 flex items-center justify-center">
           {item.badge > 99 ? '99+' : item.badge}
         </span>
@@ -338,13 +245,13 @@ function SidebarItem({
 
 function OrgStatusChip({ org }: { org: Organization }) {
   if (org.subscription_status === 'trialing') {
-    return <span className="text-[10px] font-medium text-amber-500 leading-none">Testperiod</span>;
+    return <span className="text-[10px] font-medium text-amber-500 leading-none mt-0.5 block">Testperiod</span>;
   }
   if (org.subscription_status === 'past_due') {
-    return <span className="text-[10px] font-medium text-destructive leading-none">Betalning försenad</span>;
+    return <span className="text-[10px] font-medium text-destructive leading-none mt-0.5 block">Betalning försenad</span>;
   }
   if (org.status === 'suspended') {
-    return <span className="text-[10px] font-medium text-destructive leading-none">Inaktivt konto</span>;
+    return <span className="text-[10px] font-medium text-destructive leading-none mt-0.5 block">Inaktivt konto</span>;
   }
-  return null;
+  return <span className="text-[10px] font-medium text-sidebar-foreground/40 leading-none mt-0.5 block">Aktiv</span>;
 }

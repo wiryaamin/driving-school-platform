@@ -1,4 +1,4 @@
-/**
+﻿/**
  * discounts — Discount programs, coupon management, and application.
  *
  * Routes:
@@ -13,6 +13,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -59,7 +61,7 @@ function mapDiscountError(msg: string): Response {
   return err(msg, 422, 'DISCOUNT_FAILED');
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const anonKey     = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
   const authHeader  = req.headers.get('Authorization') ?? '';
@@ -68,10 +70,11 @@ Deno.serve(async (req: Request) => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || user === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
+  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
 
   const { discountId, sub } = parsePath(req);
@@ -249,4 +252,4 @@ Deno.serve(async (req: Request) => {
   }
 
   return err('Method not allowed', 405);
-});
+}));

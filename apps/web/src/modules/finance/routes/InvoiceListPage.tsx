@@ -7,6 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   DataTable, DataTableColumnHeader,
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
+  toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
@@ -241,6 +242,11 @@ export function InvoiceListPage() {
   const handleVoidConfirm = useCallback((id: string) => {
     voidMutation.mutate({ id }, {
       onSuccess: () => setVoidTarget(null),
+      onError: (err) => toast({
+        title:       'Makuleringen misslyckades',
+        description: err instanceof Error ? err.message : 'Försök igen eller kontakta support.',
+        variant:     'destructive',
+      }),
     });
   }, [voidMutation]);
 
@@ -294,7 +300,7 @@ export function InvoiceListPage() {
             {/* Summary badges */}
             {!isLoading && invoices.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-4">
-                {(['overdue', 'issued', 'paid'] as const).map((s) => {
+                {(['draft', 'overdue', 'issued', 'paid'] as const).map((s) => {
                   const count = invoices.filter((i) => i.status === s).length;
                   if (count === 0) return null;
                   return (

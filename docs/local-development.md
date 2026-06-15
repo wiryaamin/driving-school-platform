@@ -1,6 +1,13 @@
 # Local Development Guide
 
-## Prerequisites
+> **Note:** This project uses **hosted Supabase** (`ulgsndzfksphquqakelq.supabase.co`).
+> The local Docker stack described here is **optional** — only needed if you want a fully
+> offline dev environment. For normal development, connect directly to the hosted project
+> and skip this guide entirely. See [DEPLOY.md](DEPLOY.md) for the hosted setup.
+
+---
+
+## Prerequisites (local Docker dev only)
 
 - Node.js 20+, pnpm 9+
 - Docker Desktop (for Supabase local stack)

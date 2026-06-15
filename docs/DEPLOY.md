@@ -3,6 +3,10 @@
 Platform: Trafikskolan SaaS — Swedish Driving School ERP  
 Maintained by: Platform Engineering
 
+> **This project uses hosted Supabase** (project ref: `ulgsndzfksphquqakelq`).
+> Part 1 (local Docker setup) is optional for local development only.
+> For day-to-day work, connect directly to the hosted project — no Docker required.
+
 This runbook covers local development setup, pilot deployment, and production deployment sequencing. Follow the steps in order.
 
 ---
@@ -71,15 +75,24 @@ STUDENT_APP_URL=http://localhost:5174
 ```
 
 **`apps/web/.env.local`** (gitignored — create this file):
+
+For **hosted Supabase** (the active project):
 ```
-VITE_SUPABASE_URL=http://127.0.0.1:54321
-VITE_SUPABASE_ANON_KEY=<anon-key-from-supabase-start-output>
+VITE_SUPABASE_URL=https://ulgsndzfksphquqakelq.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon-key from Dashboard → Settings → API>
 VITE_APP_ENV=development
 VITE_ENABLE_QUERY_DEVTOOLS=true
 VITE_ENABLE_DEBUG_LOGGING=true
 ```
 
-The anon key comes from `supabase start` output (Step 4). Fill it in after running that command.
+For **local Docker dev only** (optional):
+```
+VITE_SUPABASE_URL=http://127.0.0.1:54321
+VITE_SUPABASE_ANON_KEY=<anon-key-from-supabase-start-output>
+VITE_APP_ENV=development
+```
+
+The anon key for local dev comes from `supabase start` output (Step 4).
 
 ---
 
@@ -219,16 +232,16 @@ The `event-worker` Edge Function drains the transactional outbox and runs mainte
 
 ### Local development
 
-For local development, invoke it manually as needed:
+To invoke manually against the hosted project:
 
 ```bash
-curl -s -X POST http://127.0.0.1:54321/functions/v1/event-worker \
+curl -s -X POST https://ulgsndzfksphquqakelq.supabase.co/functions/v1/event-worker \
   -H "Authorization: Bearer <WORKER_SECRET>" \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
 
-Replace `<WORKER_SECRET>` with the value in `supabase/functions/.env`.
+Replace `<WORKER_SECRET>` with the value set via `supabase secrets set`.
 
 ### Production — pg_cron setup
 

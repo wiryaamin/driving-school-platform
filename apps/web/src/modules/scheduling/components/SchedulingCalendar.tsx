@@ -25,13 +25,14 @@ export interface SlotDropInfo {
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface SchedulingCalendarProps {
-  calendarRef:  RefObject<FullCalendar | null>;
-  events:       EventInput[];
-  initialView:  CalendarViewType;
-  onDatesSet:   (view: CalendarViewType, title: string, start: Date, end: Date) => void;
-  onSlotClick?: (slot: LessonSlot) => void;
-  onSlotDrop?:  (info: SlotDropInfo) => void;
-  isLoading?:   boolean;
+  calendarRef:    RefObject<FullCalendar | null>;
+  events:         EventInput[];
+  initialView:    CalendarViewType;
+  onDatesSet:     (view: CalendarViewType, title: string, start: Date, end: Date) => void;
+  onSlotClick?:   (slot: LessonSlot) => void;
+  onSlotDrop?:    (info: SlotDropInfo) => void;
+  isLoading?:     boolean;
+  instructorMap?: Record<string, string>;
 }
 
 // ─── Terminal statuses blocked from drag/resize ───────────────────────────────
@@ -48,6 +49,7 @@ export function SchedulingCalendar({
   onSlotClick,
   onSlotDrop,
   isLoading = false,
+  instructorMap,
 }: SchedulingCalendarProps) {
 
   function handleDatesSet(info: DatesSetArg) {
@@ -94,7 +96,8 @@ export function SchedulingCalendar({
   function renderEventContent(arg: EventContentArg) {
     const slot = arg.event.extendedProps['slot'] as LessonSlot | undefined;
     if (!slot) return null;
-    return <SlotEventCard slot={slot} />;
+    const instructorName = instructorMap?.[slot.instructor_id];
+    return <SlotEventCard slot={slot} instructorName={instructorName} />;
   }
 
   return (

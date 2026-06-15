@@ -30,6 +30,8 @@ interface DataTableProps<TData, TValue> {
   toolbar?: React.ReactNode;
   /** Called when a data row is clicked — makes every row interactive */
   onRowClick?: (row: TData) => void;
+  /** Optional CSS class to apply per row */
+  getRowClassName?: (row: TData) => string;
 }
 
 export function DataTable<TData, TValue>({
@@ -42,6 +44,7 @@ export function DataTable<TData, TValue>({
   className,
   toolbar,
   onRowClick,
+  getRowClassName,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -100,7 +103,7 @@ export function DataTable<TData, TValue>({
                   key={row.id}
                   data-state={row.getIsSelected() && 'selected'}
                   onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                  className={cn(onRowClick && 'cursor-pointer')}
+                  className={cn(onRowClick && 'cursor-pointer', getRowClassName?.(row.original))}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>

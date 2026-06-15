@@ -16,5 +16,6 @@ export type * from './fixed-assets.types.js';
 export type * from './ledger-governance.types.js';
 export type * from './accounting-architecture.types.js';
 export type * from './compliance.types.js';
+export type * from './corporate.types.js';
 // api.types exports ApiErrorCode enum (runtime value) — must not use `export type *`
 export * from './api.types.js';

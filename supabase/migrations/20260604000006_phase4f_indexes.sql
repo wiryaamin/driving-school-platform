@@ -54,7 +54,4 @@ CREATE INDEX idx_reg_audit_type        ON public.regulatory_audit_exports (expor
 CREATE INDEX idx_reg_audit_status      ON public.regulatory_audit_exports (status);
 CREATE INDEX idx_reg_audit_date        ON public.regulatory_audit_exports (export_date);
 
--- ── payroll_bas_rules ─────────────────────────────────────────────────────────
-CREATE INDEX idx_payroll_bas_rules_org   ON public.payroll_bas_rules (organization_id)
-  WHERE organization_id IS NOT NULL;
-CREATE INDEX idx_payroll_bas_rules_event ON public.payroll_bas_rules (event_type);
+-- payroll_bas_rules is a global reference table (no organization_id / event_type columns).

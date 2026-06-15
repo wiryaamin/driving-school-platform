@@ -5,6 +5,23 @@ import { slotKeys } from './useSlots.js';
 import { bookingKeys } from './useBookings.js';
 import { waitlistKeys } from './useWaitlist.js';
 
+// ─── Create slot types ────────────────────────────────────────────────────────
+
+export interface CreateSlotInput {
+  instructor_id:   string;
+  lesson_type_id:  string;
+  starts_at:       string;
+  ends_at:         string;
+  max_bookings?:   number;
+  notes?:          string | null;
+}
+
+export interface CreateSlotsBatchResult {
+  succeeded: number;
+  failed:    number;
+  errors:    string[];
+}
+
 // ─── Input types ──────────────────────────────────────────────────────────────
 
 export interface CreateBookingInput {
@@ -38,7 +55,19 @@ export interface UpdateSlotTimingInput {
   ends_at:   string;
 }
 
-// ─── API helpers ──────────────────────────────────────────────────────────────
+// ─── API helpers ─────────────────────────────────────────────────────────────
+
+async function apiCreateSlot(input: CreateSlotInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>('slots', {
+    method: 'POST',
+    body:   input,
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+// ─── Original API helpers ─────────────────────────────────────────────────────
 
 async function apiCreateBooking(input: CreateBookingInput): Promise<LessonBooking> {
   const body: Record<string, unknown> = {
@@ -111,8 +140,8 @@ export function useCreateBooking() {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slot_id) });
-      // Slot filling up may affect waitlist visibility
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }
@@ -127,8 +156,8 @@ export function useCancelBooking() {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slot_id) });
-      // Cancellation may trigger waitlist promotion — refresh waitlist state
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }
@@ -143,6 +172,7 @@ export function useUpdateBookingStatus() {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slot_id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }
@@ -154,14 +184,13 @@ export function useRescheduleBooking() {
     onSuccess: (_data, { id, slot_id, new_slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.detail(id) });
-      // Invalidate both the old and new slot's booking lists
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(new_slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(new_slot_id) });
-      // Rescheduling frees the old slot — waitlist may be promoted
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }
@@ -173,6 +202,36 @@ export function useUpdateSlotTiming() {
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useCreateSlot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiCreateSlot,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useCreateSlotsBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (inputs: CreateSlotInput[]): Promise<CreateSlotsBatchResult> => {
+      const results = await Promise.allSettled(inputs.map(apiCreateSlot));
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const errors = results
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map(r => (r.reason instanceof Error ? r.reason.message : 'Okänt fel'));
+      return { succeeded, failed: errors.length, errors };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }

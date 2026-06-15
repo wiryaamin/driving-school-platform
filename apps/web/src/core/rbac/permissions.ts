@@ -73,6 +73,12 @@ export const Permissions = {
   CORPORATE_CREATE: 'corporate:contract:create',
   CORPORATE_UPDATE: 'corporate:contract:update',
 
+  // ─── Corporate Customers (Företagskunder) ──────────────────────────────────
+  CORPORATE_CUSTOMERS_READ: 'corporate:customer:read',
+  CORPORATE_CUSTOMERS_CREATE: 'corporate:customer:create',
+  CORPORATE_CUSTOMERS_UPDATE: 'corporate:customer:update',
+  CORPORATE_CUSTOMERS_DELETE: 'corporate:customer:delete',
+
   // ─── Finance — Packages & Wallet (Phase 4A) ─────────────────────────────
   FINANCE_PACKAGE_CREATE: 'finance:package:create',
   FINANCE_PACKAGE_READ: 'finance:package:read',

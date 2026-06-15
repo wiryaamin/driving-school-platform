@@ -229,11 +229,11 @@ SELECT register_certificate_chain(
 
 -- ── Seed: Canonicalization Profiles ──────────────────────────────────────────
 
-INSERT INTO canonicalization_profiles (profile_key, profile_type, description, spec_version, is_active, metadata)
+INSERT INTO canonicalization_profiles (profile_name, profile_type, description, is_active)
 VALUES
-  ('pki_trust_anchor_v1',     'json', 'PKI trust anchor canonical identity hash — anchor_id, common_name, organization, jurisdiction, anchor_fingerprint',  '5E.1', true, '{}'),
-  ('nonrepudiation_hash_v1',  'json', 'Non-repudiation hash input canonical format — entity_id, payload_hash, signature_value — order-sensitive',            '5E.1', true, '{}')
-ON CONFLICT (profile_key) DO NOTHING;
+  ('pki_trust_anchor_v1',     'json', 'PKI trust anchor canonical identity hash — anchor_id, common_name, organization, jurisdiction, anchor_fingerprint',  true),
+  ('nonrepudiation_hash_v1',  'json', 'Non-repudiation hash input canonical format — entity_id, payload_hash, signature_value — order-sensitive',            true)
+ON CONFLICT (profile_name) DO NOTHING;
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 

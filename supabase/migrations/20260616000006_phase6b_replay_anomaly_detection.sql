@@ -377,7 +377,7 @@ BEGIN
   SELECT schema_hash INTO v_actual_hash
   FROM canonical_serializer_registry
   WHERE serializer_key = p_serializer_key
-  ORDER BY registered_at DESC LIMIT 1;
+  ORDER BY created_at DESC LIMIT 1;
 
   v_diverged := (v_actual_hash IS NOT NULL AND v_actual_hash <> p_expected_hash);
 

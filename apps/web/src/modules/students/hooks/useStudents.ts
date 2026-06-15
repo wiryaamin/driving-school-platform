@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { supabase } from '@core/api/supabase.js';
 import type { Student, StudentStatus, StudentListQueryInput, PermitStage } from '@platform/types';
 
@@ -31,7 +32,10 @@ export interface CreateStudentFormValues {
   city?: string;
   status?: StudentStatus;
   target_licence_category?: string;
+  permit_stage?: string;
   data_processing_consent?: boolean;
+  assigned_instructor_id?: string;
+  communication_opt_in_sms?: boolean;
 }
 
 export type UpdateStudentFormValues = Partial<CreateStudentFormValues>;
@@ -80,6 +84,14 @@ async function apiFetchStudent(id: string): Promise<Student> {
   return data.data;
 }
 
+async function apiFetchStudentsBatch(ids: string[]): Promise<Student[]> {
+  const qs = `ids=${ids.join(',')}`;
+  const { data, error } = await supabase.functions.invoke<{ data: Student[] }>(`students?${qs}`, { method: 'GET' });
+  if (error) throw error;
+  if (!data?.data) return [];
+  return data.data;
+}
+
 function cleanFormValues(input: CreateStudentFormValues): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(input).filter(([, v]) => v !== '' && v !== undefined)
@@ -122,8 +134,9 @@ async function apiArchiveStudent(id: string): Promise<void> {
 export function useStudentList(params: StudentListQueryInput = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: studentKeys.list(params),
-    queryFn: () => apiFetchStudents({ per_page: 100, ...params }),
+    queryFn: () => apiFetchStudents({ per_page: 25, ...params }),
     enabled: options?.enabled ?? true,
+    refetchOnMount: 'always',
   });
 }
 
@@ -132,6 +145,15 @@ export function useStudent(id: string | null) {
     queryKey: studentKeys.detail(id ?? ''),
     queryFn: () => apiFetchStudent(id!),
     enabled: id !== null && id !== '',
+  });
+}
+
+export function useStudentsBatch(ids: string[]) {
+  const deduped = useMemo(() => [...new Set(ids)].sort(), [ids]);
+  return useQuery({
+    queryKey: [...studentKeys.all, 'batch', deduped] as const,
+    queryFn: () => apiFetchStudentsBatch(deduped),
+    enabled: deduped.length > 0,
   });
 }
 

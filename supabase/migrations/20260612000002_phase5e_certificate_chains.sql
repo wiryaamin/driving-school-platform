@@ -104,16 +104,16 @@ FOR EACH ROW EXECUTE FUNCTION prevent_certificate_chain_delete();
 CREATE OR REPLACE FUNCTION register_certificate_chain(
   p_chain_id             text,
   p_trust_anchor_id      uuid,
-  p_endpoint_id          uuid        DEFAULT NULL,
   p_subject_cn           text,
   p_subject_org          text,
   p_issuer_cn            text,
   p_issuer_org           text,
   p_cert_material        text,
   p_issuer_material      text,
-  p_issuer_lineage       jsonb       DEFAULT '[]',
   p_validity_not_before  timestamptz,
   p_validity_not_after   timestamptz,
+  p_endpoint_id          uuid        DEFAULT NULL,
+  p_issuer_lineage       jsonb       DEFAULT '[]',
   p_algorithm            text        DEFAULT 'sha256WithRSAEncryption',
   p_actor_id             uuid        DEFAULT NULL
 )

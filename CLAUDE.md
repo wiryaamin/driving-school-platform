@@ -150,9 +150,6 @@ pnpm install
 # Web app (dev server at http://localhost:5173)
 pnpm --filter @platform/web dev
 
-# Edge Functions
-supabase functions serve --env-file supabase/functions/.env
-
 # Type check all packages (run this before every commit)
 pnpm typecheck
 
@@ -162,35 +159,60 @@ pnpm lint
 # Build all
 pnpm build
 
-# Reset local DB (DESTRUCTIVE — wipes all data)
-supabase db reset
+# Apply new migrations to the hosted Supabase project
+# (requires: supabase link --project-ref <project-ref> first)
+supabase db push --linked
 
-# Apply new migrations only
-supabase db push
+# Deploy Edge Functions to hosted Supabase
+supabase functions deploy --project-ref <project-ref>
 
-# Bootstrap first org + admin after DB reset (edit v_user_id first)
-psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
-  -f supabase/seed/bootstrap_org_admin.sql
+# Bootstrap first org + admin (run in Dashboard → SQL Editor, or via psql with the
+# production connection string from Dashboard → Settings → Database)
+# Edit v_user_id and v_user_email in the file first.
+# supabase/seed/bootstrap_org_admin.sql
 ```
 
 ---
 
-# Environment Files
+# Hosted Supabase Setup
+
+This project uses **hosted Supabase** (not a local Docker stack).
+The project ref is: `ulgsndzfksphquqakelq`
 
 ## apps/web/.env.local
 
 ```env
-VITE_SUPABASE_URL=http://127.0.0.1:54321
-VITE_SUPABASE_ANON_KEY=<from supabase start output>
+VITE_SUPABASE_URL=https://ulgsndzfksphquqakelq.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key from Dashboard → Settings → API>
 VITE_APP_ENV=development
 ```
 
 ## supabase/functions/.env
 
+Secrets for local Edge Function development (gitignored):
+
 ```env
 AUTH_HOOK_SECRET=v1,whsec_<base64 from openssl rand -base64 32>
-WORKER_SECRET=any-random-string-for-local-dev
+WORKER_SECRET=<any-random-string>
 ```
+
+For the hosted project, secrets are set via:
+```bash
+supabase secrets set AUTH_HOOK_SECRET="v1,whsec_<key>" WORKER_SECRET="<key>" \
+  --project-ref ulgsndzfksphquqakelq
+```
+
+## Auth Hook (hosted)
+
+The custom access token hook must be configured in:
+Dashboard → Authentication → Hooks → Custom Access Token Hook
+
+- **URI:** `https://ulgsndzfksphquqakelq.supabase.co/functions/v1/auth-hook`
+- **Secret:** same `v1,whsec_<key>` as `AUTH_HOOK_SECRET`
+
+The auth hook adds `organization_id`, `role`, `permissions`, and `is_platform_admin`
+to every JWT. If it is not configured or the secret is wrong, users will be
+redirected to the login page in a loop (JWT has no custom claims).
 
 ---
 

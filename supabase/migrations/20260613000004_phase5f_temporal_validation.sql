@@ -171,10 +171,10 @@ SELECT register_timestamp_authority(
 
 -- ── Seed: Canonicalization Profiles ──────────────────────────────────────────
 
-INSERT INTO canonicalization_profiles (profile_key, profile_type, description, spec_version, is_active, metadata)
+INSERT INTO canonicalization_profiles (profile_name, profile_type, description, is_active)
 VALUES
-  ('temporal_evidence_v1',      'json', 'Temporal evidence canonical hash — entity_id, entity_type, timestamp_value, authority_id, payload_hash, version — order-sensitive', '5F.1', true, '{}'),
-  ('temporal_chain_hash_v1',    'json', 'Temporal chain hash — generate_temporal_chain_hash fold from temporal-genesis seed; order-sensitive append-only chronology chain', '5F.1', true, '{}')
-ON CONFLICT (profile_key) DO NOTHING;
+  ('temporal_evidence_v1',      'json', 'Temporal evidence canonical hash — entity_id, entity_type, timestamp_value, authority_id, payload_hash, version — order-sensitive', true),
+  ('temporal_chain_hash_v1',    'json', 'Temporal chain hash — generate_temporal_chain_hash fold from temporal-genesis seed; order-sensitive append-only chronology chain', true)
+ON CONFLICT (profile_name) DO NOTHING;
 
 GRANT EXECUTE ON FUNCTION run_phase5f_validation_suite TO authenticated, service_role;

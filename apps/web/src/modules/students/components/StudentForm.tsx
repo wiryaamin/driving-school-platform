@@ -1,66 +1,155 @@
-import { useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Button,
-  Separator,
+  Textarea,
   toast,
 } from '@platform/ui';
 import { useCreateStudent, useUpdateStudent } from '../hooks/useStudents.js';
-import { STUDENT_STATUS_OPTIONS } from './StudentStatusBadge.js';
 import type { Student, CreateStudentFormValues } from '../hooks/useStudents.js';
+import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js';
 
-// ─── Form schema (UI-layer validation) ───────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const LICENCE_CATEGORIES = ['B', 'A', 'A1', 'A2', 'AM', 'B96', 'BE', 'C', 'C1', 'CE', 'D'] as const;
+const PERMIT_GROUP_OPTIONS = [
+  { value: 'B',   label: 'Behörighet B' },
+  { value: 'A',   label: 'Behörighet A' },
+  { value: 'C',   label: 'Behörighet C' },
+  { value: 'D',   label: 'Behörighet D' },
+  { value: 'BE',  label: 'Behörighet BE' },
+  { value: 'CE',  label: 'Behörighet CE' },
+  { value: 'AM',  label: 'Behörighet AM' },
+  { value: 'YKB', label: 'YKB' },
+];
+
+const BEHÖRIGHET_OPTIONS = [
+  { value: 'B_manual',     label: 'Behörighet BMan' },
+  { value: 'B_auto',       label: 'Behörighet BAut' },
+  { value: 'risk1_b',      label: 'Riskettan B' },
+  { value: 'risk2_b',      label: 'Risktvåan B' },
+  { value: 'intro_kurs',   label: 'Introduktionskurs' },
+  { value: 'BE',           label: 'Behörighet BE' },
+  { value: 'A',            label: 'Behörighet A' },
+  { value: 'A1',           label: 'Behörighet A1' },
+  { value: 'A2',           label: 'Behörighet A2' },
+  { value: 'D',            label: 'Behörighet D' },
+  { value: 'DE',           label: 'Behörighet DE' },
+  { value: 'D1E',          label: 'Behörighet D1E' },
+  { value: 'D1',           label: 'Behörighet D1' },
+  { value: 'C',            label: 'Behörighet C' },
+  { value: 'C1E',          label: 'Behörighet C1E' },
+  { value: 'C1',           label: 'Behörighet C1' },
+  { value: 'CE',           label: 'Behörighet CE' },
+  { value: 'YKB_person',   label: 'YKB Persontransport' },
+  { value: 'YKB_gods',     label: 'YKB Godstransport' },
+];
+
+// ─── Schema ───────────────────────────────────────────────────────────────────
 
 const studentFormSchema = z.object({
+  // Personal
   first_name:              z.string().min(1, 'Förnamn krävs').max(100),
   last_name:               z.string().min(1, 'Efternamn krävs').max(100),
+  personnummer:            z.string().regex(/^(\d{8}-?\d{4})?$/, 'Format: YYYYMMDD-XXXX').optional(),
   email:                   z.string().max(200).optional(),
   phone:                   z.string().max(30).optional(),
+  phone_missing:           z.boolean().optional(),
   address_line1:           z.string().max(200).optional(),
   postal_code:             z.string().max(20).optional(),
   city:                    z.string().max(100).optional(),
+
+  // Education (wired to DB)
+  permit_group:            z.string().optional(),
+  permit_expiry_date:      z.string().optional(),
+  target_licence_category: z.string().max(30).optional(),
+  assigned_instructor_id:  z.string().optional(),
+
+  // Notes (UI-only — no DB field yet)
+  notes:                   z.string().optional(),
+  anteckning:              z.string().optional(),
+
+  // Checkboxes (communication_opt_in_sms wired to DB; others UI-only)
+  communication_opt_in_sms: z.boolean().optional(),
+  has_debt_collection:      z.boolean().optional(),
+  prevent_cancellation:     z.boolean().optional(),
+
+  // Company & Economy (UI-only — no DB fields yet)
+  company_connection:      z.string().optional(),
+  company_reference:       z.string().optional(),
+  credit_limit:            z.string().optional(),
+  economy_notes:           z.string().optional(),
+
+  // Legacy fields
   status:                  z.enum(['lead', 'onboarding', 'active', 'paused', 'completed', 'withdrawn', 'archived'] as const).optional(),
-  target_licence_category: z.string().max(10).optional(),
   data_processing_consent: z.boolean().optional(),
 });
 
 type StudentFormValues = z.infer<typeof studentFormSchema>;
 
-// ─── Default values ───────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatPersonnummer(student: Student): string {
+  if (!student.date_of_birth && !student.personnummer_last4) return '';
+  const dob = (student.date_of_birth ?? '').replace(/-/g, '');
+  return student.personnummer_last4 ? `${dob}-${student.personnummer_last4}` : dob;
+}
+
+function parsePersonnummer(raw: string | undefined): { date_of_birth?: string; personnummer_last4?: string } {
+  if (!raw || raw.trim() === '') return {};
+  const digits = raw.replace('-', '');
+  if (digits.length < 12) return {};
+  const dob = `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  const last4 = digits.slice(8, 12);
+  return { date_of_birth: dob, personnummer_last4: last4 };
+}
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
 
 const EMPTY_DEFAULTS: StudentFormValues = {
-  first_name:              '',
-  last_name:               '',
-  email:                   '',
-  phone:                   '',
-  address_line1:           '',
-  postal_code:             '',
-  city:                    '',
-  status:                  undefined,
+  first_name: '', last_name: '', personnummer: '',
+  email: '', phone: '', phone_missing: false,
+  address_line1: '', postal_code: '', city: '',
+  permit_group: '', permit_expiry_date: '',
   target_licence_category: '',
-  data_processing_consent: false,
+  assigned_instructor_id: '',
+  notes: '', anteckning: '',
+  communication_opt_in_sms: true,
+  has_debt_collection: false,
+  prevent_cancellation: false,
+  company_connection: '', company_reference: '', credit_limit: '', economy_notes: '',
+  status: undefined, data_processing_consent: false,
 };
 
 function studentToFormValues(s: Student): StudentFormValues {
   return {
-    first_name:              s.first_name,
-    last_name:               s.last_name,
-    email:                   s.email ?? '',
-    phone:                   s.phone ?? '',
-    address_line1:           s.address_line1 ?? '',
-    postal_code:             s.postal_code ?? '',
-    city:                    s.city ?? '',
-    status:                  s.status,
-    target_licence_category: s.target_licence_category ?? '',
-    data_processing_consent: s.data_processing_consent,
+    first_name:               s.first_name,
+    last_name:                s.last_name,
+    personnummer:             formatPersonnummer(s),
+    email:                    s.email ?? '',
+    phone:                    s.phone ?? '',
+    phone_missing:            false,
+    address_line1:            s.address_line1 ?? '',
+    postal_code:              s.postal_code ?? '',
+    city:                     s.city ?? '',
+    permit_group:             '',
+    permit_expiry_date:       '',
+    target_licence_category:  s.target_licence_category ?? '',
+    assigned_instructor_id:   s.assigned_instructor_id ?? '',
+    notes:                    '',
+    anteckning:               '',
+    communication_opt_in_sms: s.communication_opt_in_sms,
+    has_debt_collection:      false,
+    prevent_cancellation:     false,
+    company_connection: '', company_reference: '', credit_limit: '', economy_notes: '',
+    status:                   s.status,
+    data_processing_consent:  s.data_processing_consent,
   };
 }
 
@@ -69,15 +158,50 @@ function studentToFormValues(s: Student): StudentFormValues {
 interface StudentFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** When provided, the form is in edit mode */
   student?: Student | null;
   onSuccess?: (student: Student) => void;
+}
+
+// ─── Checkbox helper ──────────────────────────────────────────────────────────
+
+function CheckboxField({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2 cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        className="h-4 w-4 rounded border border-input cursor-pointer accent-primary"
+      />
+      <span className="text-sm text-foreground">{label}</span>
+    </label>
+  );
+}
+
+// ─── Section header ───────────────────────────────────────────────────────────
+
+function SectionHeader({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-sm font-semibold text-foreground">{children}</p>
+  );
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentFormProps) {
   const isEdit = student != null;
+  const [companyOpen, setCompanyOpen] = useState(false);
 
   const form = useForm<StudentFormValues>({
     resolver: zodResolver(studentFormSchema),
@@ -88,20 +212,40 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
   const updateMutation = useUpdateStudent();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  // Sync form when student changes (edit mode) or sheet opens/closes
+  const { data: instructorsData } = useInstructorList({ per_page: 100 }, { enabled: open });
+  const instructors = instructorsData?.data ?? [];
+
   useEffect(() => {
     if (open) {
+      setCompanyOpen(false);
       form.reset(isEdit ? studentToFormValues(student) : EMPTY_DEFAULTS);
     }
   }, [open, student, isEdit, form]);
 
   function onSubmit(values: StudentFormValues) {
-    // Strip empty/undefined values before sending to API.
-    // Double-cast via unknown: Zod-inferred types include `undefined` for optional
-    // fields, but we've filtered them out so the runtime object is fully compatible.
-    const clean = Object.fromEntries(
-      Object.entries(values).filter(([, v]) => v !== undefined && v !== '')
-    ) as unknown as CreateStudentFormValues;
+    const clean: CreateStudentFormValues = {
+      first_name:  values.first_name,
+      last_name:   values.last_name,
+    };
+
+    if (values.email)         clean.email         = values.email;
+    if (values.phone && !values.phone_missing) clean.phone = values.phone;
+    if (values.address_line1) clean.address_line1 = values.address_line1;
+    if (values.postal_code)   clean.postal_code   = values.postal_code;
+    if (values.city)          clean.city          = values.city;
+    if (values.status)        clean.status        = values.status;
+
+    if (values.target_licence_category) clean.target_licence_category = values.target_licence_category;
+    if (values.assigned_instructor_id)  clean.assigned_instructor_id  = values.assigned_instructor_id;
+    if (values.data_processing_consent) clean.data_processing_consent = values.data_processing_consent;
+    clean.communication_opt_in_sms = values.communication_opt_in_sms ?? true;
+
+    const pnrParts = parsePersonnummer(values.personnummer);
+    if (pnrParts.date_of_birth) {
+      (clean as Record<string, unknown>).date_of_birth       = pnrParts.date_of_birth;
+      (clean as Record<string, unknown>).personnummer_last4  = pnrParts.personnummer_last4;
+      (clean as Record<string, unknown>).identity_type       = 'personnummer';
+    }
 
     if (isEdit) {
       updateMutation.mutate(
@@ -134,193 +278,430 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-        <SheetHeader className="pb-4">
-          <SheetTitle>{isEdit ? 'Redigera elev' : 'Skapa elev'}</SheetTitle>
-          <SheetDescription>
-            {isEdit
-              ? 'Uppdatera elevens uppgifter nedan.'
-              : 'Fyll i uppgifterna för att registrera en ny elev.'}
-          </SheetDescription>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[1100px] p-0 gap-0 overflow-hidden">
+        <DialogHeader className="px-6 py-4 border-b border-border">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <span className="text-muted-foreground">+</span>
+            {isEdit ? 'Redigera elev' : 'Skapa en ny elev'}
+          </DialogTitle>
+        </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+          <form onSubmit={form.handleSubmit(onSubmit)}>
+            {/* Two-column body */}
+            <div className="grid grid-cols-[380px_1fr] max-h-[75vh] overflow-hidden">
 
-            {/* ── Name ───────────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="first_name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Förnamn *</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Anna" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="last_name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Efternamn *</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Andersson" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+              {/* ── Left column ──────────────────────────────────────────── */}
+              <div className="border-r border-border p-5 space-y-5 overflow-y-auto">
 
-            {/* ── Contact ─────────────────────────────────────────────────── */}
-            <Separator />
-            <div className="space-y-4">
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Kontaktuppgifter
-              </p>
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>E-post</FormLabel>
-                    <FormControl>
-                      <Input type="email" placeholder="anna@exempel.se" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="phone"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Telefon</FormLabel>
-                    <FormControl>
-                      <Input type="tel" placeholder="070-123 45 67" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+                {/* Körkortstillstånd */}
+                <div className="space-y-3">
+                  <FormField
+                    control={form.control}
+                    name="permit_group"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Körkortstillstånd</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? ''}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="- Välj grupp -" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {PERMIT_GROUP_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="permit_expiry_date"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Slutdatum för körkortstillstånd</FormLabel>
+                        <FormControl>
+                          <Input type="date" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
 
-            {/* ── Address ─────────────────────────────────────────────────── */}
-            <Separator />
-            <div className="space-y-4">
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Adress
-              </p>
-              <FormField
-                control={form.control}
-                name="address_line1"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Gatuadress</FormLabel>
-                    <FormControl>
-                      <Input placeholder="Storgatan 1" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <div className="grid grid-cols-2 gap-4">
+                {/* Elevklass & Lärare */}
+                <div className="space-y-3">
+                  <SectionHeader>Elevklass &amp; Lärare</SectionHeader>
+                  <FormField
+                    control={form.control}
+                    name="target_licence_category"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Behörighet</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? ''}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Välj behörighet" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {BEHÖRIGHET_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="assigned_instructor_id"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Lärare</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? ''}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="- Välj lärare -" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {instructors.map((i) => (
+                              <SelectItem key={i.id} value={i.id}>
+                                {i.first_name} {i.last_name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Kommentera & notera */}
+                <div className="space-y-3">
+                  <SectionHeader>Kommentera &amp; notera</SectionHeader>
+                  <FormField
+                    control={form.control}
+                    name="notes"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Skriv en kommentar..."
+                            className="min-h-[90px] resize-y"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="anteckning"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Anteckning</FormLabel>
+                        <FormControl>
+                          <Input placeholder="" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Företag & Ekonomi (collapsible) */}
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setCompanyOpen((v) => !v)}
+                    className="flex items-center gap-2 text-sm font-semibold text-foreground w-full text-left"
+                  >
+                    Företag &amp; Ekonomi
+                    {companyOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+
+                  {companyOpen && (
+                    <div className="space-y-3">
+                      <FormField
+                        control={form.control}
+                        name="company_connection"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Anslut till företag</FormLabel>
+                            <FormControl>
+                              <Input placeholder="- Anslut till företag -" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="company_reference"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Studentreferens på företagsfaktura</FormLabel>
+                            <FormControl>
+                              <Input placeholder="Elev:" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="credit_limit"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Studentkreditgräns</FormLabel>
+                            <FormControl>
+                              <Input type="number" placeholder="0" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="economy_notes"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Kommentar (ekonomi)</FormLabel>
+                            <FormControl>
+                              <Textarea className="min-h-[80px] resize-y" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Right column ─────────────────────────────────────────── */}
+              <div className="p-5 space-y-4 overflow-y-auto">
+                <SectionHeader>Elevens uppgifter</SectionHeader>
+
+                {/* Mobilnummer + Saknas */}
+                <div className="space-y-1.5">
+                  <FormLabel>Mobilnummer</FormLabel>
+                  <div className="flex items-center gap-2">
+                    <FormField
+                      control={form.control}
+                      name="phone"
+                      render={({ field }) => (
+                        <FormItem className="flex-1 space-y-0">
+                          <FormControl>
+                            <Input
+                              type="tel"
+                              placeholder="070-123 45 67"
+                              disabled={form.watch('phone_missing')}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="phone_missing"
+                      render={({ field }) => (
+                        <label className="flex items-center gap-1.5 cursor-pointer text-sm whitespace-nowrap shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={field.value ?? false}
+                            onChange={(e) => {
+                              field.onChange(e.target.checked);
+                              if (e.target.checked) form.setValue('phone', '');
+                            }}
+                            className="h-4 w-4 rounded border border-input cursor-pointer accent-primary"
+                          />
+                          Saknas
+                        </label>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                {/* E-postadress */}
                 <FormField
                   control={form.control}
-                  name="postal_code"
+                  name="email"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Postnummer</FormLabel>
+                      <FormLabel>E-postadress</FormLabel>
                       <FormControl>
-                        <Input placeholder="123 45" {...field} />
+                        <Input type="email" placeholder="anna@exempel.se" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+
+                {/* Förnamn */}
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField
+                    control={form.control}
+                    name="first_name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Förnamn *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Anna" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="last_name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Efternamn *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Andersson" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Personnummer */}
+                <div className="space-y-1.5">
+                  <FormLabel>Personnummer</FormLabel>
+                  <div className="flex items-center gap-2">
+                    <FormField
+                      control={form.control}
+                      name="personnummer"
+                      render={({ field }) => (
+                        <FormItem className="flex-1 space-y-0">
+                          <FormControl>
+                            <Input placeholder="YYYYMMDD-XXXX" maxLength={13} {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 text-xs whitespace-nowrap"
+                      disabled
+                    >
+                      Sök i Statens personadressregister
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Adress */}
                 <FormField
                   control={form.control}
-                  name="city"
+                  name="address_line1"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Ort</FormLabel>
+                      <FormLabel>Adress</FormLabel>
                       <FormControl>
-                        <Input placeholder="Stockholm" {...field} />
+                        <Input placeholder="Storgatan 1" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+
+                {/* Postnummer + Postort */}
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField
+                    control={form.control}
+                    name="postal_code"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Postnummer</FormLabel>
+                        <FormControl>
+                          <Input placeholder="123 45" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="city"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Postort</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Stockholm" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Folkbokföring info */}
+                <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-xs text-muted-foreground">
+                  För att kunna hämta uppgifter från folkbokföringen ska korrekt personnummer fyllas i.
+                </div>
+
+                {/* Flera val */}
+                <div className="space-y-2.5">
+                  <SectionHeader>Flera val</SectionHeader>
+                  <div className="grid grid-cols-2 gap-2">
+                    <FormField
+                      control={form.control}
+                      name="communication_opt_in_sms"
+                      render={({ field }) => (
+                        <CheckboxField
+                          label="Ta emot SMS-påminnelse"
+                          checked={field.value ?? true}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="has_debt_collection"
+                      render={({ field }) => (
+                        <CheckboxField
+                          label="Har inkassoärende"
+                          checked={field.value ?? false}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="prevent_cancellation"
+                      render={({ field }) => (
+                        <CheckboxField
+                          label="Förhindra avbokning"
+                          checked={field.value ?? false}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* ── Education ───────────────────────────────────────────────── */}
-            <Separator />
-            <div className="space-y-4">
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Utbildning
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={form.control}
-                  name="status"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Status</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value ?? ''}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Välj status..." />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {STUDENT_STATUS_OPTIONS.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="target_licence_category"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Behörighet</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value ?? ''}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Välj behörighet..." />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {LICENCE_CATEGORIES.map((cat) => (
-                            <SelectItem key={cat} value={cat}>
-                              {cat}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </div>
-
-            {/* ── Submit ──────────────────────────────────────────────────── */}
-            <div className="flex justify-end gap-3 pt-2">
+            {/* ── Footer ───────────────────────────────────────────────────── */}
+            <div className="px-6 py-4 border-t border-border flex justify-end gap-3">
               <Button
                 type="button"
                 variant="outline"
@@ -332,12 +713,12 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
               <Button type="submit" disabled={isPending}>
                 {isPending
                   ? (isEdit ? 'Sparar...' : 'Skapar...')
-                  : (isEdit ? 'Spara ändringar' : 'Skapa elev')}
+                  : (isEdit ? 'Spara ändringar' : 'Skapa')}
               </Button>
             </div>
           </form>
         </Form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

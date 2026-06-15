@@ -1,6 +1,9 @@
 -- =============================================================================
 -- BOOTSTRAP: First Organization Administrator
 --
+-- USE THIS FILE FOR: production / staging / new Supabase project instances
+-- FOR LOCAL DEV:     use `supabase db reset` — supabase/seed.sql runs automatically
+--
 -- Prerequisites:
 --   1. All migrations applied (supabase start, or db push --linked)
 --   2. Auth user created in Dashboard → Authentication → Users → Add User
@@ -10,13 +13,17 @@
 -- This script is safe to re-run. Guards prevent double-bootstrap.
 -- Failed manual INSERTs are rolled back atomically — no cleanup needed.
 -- Profiles are GLOBAL (no organization_id). Tenant scoping is via memberships.
+--
+-- LOCAL DEV STABLE UUID: 0b21a25a-a41a-4854-8407-509b320c9baf
+--   (matches supabase/seed.sql — use this UUID for local dev manual runs)
 -- =============================================================================
 
 DO $$
 DECLARE
   -- ─── CONFIGURE THESE VALUES ───────────────────────────────────────────────
   -- Auth user UUID from Dashboard → Authentication → Users
-  v_user_id          uuid := '388776a2-fecc-4058-9846-dae6dbe6aeda';
+  -- For local dev after db reset: use 0b21a25a-a41a-4854-8407-509b320c9baf
+  v_user_id          uuid := '0b21a25a-a41a-4854-8407-509b320c9baf';
 
   -- Must match the email used when creating the auth user in the Dashboard
   v_user_email       text := 'admin@trafikskola.se';

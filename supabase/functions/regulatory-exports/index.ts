@@ -1,4 +1,4 @@
-/**
+﻿/**
  * regulatory-exports — AGI export generation, integrity verification, and audit exports.
  *
  * Routes:
@@ -17,6 +17,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -56,7 +58,7 @@ function isUuid(s: string | null): s is string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   const authHeader = req.headers.get('Authorization') ?? '';
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const anonKey    = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
@@ -65,10 +67,11 @@ Deno.serve(async (req: Request) => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error: authError } = await client.auth.getUser();
-  if (authError || !user) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authError } = await client.auth.getUser();
+  if (authError || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (!orgId) return err('No organization context', 403, 'NO_ORG_CONTEXT');
 
   const method = req.method.toUpperCase();
@@ -208,4 +211,4 @@ Deno.serve(async (req: Request) => {
     const message = e instanceof Error ? e.message : 'Internal server error';
     return err(message, 500, 'INTERNAL_ERROR');
   }
-});
+}));

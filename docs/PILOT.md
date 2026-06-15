@@ -24,28 +24,31 @@ Use this checklist for every controlled pilot deployment. Work through each sect
 
 ## Supabase Setup
 
-### Stack startup
-- [ ] `supabase start` completed successfully
-- [ ] API URL is `http://127.0.0.1:54321`
-- [ ] Studio is accessible at `http://127.0.0.1:54323`
+This project uses **hosted Supabase** (project ref: `ulgsndzfksphquqakelq`). No local Docker stack required.
+
+### Project connection
+- [ ] `apps/web/.env.local` has `VITE_SUPABASE_URL=https://ulgsndzfksphquqakelq.supabase.co`
+- [ ] `apps/web/.env.local` has the correct `VITE_SUPABASE_ANON_KEY` (from Dashboard → Settings → API)
 
 ### Migrations
-- [ ] `supabase db push` completed without errors
-- [ ] `supabase migration list` shows all migrations as Applied
+- [ ] `supabase link --project-ref ulgsndzfksphquqakelq` completed
+- [ ] `supabase db push --linked` completed without errors
+- [ ] `supabase migration list --linked` shows all migrations as Applied
 - [ ] No "ERROR" lines in the migration output
 
-### Secrets
-- [ ] `supabase/functions/.env` exists (gitignored, must be created manually)
-- [ ] `AUTH_HOOK_SECRET` is set with the `v1,whsec_<base64>` format
-- [ ] `WORKER_SECRET` is set to a random string
+### Edge Functions & Secrets
+- [ ] Edge Functions deployed: `supabase functions deploy --project-ref ulgsndzfksphquqakelq`
+- [ ] `AUTH_HOOK_SECRET` set on hosted project (format: `v1,whsec_<base64>`)
+- [ ] `WORKER_SECRET` set on hosted project
+- [ ] Secrets verified: `supabase secrets list --project-ref ulgsndzfksphquqakelq`
 
 ---
 
 ## Auth Hook
 
-- [ ] `supabase functions serve --env-file supabase/functions/.env` is running
-- [ ] No startup errors in the Edge Function serve output
-- [ ] `config.toml` `[auth.hook.custom_access_token]` `enabled = true`
+- [ ] Auth hook configured in Dashboard → Authentication → Hooks → Custom Access Token Hook
+- [ ] Hook URI: `https://ulgsndzfksphquqakelq.supabase.co/functions/v1/auth-hook`
+- [ ] Hook secret matches the `AUTH_HOOK_SECRET` set above
 
 **Validation:** Sign in with the pilot user and decode the JWT (see below). Confirm no `auth_degraded` flag is present.
 
@@ -159,7 +162,7 @@ Walk through each module and verify it loads without errors:
 
 - [ ] Manual invocation works:
   ```bash
-  curl -s -X POST http://127.0.0.1:54321/functions/v1/event-worker \
+  curl -s -X POST https://ulgsndzfksphquqakelq.supabase.co/functions/v1/event-worker \
     -H "Authorization: Bearer <WORKER_SECRET>" \
     -H "Content-Type: application/json" \
     -d '{}'

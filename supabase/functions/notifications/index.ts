@@ -1,4 +1,4 @@
-/**
+﻿/**
  * notifications — Notification management API.
  *
  * Routes:
@@ -11,6 +11,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,7 +62,7 @@ function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: s
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'notifications:read')) {
+  if (!hasPermission(user, 'notifications:notification:read')) {
     return err('Forbidden', 403, 'FORBIDDEN');
   }
 
@@ -105,7 +107,7 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleCreate(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'notifications:write')) {
+  if (!hasPermission(user, 'notifications:notification:create')) {
     return err('Forbidden', 403, 'FORBIDDEN');
   }
 
@@ -158,7 +160,7 @@ async function handleCreate(req: Request, client: any, orgId: string, user: any)
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleGetOne(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'notifications:read')) {
+  if (!hasPermission(user, 'notifications:notification:read')) {
     return err('Forbidden', 403, 'FORBIDDEN');
   }
 
@@ -176,7 +178,7 @@ async function handleGetOne(id: string, client: any, orgId: string, user: any): 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleCancel(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'notifications:write')) {
+  if (!hasPermission(user, 'notifications:notification:create')) {
     return err('Forbidden', 403, 'FORBIDDEN');
   }
 
@@ -263,7 +265,7 @@ async function handleUpsertPreference(req: Request, client: any, orgId: string, 
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const anonKey     = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
   const authHeader  = req.headers.get('Authorization') ?? '';
@@ -272,12 +274,13 @@ Deno.serve(async (req: Request) => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || user === null) {
+  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
+  if (authErr !== null || rawUser === null) {
     return err('Unauthorized', 401, 'UNAUTHORIZED');
   }
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (orgId === null) {
     return err('No organization context', 400, 'NO_ORG_CONTEXT');
   }
@@ -311,4 +314,4 @@ Deno.serve(async (req: Request) => {
   }
 
   return err('Not found', 404);
-});
+}));

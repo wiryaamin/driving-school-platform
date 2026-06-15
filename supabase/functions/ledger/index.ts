@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ledger — Double-entry accounting ledger operations.
  *
  * Routes:
@@ -21,6 +21,8 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { serveCors } from '../_shared/cors.ts';
+import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,7 +70,7 @@ function handlePgError(e: { message?: string }, prefix: string): Response | null
   return null;
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => serveCors(req, async () => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       headers: {
@@ -88,10 +90,11 @@ Deno.serve(async (req: Request) => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
+  const user = enrichUserFromJwt(req, rawUser);
 
-  const orgId = getOrgId(user);
+  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
   if (!orgId) return err('No organization context', 403, 'NO_ORG');
 
   const { seg1, seg2, seg3 } = parsePath(req);
@@ -434,4 +437,4 @@ Deno.serve(async (req: Request) => {
     console.error('[ledger]', msg);
     return err('Internal server error', 500, 'INTERNAL_ERROR');
   }
-});
+}));
