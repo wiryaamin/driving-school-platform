@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { Button } from '@platform/ui';
@@ -54,7 +54,7 @@ export function LegalSettingsPage() {
           ...currentSettings,
           legal: { ...currentLegal, [field]: content[field] ?? '' },
         },
-      }).eq('id', orgId);
+      } as never).eq('id', orgId);
     } finally {
       setSaving(null);
     }

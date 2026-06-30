@@ -1,15 +1,23 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface OrgLocation {
-  id:           string;
-  name:         string;
+  id:            string;
+  name:          string;
   address_line1: string;
-  postal_code:  string;
-  city:         string;
-  is_primary:   boolean;
+  postal_code:   string;
+  city:          string;
+  is_primary:    boolean;
+}
+
+export interface CreateLocationInput {
+  name:          string;
+  address_line1: string;
+  postal_code:   string;
+  city:          string;
+  is_primary:    boolean;
 }
 
 // ─── Query key ────────────────────────────────────────────────────────────────
@@ -19,7 +27,7 @@ export const locationKeys = {
   list: () => [...locationKeys.all, 'list'] as const,
 };
 
-// ─── API helper ───────────────────────────────────────────────────────────────
+// ─── Fetch ────────────────────────────────────────────────────────────────────
 
 async function fetchLocations(): Promise<OrgLocation[]> {
   const { data, error } = await supabase
@@ -32,13 +40,48 @@ async function fetchLocations(): Promise<OrgLocation[]> {
   return (data ?? []) as unknown as OrgLocation[];
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
+// ─── Create ───────────────────────────────────────────────────────────────────
+
+async function createLocation(input: CreateLocationInput): Promise<void> {
+  const { error } = await supabase
+    .from('organization_locations')
+    .insert(input as never);
+  if (error) throw new Error(error.message);
+}
+
+// ─── Soft delete ──────────────────────────────────────────────────────────────
+
+async function deleteLocation(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('organization_locations')
+    .update({ deleted_at: new Date().toISOString() } as never)
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ─── Hooks ────────────────────────────────────────────────────────────────────
 
 export function useLocations() {
   return useQuery({
     queryKey: locationKeys.list(),
     queryFn:  fetchLocations,
     staleTime: 10 * 60_000,
+  });
+}
+
+export function useCreateLocation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: createLocation,
+    onSuccess:  () => qc.invalidateQueries({ queryKey: locationKeys.list() }),
+  });
+}
+
+export function useDeleteLocation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteLocation,
+    onSuccess:  () => qc.invalidateQueries({ queryKey: locationKeys.list() }),
   });
 }
 

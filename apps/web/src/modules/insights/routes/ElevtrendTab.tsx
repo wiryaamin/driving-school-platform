@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@platform/ui';
-import { useInsightsTrends } from '../hooks/useInsightsTrends.js';
+import { useInsightsTrends, useCategoryTrend } from '../hooks/useInsightsTrends.js';
+import { useLicenceCategories } from '@modules/classlist/hooks/useClassList.js';
 import { SvgLineChart } from '../components/SvgLineChart.js';
 import { cn } from '@/lib/utils.js';
 
@@ -39,14 +40,26 @@ export function ElevtrendTab() {
   const [activeYear,   setActiveYear]   = useState(currentYear);
   const [activeMonth,  setActiveMonth]  = useState(0);
 
+  // Comparison category — 'none' means no second series
+  const [comparisonCategory, setComparisonCategory] = useState('none');
+
   function handleUpdate() {
     setActiveYear(parseInt(pendingYear, 10));
     setActiveMonth(parseInt(pendingMonth, 10));
   }
 
   const { data, isLoading, error } = useInsightsTrends(activeYear, activeMonth);
+  const { data: categories = [] }   = useLicenceCategories();
+  const { data: catPoints, isLoading: catLoading } = useCategoryTrend(
+    activeYear,
+    activeMonth,
+    comparisonCategory,
+  );
 
-  const chartData = (data?.monthPoints ?? []).map((p) => ({ label: p.label, value: p.count }));
+  const chartData  = (data?.monthPoints ?? []).map((p) => ({ label: p.label, value: p.count }));
+  const chartData2 = catPoints ? catPoints.map((p) => ({ label: p.label, value: p.count })) : undefined;
+
+  const selectedCatLabel = categories.find((c) => c === comparisonCategory) ?? comparisonCategory;
 
   return (
     <div className="space-y-6">
@@ -121,15 +134,35 @@ export function ElevtrendTab() {
               )}
             </div>
 
-            {/* Behörighetsjämförelse placeholder */}
+            {/* Behörighetsjämförelse — now wired */}
             <div className="bg-card border border-border rounded-lg p-4">
               <p className="text-xs text-muted-foreground font-medium">Behörighetsjämförelse</p>
-              <p className="text-sm font-semibold text-foreground mt-3">
-                Välj en behörighet för att visa en egen trendlinje i grafen.
+              <p className="text-xs text-muted-foreground mt-1 mb-3">
+                Välj en behörighet för att lägga till en jämförelselinje i grafen.
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Jämförelser per behörighet visas längre ned på sidan.
-              </p>
+              <Select value={comparisonCategory} onValueChange={setComparisonCategory}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Välj behörighet…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Ingen jämförelse</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {comparisonCategory !== 'none' && !catLoading && catPoints && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-sm font-semibold text-foreground">{selectedCatLabel}</p>
+                  <p className="text-2xl font-bold text-amber-500 mt-0.5">
+                    {catPoints[catPoints.length - 1]?.count ?? 0}
+                  </p>
+                  <p className="text-xs text-muted-foreground">aktiva elever (senaste månaden)</p>
+                </div>
+              )}
+              {comparisonCategory !== 'none' && catLoading && (
+                <div className="mt-3 h-6 bg-muted rounded animate-pulse" />
+              )}
             </div>
           </div>
 
@@ -144,7 +177,12 @@ export function ElevtrendTab() {
                 <p className="text-sm text-muted-foreground">Laddar…</p>
               </div>
             ) : (
-              <SvgLineChart data={chartData} />
+              <SvgLineChart
+                data={chartData}
+                data2={chartData2}
+                legendLabel="Alla elever"
+                legend2Label={comparisonCategory !== 'none' ? selectedCatLabel : undefined}
+              />
             )}
           </div>
 
@@ -157,12 +195,40 @@ export function ElevtrendTab() {
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {(data?.categoryStats ?? []).map((cat) => (
-                  <div key={cat.category} className="bg-card border border-border rounded-lg p-4">
+                  <div
+                    key={cat.category}
+                    className={cn(
+                      'bg-card border rounded-lg p-4 cursor-pointer transition-colors hover:bg-muted/20',
+                      comparisonCategory === cat.category
+                        ? 'border-amber-400 dark:border-amber-600 ring-1 ring-amber-400/30'
+                        : 'border-border',
+                    )}
+                    onClick={() =>
+                      setComparisonCategory((prev) =>
+                        prev === cat.category ? 'none' : cat.category,
+                      )
+                    }
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) =>
+                      e.key === 'Enter' &&
+                      setComparisonCategory((prev) =>
+                        prev === cat.category ? 'none' : cat.category,
+                      )
+                    }
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-sm font-semibold text-foreground">{cat.category}</p>
-                      <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                        {activeYear}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {comparisonCategory === cat.category && (
+                          <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded">
+                            Jämförs
+                          </span>
+                        )}
+                        <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                          {activeYear}
+                        </span>
+                      </div>
                     </div>
                     <p className="text-2xl font-bold text-foreground">{cat.current}</p>
                     <div className="space-y-1 mt-3 pt-2 border-t border-border">

@@ -1,5 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import type { LessonBooking } from '@platform/types';
+import { bookingKeys } from './useBookings.js';
+import { slotKeys } from './useSlots.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +32,7 @@ export interface WaitlistStudentRef {
   id:         string;
   first_name: string;
   last_name:  string;
+  phone:      string | null;
 }
 
 export interface WaitlistSlotRef {
@@ -106,7 +110,7 @@ async function apiFetchWaitlistList(params: WaitlistListParams): Promise<Waitlis
       `id, organization_id, slot_id, student_id, priority, status,
        status_changed_at, expires_at, promoted_booking_id, notified_at,
        reservation_deadline, notes, created_at, updated_at,
-       students ( id, first_name, last_name ),
+       students ( id, first_name, last_name, phone ),
        lesson_slots ( id, starts_at, ends_at, instructor_id, lesson_type_id )`,
       { count: 'exact' }
     )
@@ -126,5 +130,106 @@ export function useWaitlistList(params: WaitlistListParams = {}) {
     queryKey: waitlistKeys.list(params),
     queryFn:  () => apiFetchWaitlistList(params),
     staleTime: 30_000,
+  });
+}
+
+// ─── Promote from waitlist → booking ─────────────────────────────────────────
+
+export interface PromoteFromWaitlistInput {
+  waitlistEntryId: string;
+  slotId:          string;
+  studentId:       string;
+}
+
+async function apiPromoteFromWaitlist(input: PromoteFromWaitlistInput): Promise<LessonBooking> {
+  // Step 1: create the booking via Edge Function (enforces capacity + RBAC)
+  const { data: bookingData, error: bookingError } = await supabase.functions.invoke<{ data: LessonBooking }>('bookings', {
+    method: 'POST',
+    body:   { slot_id: input.slotId, student_id: input.studentId },
+  });
+  if (bookingError) throw bookingError;
+  if (!bookingData?.data) throw new Error('Inget svar från servern');
+  const booking = bookingData.data;
+
+  // Step 2: mark the waitlist entry as promoted (best-effort — booking already exists)
+  await supabase
+    .from('waitlist_entries')
+    .update({
+      status:               'promoted',
+      promoted_booking_id:  booking.id,
+      status_changed_at:    new Date().toISOString(),
+    } as never)
+    .eq('id', input.waitlistEntryId);
+
+  return booking;
+}
+
+export function usePromoteFromWaitlist() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiPromoteFromWaitlist,
+    onSuccess: (_data, { slotId }) => {
+      void queryClient.invalidateQueries({ queryKey: waitlistKeys.all });
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slotId) });
+      void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slotId) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+// ─── Add to waitlist ─────────────────────────────────────────────────────────
+
+export interface AddToWaitlistInput {
+  slot_id:     string;
+  student_id:  string;
+  notes?:      string;
+  expires_at?: string;
+}
+
+async function apiAddToWaitlist(input: AddToWaitlistInput): Promise<WaitlistEntry> {
+  const { data, error } = await supabase
+    .from('waitlist_entries')
+    .insert({
+      slot_id:    input.slot_id,
+      student_id: input.student_id,
+      status:     'waiting',
+      priority:   1,
+      ...(input.notes      ? { notes:      input.notes      } : {}),
+      ...(input.expires_at ? { expires_at: input.expires_at } : {}),
+    } as never)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data as WaitlistEntry;
+}
+
+export function useAddToWaitlist() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiAddToWaitlist,
+    onSuccess: (_data, { slot_id }) => {
+      void queryClient.invalidateQueries({ queryKey: waitlistKeys.all });
+      void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });
+    },
+  });
+}
+
+// ─── Mark waitlist entry as notified ─────────────────────────────────────────
+
+async function apiMarkWaitlistNotified(entryId: string): Promise<void> {
+  const { error } = await supabase
+    .from('waitlist_entries')
+    .update({ notified_at: new Date().toISOString() } as never)
+    .eq('id', entryId);
+  if (error) throw new Error(error.message);
+}
+
+export function useMarkWaitlistNotified() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiMarkWaitlistNotified,
+    onSuccess:  () => void queryClient.invalidateQueries({ queryKey: waitlistKeys.all }),
   });
 }

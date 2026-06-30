@@ -7,6 +7,7 @@ import { useCorporateList } from '../hooks/useCorporateCustomers.js';
 import type { CorporateCustomer, CorporateCustomerStatus } from '../hooks/useCorporateCustomers.js';
 import { cn } from '@/lib/utils.js';
 import { CorporateCreateDialog } from './CorporateCreatePage.js';
+import { PhoneLink } from '@shared/components/PhoneLink.js';
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -75,9 +76,11 @@ function buildColumns(): ColumnDef<CorporateCustomer>[] {
     {
       id: 'contact_phone',
       header: 'Telefon',
-      cell: ({ row }) => (
-        <span className="text-sm text-muted-foreground">{row.original.contact_phone ?? '—'}</span>
-      ),
+      cell: ({ row }) => {
+        const phone = row.original.contact_phone;
+        if (!phone) return <span className="text-sm text-muted-foreground/40">—</span>;
+        return <PhoneLink phone={phone} />;
+      },
       enableSorting: false,
     },
     {

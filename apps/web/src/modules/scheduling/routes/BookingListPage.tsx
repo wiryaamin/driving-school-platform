@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
-import { Link2, CalendarPlus, Copy, FileDown, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Search, Clock, FileText, CreditCard, User, Eye } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Link2, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react';
 import { Skeleton } from '@platform/ui';
 import { useSlotList } from '../hooks/useSlots.js';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useInstructorList } from '@modules/instructors/index.js';
+import { useVehicles } from '@modules/resources/index.js';
 import { SlotDetailSheet } from '../components/SlotDetailSheet.js';
+import { SchedulingActionToolbar } from '../components/SchedulingActionToolbar.js';
 import { cn } from '@/lib/utils.js';
 import type { LessonSlot } from '@platform/types';
 
@@ -61,6 +64,37 @@ function rowHighlight(slot: LessonSlot): string {
   return '';
 }
 
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+const STATUS_LABEL: Record<string, string> = {
+  open:        'Öppen',
+  full:        'Full',
+  in_progress: 'Pågår',
+  completed:   'Genomförd',
+  cancelled:   'Avbokad',
+  blocked:     'Blockerad',
+};
+
+const STATUS_CLS: Record<string, string> = {
+  open:        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  full:        'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  in_progress: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  completed:   'bg-muted text-muted-foreground',
+  cancelled:   'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+  blocked:     'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500',
+};
+
+function SlotStatusBadge({ status }: { status: string }) {
+  return (
+    <span className={cn(
+      'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap',
+      STATUS_CLS[status] ?? 'bg-muted text-muted-foreground',
+    )}>
+      {STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
+
 // ─── Sort header cell ─────────────────────────────────────────────────────────
 
 function SortTh({
@@ -95,47 +129,6 @@ function SortTh({
   );
 }
 
-// ─── Action toolbar (matching Bokningsschema) ─────────────────────────────────
-
-function ActionToolbar() {
-  return (
-    <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 bg-muted/40 border-b border-border">
-      <div className="flex items-center gap-1">
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
-          <Search className="w-3 h-3" />
-          Sök efter kund
-        </button>
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors">
-          <User className="w-3 h-3" />
-          Ingen kund vald
-        </button>
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors">
-          <Eye className="w-3 h-3" />
-          Ingen kund vald
-        </button>
-      </div>
-      <div className="w-px h-5 bg-border mx-1 hidden sm:block" />
-      <div className="flex items-center gap-1">
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
-          <Clock className="w-3 h-3" />
-          Hitta ledig tid
-        </button>
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
-          <FileText className="w-3 h-3" />
-          Bokningar
-        </button>
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
-          <CreditCard className="w-3 h-3" />
-          Kassa
-        </button>
-        <button className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors">
-          <User className="w-3 h-3" />
-          Kundkort
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ─── BookingListPage ──────────────────────────────────────────────────────────
 
@@ -144,8 +137,12 @@ const PER_PAGE = 25;
 type SortField = 'starts_at' | 'lesson_type' | 'instructor' | 'bookings';
 
 export function BookingListPage() {
+  const navigate = useNavigate();
+
   // ── Filters ────────────────────────────────────────────────────────────────
   const [instructorFilter, setInstructorFilter] = useState('');
+  const [statusFilter,     setStatusFilter]     = useState('');
+  const [vehicleFilter,    setVehicleFilter]    = useState('');
   const [fromDate, setFromDate]                 = useState('');
   const [toDate,   setToDate]                   = useState('');
   const [page,     setPage]                     = useState(1);
@@ -161,6 +158,7 @@ export function BookingListPage() {
   const instructors = instructorsData?.data ?? [];
 
   const { data: lessonTypes = [] } = useLessonTypes();
+  const { data: vehicles    = [] } = useVehicles();
 
   const instructorMap = useMemo(
     () => Object.fromEntries(instructors.map(i => [i.id, i])),
@@ -169,6 +167,10 @@ export function BookingListPage() {
   const lessonTypeMap = useMemo(
     () => Object.fromEntries(lessonTypes.map(lt => [lt.id, lt])),
     [lessonTypes],
+  );
+  const vehicleMap = useMemo(
+    () => Object.fromEntries(vehicles.map(v => [v.id, v])),
+    [vehicles],
   );
 
   // ── Default date range: today → +6 months ─────────────────────────────────
@@ -189,8 +191,10 @@ export function BookingListPage() {
   const apiTo   = toDate   ? `${toDate}T23:59:59.999Z`   : defaultTo;
 
   // ── Slots query ────────────────────────────────────────────────────────────
-  const apiSortBy  = sortField === 'starts_at' ? 'starts_at' : 'starts_at';
-  const apiSortDir = sortDir;
+  // API only supports starts_at sort; computed columns (lesson_type, instructor,
+  // bookings) are sorted client-side after the page is fetched.
+  const apiSortBy  = 'starts_at';
+  const apiSortDir = sortField === 'starts_at' ? sortDir : 'asc';
 
   const { data: slotsData, isLoading } = useSlotList({
     page,
@@ -200,6 +204,8 @@ export function BookingListPage() {
     from:     apiFrom,
     to:       apiTo,
     ...(instructorFilter ? { instructor_id: instructorFilter } : {}),
+    ...(vehicleFilter    ? { vehicle_id:    vehicleFilter    } : {}),
+    ...(statusFilter     ? { status: statusFilter as LessonSlot['status'] } : {}),
   });
 
   const rawSlots = slotsData?.data ?? [];
@@ -254,7 +260,7 @@ export function BookingListPage() {
       <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
 
         {/* Action toolbar */}
-        <ActionToolbar />
+        <SchedulingActionToolbar onNavigate={navigate} />
 
         {/* Filter row */}
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-muted/20 border-b border-border shrink-0">
@@ -270,9 +276,31 @@ export function BookingListPage() {
             ))}
           </select>
 
-          {/* Tidmallsgrupp (placeholder) */}
-          <select className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
-            <option>Filtrera på tidmallsgrupp</option>
+          {/* Fordon */}
+          <select
+            value={vehicleFilter}
+            onChange={(e) => { setVehicleFilter(e.target.value); setPage(1); }}
+            className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">Alla fordon</option>
+            {vehicles.map(v => (
+              <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
+            ))}
+          </select>
+
+          {/* Status */}
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">Alla statusar</option>
+            <option value="open">Öppen</option>
+            <option value="full">Full</option>
+            <option value="in_progress">Pågår</option>
+            <option value="completed">Genomförd</option>
+            <option value="cancelled">Avbokad</option>
+            <option value="blocked">Blockerad</option>
           </select>
 
           {/* Startdatum */}
@@ -304,9 +332,9 @@ export function BookingListPage() {
           </div>
 
           {/* Clear filters */}
-          {(instructorFilter || fromDate || toDate) && (
+          {(instructorFilter || vehicleFilter || statusFilter || fromDate || toDate) && (
             <button
-              onClick={() => { setInstructorFilter(''); setFromDate(''); setToDate(''); setPage(1); }}
+              onClick={() => { setInstructorFilter(''); setVehicleFilter(''); setStatusFilter(''); setFromDate(''); setToDate(''); setPage(1); }}
               className="h-7 px-2 text-xs text-muted-foreground border border-border rounded hover:bg-accent transition-colors"
             >
               Rensa filter
@@ -316,24 +344,23 @@ export function BookingListPage() {
 
         {/* Table */}
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-xs border-collapse min-w-[900px]">
+          <table className="w-full text-xs border-collapse min-w-[1020px]">
             <thead className="sticky top-0 z-10 bg-card border-b-2 border-border">
               <tr>
                 {/* Status indicator column */}
                 <th className="w-5 px-1 py-2.5" />
-                {/* Checkbox */}
-                <th className="w-8 px-2 py-2.5">
-                  <input type="checkbox" className="w-3.5 h-3.5 rounded accent-primary" />
-                </th>
-                <SortTh label="Internt namn"       field="lesson_type"  current={sortField} dir={sortDir} onClick={handleSort} />
-                <SortTh label="Vecka"              field="starts_at"    current={sortField} dir={sortDir} onClick={handleSort} />
-                <SortTh label="Datum"              field="starts_at"    current={sortField} dir={sortDir} onClick={handleSort} />
-                <SortTh label="Lärare"             field="instructor"   current={sortField} dir={sortDir} onClick={handleSort} />
+                <SortTh label="Internt namn" field="lesson_type" current={sortField} dir={sortDir} onClick={handleSort} />
                 <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
-                  Bokningar
+                  Vecka
                 </th>
+                <SortTh label="Datum" field="starts_at" current={sortField} dir={sortDir} onClick={handleSort} />
+                <SortTh label="Lärare"       field="instructor"   current={sortField} dir={sortDir} onClick={handleSort} />
                 <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
-                  Transportstyrelsen
+                  Fordon
+                </th>
+                <SortTh label="Bokningar"    field="bookings"     current={sortField} dir={sortDir} onClick={handleSort} />
+                <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
+                  Status
                 </th>
                 <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">
                   Anteckningar
@@ -348,11 +375,11 @@ export function BookingListPage() {
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i} className="border-b border-border/50">
                     <td className="w-5 py-3" />
-                    <td className="px-2 py-3"><Skeleton className="h-3.5 w-3.5" /></td>
                     <td className="px-3 py-3"><Skeleton className="h-3.5 w-28" /></td>
                     <td className="px-3 py-3"><Skeleton className="h-3.5 w-8"  /></td>
                     <td className="px-3 py-3"><Skeleton className="h-3.5 w-52" /></td>
                     <td className="px-3 py-3"><Skeleton className="h-3.5 w-16" /></td>
+                    <td className="px-3 py-3"><Skeleton className="h-3.5 w-20" /></td>
                     <td className="px-3 py-3"><Skeleton className="h-3.5 w-10" /></td>
                     <td className="px-3 py-3" />
                     <td className="px-3 py-3" />
@@ -386,11 +413,6 @@ export function BookingListPage() {
                         <div className={cn('w-1.5 h-full min-h-[40px]', statusDot(slot))} />
                       </td>
 
-                      {/* Checkbox */}
-                      <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className="w-3.5 h-3.5 rounded accent-primary" />
-                      </td>
-
                       {/* Internt namn */}
                       <td className="px-3 py-3 font-medium text-foreground whitespace-nowrap">
                         <span className="flex items-center gap-1.5">
@@ -411,14 +433,22 @@ export function BookingListPage() {
 
                       {/* Lärare */}
                       <td className="px-3 py-3 text-foreground/80 whitespace-nowrap">
-                        {instructor?.first_name ?? '–'}
+                        {instructor ? `${instructor.first_name} ${instructor.last_name}` : '–'}
+                      </td>
+
+                      {/* Fordon */}
+                      <td className="px-3 py-3 text-foreground/80 whitespace-nowrap">
+                        {slot.vehicle_id && vehicleMap[slot.vehicle_id]
+                          ? `${vehicleMap[slot.vehicle_id]!.registration_number} · ${vehicleMap[slot.vehicle_id]!.make} ${vehicleMap[slot.vehicle_id]!.model}`
+                          : <span className="text-muted-foreground/30 text-[10px]">–</span>
+                        }
                       </td>
 
                       {/* Bokningar */}
                       <td className="px-3 py-3">
                         <span className={cn(
-                          'font-semibold',
-                          isFull   ? 'text-red-600 dark:text-red-400' :
+                          'font-semibold tabular-nums',
+                          isFull      ? 'text-red-600 dark:text-red-400' :
                           hasBookings ? 'text-amber-600 dark:text-amber-400' :
                           'text-muted-foreground',
                         )}>
@@ -426,9 +456,9 @@ export function BookingListPage() {
                         </span>
                       </td>
 
-                      {/* Transportstyrelsen */}
-                      <td className="px-3 py-3 text-muted-foreground/30 text-[10px]">
-                        –
+                      {/* Status */}
+                      <td className="px-3 py-3">
+                        <SlotStatusBadge status={slot.status} />
                       </td>
 
                       {/* Anteckningar */}
@@ -436,28 +466,7 @@ export function BookingListPage() {
                         {slot.notes ? (
                           <span className="text-xs truncate max-w-[120px] block">{slot.notes}</span>
                         ) : (
-                          isFull && (
-                            <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                className="p-1 rounded hover:bg-muted text-muted-foreground/60 hover:text-foreground transition-colors"
-                                title="Lägg till i kalender"
-                              >
-                                <CalendarPlus className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                className="p-1 rounded hover:bg-muted text-muted-foreground/60 hover:text-foreground transition-colors"
-                                title="Kopiera"
-                              >
-                                <Copy className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                className="p-1 rounded hover:bg-muted text-muted-foreground/60 hover:text-foreground transition-colors"
-                                title="Exportera"
-                              >
-                                <FileDown className="w-3.5 h-3.5" />
-                              </button>
-                            </span>
-                          )
+                          <span className="text-muted-foreground/30 text-[10px]">–</span>
                         )}
                       </td>
 

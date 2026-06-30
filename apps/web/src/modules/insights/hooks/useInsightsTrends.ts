@@ -45,6 +45,7 @@ export function useInsightsTrends(year: number, month: number) {
     queryKey: trendsKey(year, month),
     queryFn: async (): Promise<TrendsData> => {
       // Fetch all non-deleted students with enrolled_at or created_at
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as unknown as any)
         .from('students')
         .select('id, target_licence_category, status, enrolled_at, created_at, deleted_at')
@@ -154,5 +155,50 @@ export function useInsightsTrends(year: number, month: number) {
       };
     },
     staleTime: 120_000,
+  });
+}
+
+// ─── Category-specific monthly trend ─────────────────────────────────────────
+
+export function useCategoryTrend(year: number, month: number, category: string) {
+  return useQuery({
+    queryKey: ['insights', 'category-trend', year, month, category] as const,
+    enabled:  Boolean(category) && category !== 'none',
+    staleTime: 120_000,
+    queryFn: async (): Promise<MonthPoint[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('students')
+        .select('id, enrolled_at, created_at')
+        .eq('target_licence_category', category)
+        .is('deleted_at', null)
+        .not('status', 'in', '("archived","withdrawn")');
+
+      if (error) throw new Error(error.message);
+
+      const students = (data ?? []) as { id: string; enrolled_at: string | null; created_at: string }[];
+
+      function countActiveAtMonth(y: number, m: number): number {
+        const endOfMonth = new Date(y, m, 0, 23, 59, 59);
+        return students.filter((s) => {
+          const enrollDate = new Date(s.enrolled_at ?? s.created_at);
+          return enrollDate <= endOfMonth;
+        }).length;
+      }
+
+      const now      = new Date();
+      const maxMonth = year === now.getFullYear() ? now.getMonth() + 1 : 12;
+      const endMonth = month === 0 ? maxMonth : Math.min(month, maxMonth);
+
+      const points: MonthPoint[] = [];
+      for (let m = 1; m <= endMonth; m++) {
+        points.push({
+          label: SV_MONTHS[m - 1] ?? '',
+          month: m,
+          count: countActiveAtMonth(year, m),
+        });
+      }
+      return points;
+    },
   });
 }

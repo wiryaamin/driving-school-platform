@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
-import { ChevronRight, FileSignature, FileText, CreditCard, Activity, Smartphone } from 'lucide-react';
+﻿import { Link } from 'react-router-dom';
+import { ChevronRight, FilePenLine, FileText, CreditCard, Activity, Smartphone } from 'lucide-react';
 import { Button } from '@platform/ui';
 
 const FEATURES = [
@@ -26,7 +26,7 @@ export function DigitalaAvtalPage() {
       {/* Header */}
       <div className="rounded-xl border border-border bg-card p-5 flex items-center gap-4">
         <div className="w-12 h-12 rounded-xl bg-slate-800 text-white flex items-center justify-center shrink-0">
-          <FileSignature className="w-6 h-6" />
+          <FilePenLine className="w-6 h-6" />
         </div>
         <div className="flex-1">
           <h1 className="text-base font-semibold text-foreground">Digitala avtal</h1>

@@ -9,7 +9,7 @@ import { formatCapacity, isSlotFull } from '../lib/calendarUtils.js';
 
 interface SlotEventCardProps {
   slot:           LessonSlot;
-  instructorName?: string;
+  instructorName?: string | undefined;
 }
 
 export function SlotEventCard({ slot, instructorName }: SlotEventCardProps) {

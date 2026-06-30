@@ -1,7 +1,7 @@
-import { Link } from 'react-router-dom';
+﻿import { Link } from 'react-router-dom';
 import {
   ChevronRight, MessageSquare, GraduationCap, MessageCircle,
-  User, BarChart2, PenLine, FileText, AlertCircle, Info,
+  User, ChartBar, PenLine, FileText, AlertCircle, Info,
 } from 'lucide-react';
 import { Button } from '@platform/ui';
 
@@ -9,7 +9,7 @@ const FEATURES = [
   { icon: GraduationCap, title: 'Kursutvärdering',    desc: 'Utvärdera utbildningskvaliteten efter genomförd kurs eller uppkörning',          bg: 'bg-blue-100   text-blue-500'   },
   { icon: MessageCircle, title: 'Servicefeedback',    desc: 'Få feedback på er kundservice och administrativa processer',                       bg: 'bg-purple-100 text-purple-500' },
   { icon: User,          title: 'Körlärarvärdering',  desc: 'Låt elever utvärdera sina körlärare för att förbättra undervisningen',            bg: 'bg-green-100  text-green-500'  },
-  { icon: BarChart2,     title: 'NPS-enkäter',        desc: 'Mät kundnöjdhet med Net Promoter Score för att följa utvecklingen över tid',       bg: 'bg-orange-100 text-orange-500' },
+  { icon: ChartBar,     title: 'NPS-enkäter',        desc: 'Mät kundnöjdhet med Net Promoter Score för att följa utvecklingen över tid',       bg: 'bg-orange-100 text-orange-500' },
   { icon: PenLine,       title: 'Anpassade enkäter',  desc: 'Skapa egna enkäter för specifika ändamål och frågeställningar',                   bg: 'bg-slate-100  text-slate-500'  },
   { icon: FileText,      title: 'Avslutningsenkäter', desc: 'Samla feedback från elever som avslutat sin utbildning',                          bg: 'bg-teal-100   text-teal-500'   },
 ];

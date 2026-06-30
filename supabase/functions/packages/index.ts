@@ -1,4 +1,4 @@
-﻿/**
+/**
  * packages — Package catalog and offerings management.
  *
  * Routes:
@@ -7,29 +7,42 @@
  *   GET    /packages/:id              — get offering detail
  *   PATCH  /packages/:id              — update offering
  *   POST   /packages/:id/archive      — archive offering
+ *   POST   /packages/:id/activate     — restore archived offering to active
  *   GET    /packages/catalog          — list catalog entries
  *   POST   /packages/catalog          — create catalog entry
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { serveCors }            from '../_shared/cors.ts';
+import { buildEdgeContext }     from '../_shared/context.ts';
+import { createSupabaseClient }  from '../_shared/supabase.ts';
+import { createFunctionLogger }  from '../_shared/logger.ts';
+import type { EdgeRequestContext } from '../_shared/context.ts';
 
-const JSON_CT = { 'Content-Type': 'application/json' };
+const log     = createFunctionLogger('packages');
+const JSON_CT = { 'Content-Type': 'application/json' } as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: JSON_CT });
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function ok<T>(ctx: EdgeRequestContext, body: T, status = 200): Response {
+  return new Response(JSON.stringify({ data: body }), {
+    status,
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+  });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+
+function fail(ctx: EdgeRequestContext, status: number, code: string, message: string): Response {
+  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId }), {
+    status,
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+  });
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+
+function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
+  return null;
 }
 
 function extractPathParts(req: Request): { id: string | null; action: string | null } {
@@ -39,53 +52,69 @@ function extractPathParts(req: Request): { id: string | null; action: string | n
   if (after.length === 0) return { id: null, action: null };
   const first = after[0] ?? '';
   if (UUID_RE.test(first)) return { id: first, action: after[1] ?? null };
-  return { id: null, action: first };  // e.g. 'catalog'
+  return { id: null, action: first };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleListOfferings(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:read')) return err('Forbidden', 403, 'FORBIDDEN');
+// ─── Route handlers ───────────────────────────────────────────────────────────
 
-  const url      = new URL(req.url);
-  const page     = Number(url.searchParams.get('page')     ?? '1');
-  const perPage  = Number(url.searchParams.get('per_page') ?? '25');
-  const from     = (page - 1) * perPage;
-  const to       = from + perPage - 1;
-  const status   = url.searchParams.get('status') ?? 'active';
-  const category = url.searchParams.get('lesson_category');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleListOfferings(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:read');
+  if (guard) return guard;
+
+  const url        = new URL(req.url);
+  const page       = Math.max(1, Number(url.searchParams.get('page')     ?? '1'));
+  const perPage    = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page') ?? '25')));
+  const from       = (page - 1) * perPage;
+  const to         = from + perPage - 1;
+  const status     = url.searchParams.get('status') ?? 'active';
+  const category   = url.searchParams.get('lesson_category');
+  const visibility = url.searchParams.get('visibility');
+  const featured   = url.searchParams.get('featured');
 
   // eslint-disable-next-line prefer-const
   let q = client
     .from('package_offerings')
     .select('*', { count: 'exact' })
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .order('sort_order', { ascending: true })
     .range(from, to);
 
-  if (status !== 'all') q = q.eq('status', status);
-  if (category !== null) q = q.eq('lesson_category', category);
+  if (status !== 'all')     q = q.eq('status',          status);
+  if (category !== null)    q = q.eq('lesson_category', category);
+  if (visibility !== null)  q = q.eq('visibility',      visibility);
+  if (featured === 'true')  q = q.eq('featured',        true);
 
   const { data, error, count } = await q;
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
-  return json({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0 } });
+  if (error) {
+    log.error('packages.list_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to list packages');
+  }
+
+  return new Response(
+    JSON.stringify({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0, has_more: page * perPage < (count ?? 0) } }),
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreateOffering(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:create')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreateOffering(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:create');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
 
   const { name, lesson_category, quantity, price } = body;
   if (!name || !lesson_category || !quantity || price === undefined) {
-    return err('name, lesson_category, quantity, price are required', 400, 'VALIDATION_ERROR');
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'name, lesson_category, quantity, price are required');
   }
 
   const { data, error } = await client
     .from('package_offerings')
     .insert({
-      organization_id: orgId,
+      organization_id: ctx.organizationId,
       catalog_id:      body['catalog_id']       ?? null,
       name,
       description:     body['description']      ?? null,
@@ -99,40 +128,58 @@ async function handleCreateOffering(req: Request, client: any, orgId: string, us
       validity_days:   body['validity_days']    ?? null,
       sort_order:      body['sort_order']       ?? 0,
       metadata:        body['metadata']         ?? {},
-      created_by:      user.id,
+      package_code:    body['package_code']     ?? null,
+      visibility:      body['visibility']       ?? 'internal',
+      featured:        body['featured']         ?? false,
+      internal_notes:  body['internal_notes']   ?? null,
+      created_by:      ctx.actorId,
     })
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
-  return json(data, 201);
+  if (error) {
+    log.error('packages.create_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 422, 'INTERNAL_ERROR', 'Failed to create package offering');
+  }
+
+  log.info('Package.OfferingCreated', { correlation_id: ctx.correlationId, org_id: ctx.organizationId, actor_id: ctx.actorId });
+  return ok(ctx, data, 201);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetOffering(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGetOffering(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:read');
+  if (guard) return guard;
 
   const { data, error } = await client
     .from('package_offerings')
     .select('*')
     .eq('id', id)
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
-  if (data === null) return err('Package offering not found', 404, 'NOT_FOUND');
-  return json(data);
+  if (error) {
+    log.error('packages.get_failed', { correlation_id: ctx.correlationId, error: error.message, offering_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch package offering');
+  }
+  if (data === null) return fail(ctx, 404, 'NOT_FOUND', `Package offering '${id}' not found`);
+  return ok(ctx, data);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleUpdateOffering(id: string, req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleUpdateOffering(id: string, req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:update');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
 
-  const allowed = ['name', 'description', 'price', 'vat_rate', 'validity_days', 'sort_order', 'metadata'];
-  const patch: Record<string, unknown> = { updated_by: user.id };
+  const allowed = [
+    'name', 'description', 'price', 'vat_rate', 'validity_days', 'sort_order', 'metadata',
+    'package_code', 'visibility', 'featured', 'internal_notes',
+  ];
+  const patch: Record<string, unknown> = { updated_by: ctx.actorId };
   for (const key of allowed) {
     if (body[key] !== undefined) patch[key] = body[key];
   }
@@ -141,36 +188,68 @@ async function handleUpdateOffering(id: string, req: Request, client: any, orgId
     .from('package_offerings')
     .update(patch)
     .eq('id', id)
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .select()
     .single();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Package offering not found', 404, 'NOT_FOUND');
-  return json(data);
+  if (error) {
+    log.error('packages.update_failed', { correlation_id: ctx.correlationId, error: error.message, offering_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to update package offering');
+  }
+  if (data === null) return fail(ctx, 404, 'NOT_FOUND', `Package offering '${id}' not found`);
+  return ok(ctx, data);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleArchiveOffering(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:archive')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleArchiveOffering(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:archive');
+  if (guard) return guard;
 
   const { data, error } = await client
     .from('package_offerings')
-    .update({ status: 'archived', archived_at: new Date().toISOString(), archived_by: user.id })
+    .update({ status: 'archived', archived_at: new Date().toISOString(), archived_by: ctx.actorId })
     .eq('id', id)
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .neq('status', 'archived')
     .select()
     .single();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Package offering not found or already archived', 404, 'NOT_FOUND');
-  return json(data);
+  if (error) {
+    log.error('packages.archive_failed', { correlation_id: ctx.correlationId, error: error.message, offering_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to archive package offering');
+  }
+  if (data === null) return fail(ctx, 404, 'NOT_FOUND', 'Package offering not found or already archived');
+
+  log.info('Package.OfferingArchived', { correlation_id: ctx.correlationId, org_id: ctx.organizationId, offering_id: id, actor_id: ctx.actorId });
+  return ok(ctx, data);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleListCatalog(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleActivateOffering(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:update');
+  if (guard) return guard;
+
+  const { data, error } = await client
+    .from('package_offerings')
+    .update({ status: 'active', archived_at: null, archived_by: null, updated_by: ctx.actorId })
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .eq('status', 'archived')
+    .select()
+    .single();
+
+  if (error) {
+    log.error('packages.activate_failed', { correlation_id: ctx.correlationId, error: error.message, offering_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to activate package offering');
+  }
+  if (data === null) return fail(ctx, 404, 'NOT_FOUND', 'Package offering not found or not archived');
+  return ok(ctx, data);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleListCatalog(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:read');
+  if (guard) return guard;
 
   const category = new URL(req.url).searchParams.get('lesson_category');
 
@@ -178,33 +257,41 @@ async function handleListCatalog(req: Request, client: any, orgId: string, user:
   let q = client
     .from('package_catalog')
     .select('*')
-    .or(`organization_id.is.null,organization_id.eq.${orgId}`)
+    .or(`organization_id.is.null,organization_id.eq.${ctx.organizationId}`)
     .eq('is_active', true)
     .order('sort_order', { ascending: true });
 
   if (category !== null) q = q.eq('lesson_category', category);
 
   const { data, error } = await q;
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
-  return json({ data: data ?? [] });
+  if (error) {
+    log.error('packages.catalog_list_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to list catalog');
+  }
+  return new Response(
+    JSON.stringify({ data: data ?? [] }),
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreateCatalogEntry(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:package:create')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreateCatalogEntry(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:package:create');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
 
   const { name, lesson_category, default_quantity, default_price } = body;
   if (!name || !lesson_category || !default_quantity || default_price === undefined) {
-    return err('name, lesson_category, default_quantity, default_price are required', 400, 'VALIDATION_ERROR');
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'name, lesson_category, default_quantity, default_price are required');
   }
 
   const { data, error } = await client
     .from('package_catalog')
     .insert({
-      organization_id:  orgId,
+      organization_id:  ctx.organizationId,
       name,
       description:      body['description']     ?? null,
       package_type:     body['package_type']    ?? 'driving',
@@ -214,59 +301,62 @@ async function handleCreateCatalogEntry(req: Request, client: any, orgId: string
       currency:         body['currency']        ?? 'SEK',
       vat_rate:         body['vat_rate']        ?? 0.25,
       validity_days:    body['validity_days']   ?? null,
-      created_by:       user.id,
+      created_by:       ctx.actorId,
     })
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
-  return json(data, 201);
+  if (error) {
+    log.error('packages.catalog_create_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 422, 'INTERNAL_ERROR', 'Failed to create catalog entry');
+  }
+  return ok(ctx, data, 201);
 }
 
+// ─── Router ───────────────────────────────────────────────────────────────────
+
 Deno.serve((req: Request) => serveCors(req, async () => {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const anonKey     = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  const authHeader  = req.headers.get('Authorization') ?? '';
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const client = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
-
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
+  log.requestStarted(req, ctx.correlationId, ctx.organizationId, ctx.actorId);
 
   const { id, action } = extractPathParts(req);
   const method = req.method;
+  const client = createSupabaseClient(req);
 
-  // /packages/catalog
-  if (id === null && action === 'catalog') {
-    if (method === 'GET')  return handleListCatalog(req, client, orgId, user);
-    if (method === 'POST') return handleCreateCatalogEntry(req, client, orgId, user);
-    return err('Method not allowed', 405);
+  let response: Response;
+
+  try {
+    if (id === null && action === 'catalog') {
+      if (method === 'GET')       { response = await handleListCatalog(req, ctx, client); }
+      else if (method === 'POST') { response = await handleCreateCatalogEntry(req, ctx, client); }
+      else                        { response = fail(ctx, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed'); }
+    } else if (id !== null && action === 'archive'  && method === 'POST') {
+      response = await handleArchiveOffering(id, ctx, client);
+    } else if (id !== null && action === 'activate' && method === 'POST') {
+      response = await handleActivateOffering(id, ctx, client);
+    } else if (id !== null && action === null) {
+      if (method === 'GET')         { response = await handleGetOffering(id, ctx, client); }
+      else if (method === 'PATCH')  { response = await handleUpdateOffering(id, req, ctx, client); }
+      else                          { response = fail(ctx, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed'); }
+    } else if (id === null && action === null) {
+      if (method === 'GET')         { response = await handleListOfferings(req, ctx, client); }
+      else if (method === 'POST')   { response = await handleCreateOffering(req, ctx, client); }
+      else                          { response = fail(ctx, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed'); }
+    } else {
+      response = fail(ctx, 404, 'NOT_FOUND', 'Route not found');
+    }
+  } catch (err) {
+    log.error('packages.unhandled_error', {
+      correlation_id: ctx.correlationId,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack   : undefined,
+    });
+    response = fail(ctx, 500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
 
-  // /packages/:id/archive
-  if (id !== null && action === 'archive' && method === 'POST') {
-    return handleArchiveOffering(id, client, orgId, user);
-  }
-
-  // /packages/:id
-  if (id !== null && action === null) {
-    if (method === 'GET')   return handleGetOffering(id, client, orgId, user);
-    if (method === 'PATCH') return handleUpdateOffering(id, req, client, orgId, user);
-    return err('Method not allowed', 405);
-  }
-
-  // /packages
-  if (id === null && action === null) {
-    if (method === 'GET')  return handleListOfferings(req, client, orgId, user);
-    if (method === 'POST') return handleCreateOffering(req, client, orgId, user);
-    return err('Method not allowed', 405);
-  }
-
-  return err('Not found', 404);
+  log.requestCompleted(req, response.status, ctx.correlationId, ctx.startedAt);
+  return response;
 }));

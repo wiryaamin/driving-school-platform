@@ -1,0 +1,1750 @@
+import { z } from 'npm:zod@3';
+import { serveCors } from '../_shared/cors.ts';
+import { buildEdgeContext } from '../_shared/context.ts';
+import { createServiceClient } from '../_shared/supabase.ts';
+import { logger } from '../_shared/logger.ts';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const PORTAL_TOKEN_TTL_DAYS = 30;
+const JSON_CT = { 'Content-Type': 'application/json' } as const;
+
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
+const GenerateTokenSchema = z.object({
+  student_id: z.string().uuid(),
+});
+
+const CreateBookingSchema = z.object({
+  slot_id: z.string().uuid(),
+});
+
+const RescheduleSchema = z.object({
+  new_slot_id: z.string().uuid(),
+});
+
+const CancelSchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+const SlotsQuerySchema = z.object({
+  from: z.string().optional(),
+  to:   z.string().optional(),
+});
+
+const WaitlistJoinSchema = z.object({
+  lesson_type_id:          z.string().uuid(),
+  preferred_instructor_id: z.string().uuid().optional(),
+});
+
+const PracticeLogSchema = z.object({
+  practice_date:    z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  duration_minutes: z.number().int().min(1).max(480),
+  notes:            z.string().max(500).optional(),
+});
+
+// ─── Response helpers ─────────────────────────────────────────────────────────
+
+function ok<T>(data: T, status = 200): Response {
+  return new Response(JSON.stringify({ data }), { status, headers: JSON_CT });
+}
+
+function fail(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), { status, headers: JSON_CT });
+}
+
+// ─── Crypto helpers ───────────────────────────────────────────────────────────
+
+async function sha256hex(text: string): Promise<string> {
+  const bytes = new TextEncoder().encode(text);
+  const hash  = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function randomToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ─── Portal session validation ────────────────────────────────────────────────
+
+interface PortalSession {
+  session_id:      string;
+  student_id:      string;
+  organization_id: string;
+}
+
+async function resolvePortalToken(req: Request): Promise<PortalSession | null> {
+  const auth = req.headers.get('Authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+
+  const token = auth.slice(7).trim();
+  if (!token || token.length < 16) return null;
+
+  const hash     = await sha256hex(token);
+  const supabase = createServiceClient();
+
+  const { data, error } = await supabase
+    .from('student_portal_sessions')
+    .select('id, student_id, organization_id')
+    .eq('token_hash', hash)
+    .is('revoked_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .single();
+
+  if (error || !data) return null;
+
+  // Update last_used_at asynchronously — don't await
+  void supabase
+    .from('student_portal_sessions')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('id', data.id);
+
+  return {
+    session_id:      data.id      as string,
+    student_id:      data.student_id      as string,
+    organization_id: data.organization_id as string,
+  };
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
+
+Deno.serve((req: Request) =>
+  serveCors(req, async () => {
+    const url  = new URL(req.url);
+    // Supabase may present the URL in different formats depending on deployment flags.
+    // Strip any known prefix so we always work with just the sub-path:
+    //   /functions/v1/student-portal/path  → /path
+    //   /student-portal/path               → /path
+    //   /path                              → /path  (already stripped by gateway)
+    const path = url.pathname
+      .replace(/^\/functions\/v1\/student-portal/, '')
+      .replace(/^\/student-portal/, '')
+      || '/';
+
+    // ── GET /ping — diagnostic: shows received headers (no auth required) ──────
+    if (req.method === 'GET' && path === '/ping') {
+      const auth = req.headers.get('Authorization') ?? 'MISSING';
+      return ok({
+        pong:         true,
+        auth_present: auth !== 'MISSING',
+        auth_prefix:  auth.substring(0, 15),
+        has_apikey:   req.headers.has('apikey'),
+      });
+    }
+
+    // ── POST /generate-token — admin generates a portal link ─────────────────
+    if (req.method === 'POST' && path === '/generate-token') {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+
+      const body   = await req.json().catch(() => null);
+      const parsed = GenerateTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'student_id required');
+
+      const { student_id } = parsed.data;
+      const supabase = createServiceClient();
+
+      // Verify student belongs to this org
+      const { data: student, error: studentErr } = await supabase
+        .from('students')
+        .select('id, first_name, last_name, email, phone')
+        .eq('id', student_id)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .single();
+
+      if (studentErr || !student) return fail(404, 'Student not found');
+
+      const token     = randomToken();
+      const hash      = await sha256hex(token);
+      const expiresAt = new Date(Date.now() + PORTAL_TOKEN_TTL_DAYS * 86_400_000).toISOString();
+
+      // Revoke any existing active sessions for this student before creating a new one
+      await supabase
+        .from('student_portal_sessions')
+        .update({ revoked_at: new Date().toISOString() })
+        .eq('student_id', student_id)
+        .eq('organization_id', ctx.organizationId)
+        .is('revoked_at', null);
+
+      const { error: insertErr } = await supabase
+        .from('student_portal_sessions')
+        .insert({
+          organization_id: ctx.organizationId,
+          student_id,
+          token_hash:  hash,
+          expires_at:  expiresAt,
+          created_by:  ctx.actorId,
+        });
+
+      if (insertErr) {
+        logger.error('student-portal: insert session failed', { error: insertErr.message });
+        return fail(500, 'Failed to generate portal link');
+      }
+
+      const appUrl = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+
+      logger.info('student-portal: token generated', {
+        org_id:     ctx.organizationId,
+        student_id,
+        created_by: ctx.actorId,
+      });
+
+      return ok({
+        token,
+        url:          `${appUrl}/portal?token=${token}`,
+        expires_at:   expiresAt,
+        student_name: `${(student as { first_name: string }).first_name} ${(student as { last_name: string }).last_name}`,
+      }, 201);
+    }
+
+    // ── GET /validate — validate a portal token (no auth required) ───────────
+    if (req.method === 'GET' && path === '/validate') {
+      const token = url.searchParams.get('token');
+      if (!token) return fail(400, 'token parameter required');
+
+      const hash     = await sha256hex(token);
+      const supabase = createServiceClient();
+
+      const { data: session, error: sessionErr } = await supabase
+        .from('student_portal_sessions')
+        .select('id, student_id, organization_id, expires_at')
+        .eq('token_hash', hash)
+        .is('revoked_at', null)
+        .gt('expires_at', new Date().toISOString())
+        .single();
+
+      if (sessionErr || !session) return fail(401, 'Invalid or expired portal link');
+
+      const [studentRes, orgRes] = await Promise.all([
+        supabase
+          .from('students')
+          .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage')
+          .eq('id', session.student_id as string)
+          .single(),
+        supabase
+          .from('organizations')
+          .select('id, name')
+          .eq('id', session.organization_id as string)
+          .single(),
+      ]);
+
+      if (!studentRes.data || !orgRes.data) return fail(500, 'Failed to load session data');
+
+      return ok({
+        student:     studentRes.data,
+        organization: orgRes.data,
+        expires_at:  session.expires_at,
+      });
+    }
+
+    // ── POST /generate-guardian-token — admin generates guardian portal link ────
+    if (req.method === 'POST' && path === '/generate-guardian-token') {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+
+      const GuardianTokenSchema = z.object({ guardian_id: z.string().uuid() });
+      const body   = await req.json().catch(() => null);
+      const parsed = GuardianTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'guardian_id required');
+
+      const svc = createServiceClient();
+      const { data: guardian, error: gErr } = await svc
+        .from('student_guardians')
+        .select('id, first_name, last_name, student_id, email')
+        .eq('id', parsed.data.guardian_id)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .single();
+
+      if (gErr || !guardian) return fail(404, 'Guardian not found');
+
+      const gToken    = randomToken();
+      const gHash     = await sha256hex(gToken);
+      const gExpires  = new Date(Date.now() + PORTAL_TOKEN_TTL_DAYS * 86_400_000).toISOString();
+
+      await svc
+        .from('guardian_portal_sessions')
+        .update({ revoked_at: new Date().toISOString() })
+        .eq('guardian_id', parsed.data.guardian_id)
+        .eq('organization_id', ctx.organizationId)
+        .is('revoked_at', null);
+
+      const { error: insErr } = await svc
+        .from('guardian_portal_sessions')
+        .insert({
+          organization_id: ctx.organizationId,
+          guardian_id:     (guardian as { id: string }).id,
+          student_id:      (guardian as { student_id: string }).student_id,
+          token_hash:      gHash,
+          expires_at:      gExpires,
+          created_by:      ctx.actorId,
+        });
+
+      if (insErr) return fail(500, 'Failed to generate guardian portal link');
+
+      const appUrl = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+      return ok({
+        token:         gToken,
+        url:           `${appUrl}/guardian?token=${gToken}`,
+        expires_at:    gExpires,
+        guardian_name: `${(guardian as { first_name: string }).first_name} ${(guardian as { last_name: string }).last_name}`,
+      }, 201);
+    }
+
+    // ── POST /guardians — admin creates a guardian record for a student ────────
+    if (req.method === 'POST' && path === '/guardians') {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+
+      const CreateGuardianSchema = z.object({
+        student_id:  z.string().uuid(),
+        first_name:  z.string().min(1).max(100),
+        last_name:   z.string().min(1).max(100),
+        email:       z.string().email(),
+        phone:       z.string().max(30).optional(),
+        relation:    z.string().max(50).optional(),
+        can_pay:     z.boolean().default(true),
+      });
+      const body   = await req.json().catch(() => null);
+      const parsed = CreateGuardianSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid guardian data');
+
+      const svc = createServiceClient();
+      const { data: guardian, error: insErr } = await svc
+        .from('student_guardians')
+        .insert({
+          organization_id: ctx.organizationId,
+          created_by:      ctx.actorId,
+          ...parsed.data,
+        })
+        .select('id, first_name, last_name, email, phone, relation, can_pay')
+        .single();
+
+      if (insErr || !guardian) {
+        logger.error('student-portal: create guardian failed', { error: insErr?.message });
+        return fail(500, 'Failed to create guardian');
+      }
+      return ok(guardian, 201);
+    }
+
+    // ── GET /guardians?student_id= — list guardians for a student ─────────────
+    if (req.method === 'GET' && path === '/guardians') {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+
+      const studentId = url.searchParams.get('student_id');
+      if (!studentId) return fail(400, 'student_id required');
+
+      const svc = createServiceClient();
+      const { data: guardians, error } = await svc
+        .from('student_guardians')
+        .select('id, first_name, last_name, email, phone, relation, can_pay, created_at')
+        .eq('student_id', studentId)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .order('created_at');
+
+      if (error) return fail(500, 'Failed to fetch guardians');
+      return ok(guardians ?? []);
+    }
+
+    // ── DELETE /guardians/:id — soft-delete a guardian ────────────────────────
+    const guardianDeleteMatch = path.match(/^\/guardians\/([0-9a-f-]+)$/);
+    if (req.method === 'DELETE' && guardianDeleteMatch) {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+
+      const svc = createServiceClient();
+      const { error } = await svc
+        .from('student_guardians')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', guardianDeleteMatch[1]!)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null);
+
+      if (error) return fail(500, 'Failed to delete guardian');
+      return ok({ success: true });
+    }
+
+    // ── Guardian portal routes (/g/*) — authenticated by guardian token ────────
+    if (path.startsWith('/g/')) {
+      const auth = req.headers.get('Authorization');
+      if (!auth?.startsWith('Bearer ')) return fail(401, 'Guardian authentication required');
+      const gToken = auth.slice(7).trim();
+      const gHash  = await sha256hex(gToken);
+      const svc    = createServiceClient();
+
+      const { data: gSession, error: gSessErr } = await svc
+        .from('guardian_portal_sessions')
+        .select('id, guardian_id, student_id, organization_id')
+        .eq('token_hash', gHash)
+        .is('revoked_at', null)
+        .gt('expires_at', new Date().toISOString())
+        .single();
+
+      if (gSessErr || !gSession) return fail(401, 'Invalid or expired guardian portal link');
+
+      void svc
+        .from('guardian_portal_sessions')
+        .update({ last_used_at: new Date().toISOString() })
+        .eq('id', gSession.id)
+        .then(({ error }) => {
+          if (error) console.warn('guardian-portal: last_used_at update failed', error.message);
+        });
+
+      const gPath         = path.slice(2); // strip /g prefix → /me, /bookings, etc.
+      const gStudentId    = gSession.student_id     as string;
+      const gOrgId        = gSession.organization_id as string;
+      const gGuardianId   = gSession.guardian_id    as string;
+
+      // GET /g/me — guardian identity + student summary
+      if (req.method === 'GET' && gPath === '/me') {
+        const [guardianRes, studentRes, orgRes] = await Promise.all([
+          svc.from('student_guardians')
+            .select('id, first_name, last_name, email, phone, relation, can_pay')
+            .eq('id', gGuardianId)
+            .single(),
+          svc.from('students')
+            .select('id, first_name, last_name, permit_stage, target_licence_category')
+            .eq('id', gStudentId)
+            .single(),
+          svc.from('organizations')
+            .select('id, name')
+            .eq('id', gOrgId)
+            .single(),
+        ]);
+        if (!guardianRes.data || !studentRes.data || !orgRes.data) return fail(500, 'Failed to load guardian session data');
+        return ok({
+          guardian:     guardianRes.data,
+          student:      studentRes.data,
+          organization: orgRes.data,
+        });
+      }
+
+      // GET /g/bookings — upcoming booked lessons for the student
+      if (req.method === 'GET' && gPath === '/bookings') {
+        const now = new Date().toISOString();
+        const { data: bookings, error: bErr } = await svc
+          .from('lesson_bookings')
+          .select('id, status, lesson_slots!slot_id(starts_at, ends_at, notes, lesson_types!lesson_type_id(name), instructors!instructor_id(first_name, last_name))')
+          .eq('student_id', gStudentId)
+          .eq('organization_id', gOrgId)
+          .eq('status', 'booked')
+          .gte('lesson_slots.starts_at', now)
+          .order('lesson_slots.starts_at')
+          .limit(20);
+
+        if (bErr) return fail(500, 'Failed to fetch bookings');
+        return ok(bookings ?? []);
+      }
+
+      // GET /g/balance — student balance + unpaid invoices (only if can_pay)
+      if (req.method === 'GET' && gPath === '/balance') {
+        const { data: guardian } = await svc
+          .from('student_guardians')
+          .select('can_pay')
+          .eq('id', gGuardianId)
+          .single();
+
+        if (!(guardian as { can_pay: boolean } | null)?.can_pay) {
+          return fail(403, 'Payment access not granted for this guardian');
+        }
+
+        const [balRes, invRes] = await Promise.all([
+          svc.from('student_credit_balances')
+            .select('balance_sek, credit_used_sek, total_paid_sek')
+            .eq('student_id', gStudentId)
+            .eq('organization_id', gOrgId)
+            .maybeSingle(),
+          svc.from('invoices')
+            .select('id, invoice_number, amount_sek, due_date, status')
+            .eq('student_id', gStudentId)
+            .eq('organization_id', gOrgId)
+            .in('status', ['issued', 'overdue'])
+            .order('due_date')
+            .limit(10),
+        ]);
+
+        return ok({
+          balance:    balRes.data ?? { balance_sek: 0, credit_used_sek: 0, total_paid_sek: 0 },
+          invoices:   invRes.data ?? [],
+        });
+      }
+
+      // GET /g/progress — student licence progress summary
+      if (req.method === 'GET' && gPath === '/progress') {
+        const [studentRes, statsRes] = await Promise.all([
+          svc.from('students')
+            .select('permit_stage, theory_passed_at, practical_passed_at, risk1_completed_at, risk2_completed_at')
+            .eq('id', gStudentId)
+            .single(),
+          svc.from('lesson_bookings')
+            .select('status')
+            .eq('student_id', gStudentId)
+            .eq('organization_id', gOrgId),
+        ]);
+
+        if (!studentRes.data) return fail(500, 'Failed to load student progress');
+
+        const allBookings = (statsRes.data ?? []) as Array<{ status: string }>;
+        return ok({
+          ...studentRes.data,
+          completed_count: allBookings.filter(b => b.status === 'attended').length,
+          upcoming_count:  allBookings.filter(b => b.status === 'booked').length,
+        });
+      }
+
+      // GET /g/documents — guardian can view student's approved documents
+      if (req.method === 'GET' && gPath === '/documents') {
+        const { data: docs, error: docsErr } = await svc
+          .from('student_documents')
+          .select('id, category, file_name, mime_type, file_size_bytes, description, expires_at, storage_path, storage_bucket, created_at')
+          .eq('student_id', gStudentId)
+          .eq('organization_id', gOrgId)
+          .eq('status', 'approved')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (docsErr) return fail(500, 'Failed to fetch documents');
+
+        type GDocRow = {
+          id: string; category: string; file_name: string; mime_type: string | null;
+          file_size_bytes: number | null; description: string | null; expires_at: string | null;
+          storage_path: string; storage_bucket: string; created_at: string;
+        };
+
+        const withUrls = await Promise.all(((docs ?? []) as GDocRow[]).map(async (doc) => {
+          const { data: signed } = await svc.storage
+            .from(doc.storage_bucket)
+            .createSignedUrl(doc.storage_path, 3600);
+          return {
+            id: doc.id, category: doc.category, file_name: doc.file_name,
+            mime_type: doc.mime_type, file_size_bytes: doc.file_size_bytes,
+            description: doc.description, expires_at: doc.expires_at,
+            created_at: doc.created_at, download_url: signed?.signedUrl ?? null,
+          };
+        }));
+
+        return ok(withUrls);
+      }
+
+      return fail(404, 'Guardian route not found');
+    }
+
+    // ── All routes below require a valid portal token ─────────────────────────
+    const session = await resolvePortalToken(req);
+    if (!session) return fail(401, 'Portal authentication required');
+
+    const { student_id, organization_id } = session;
+    const supabase = createServiceClient();
+
+    // ── GET /me ───────────────────────────────────────────────────────────────
+    if (req.method === 'GET' && path === '/me') {
+      const { data, error } = await supabase
+        .from('students')
+        .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at')
+        .eq('id', student_id)
+        .single();
+
+      if (error || !data) return fail(404, 'Student not found');
+      return ok(data);
+    }
+
+    // ── GET /progress — lesson stats + permit milestones ─────────────────────
+    if (req.method === 'GET' && path === '/progress') {
+      const [bookingsRes, studentRes] = await Promise.all([
+        supabase
+          .from('lesson_bookings')
+          .select('status, slot_id, lesson_slots!inner(starts_at, ends_at)')
+          .eq('student_id', student_id)
+          .eq('organization_id', organization_id)
+          .is('deleted_at', null),
+        supabase
+          .from('students')
+          .select('permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at')
+          .eq('id', student_id)
+          .single(),
+      ]);
+
+      const bookings  = bookingsRes.data ?? [];
+      const student   = studentRes.data;
+      const nowStr    = new Date().toISOString();
+
+      let totalMinutes  = 0;
+      let completedCount = 0;
+      let noShowCount    = 0;
+      let upcomingCount  = 0;
+
+      for (const b of bookings) {
+        const slot = (b as unknown as { lesson_slots: { starts_at: string; ends_at: string } }).lesson_slots;
+        if (b.status === 'completed') {
+          completedCount++;
+          totalMinutes += (new Date(slot.ends_at).getTime() - new Date(slot.starts_at).getTime()) / 60_000;
+        }
+        if (b.status === 'no_show') noShowCount++;
+        if ((b.status === 'confirmed' || b.status === 'reserved') && slot.starts_at > nowStr) upcomingCount++;
+      }
+
+      return ok({
+        completed_count:     completedCount,
+        no_show_count:       noShowCount,
+        total_minutes:       Math.round(totalMinutes),
+        upcoming_count:      upcomingCount,
+        permit_stage:        student?.permit_stage         ?? 'not_started',
+        risk1_completed_at:  student?.risk1_completed_at   ?? null,
+        risk2_completed_at:  student?.risk2_completed_at   ?? null,
+        theory_passed_at:    student?.theory_passed_at     ?? null,
+        practical_passed_at: student?.practical_passed_at  ?? null,
+      });
+    }
+
+    // ── GET /slots — available slots for booking ──────────────────────────────
+    if (req.method === 'GET' && path === '/slots') {
+      const qp     = SlotsQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+      const fromDt = qp.success && qp.data.from ? qp.data.from : new Date().toISOString();
+      const toDt   = qp.success ? qp.data.to : undefined;
+
+      let q = supabase
+        .from('lesson_slots')
+        .select('id, starts_at, ends_at, current_bookings, max_bookings, instructors(first_name, last_name), lesson_types(name), organization_locations(name), vehicles(make, model)')
+        .eq('organization_id', organization_id)
+        .eq('status', 'open')
+        .is('deleted_at', null)
+        .gte('starts_at', fromDt)
+        .order('starts_at')
+        .limit(80);
+
+      if (toDt) q = q.lte('starts_at', toDt);
+
+      const { data: slots, error: slotsErr } = await q;
+      if (slotsErr) {
+        logger.error('student-portal: slots fetch failed', { error: slotsErr.message });
+        return fail(500, 'Failed to fetch available slots');
+      }
+
+      type SlotRow = {
+        id: string; starts_at: string; ends_at: string;
+        current_bookings: number; max_bookings: number;
+        instructors:            { first_name: string; last_name: string } | null;
+        lesson_types:           { name: string } | null;
+        organization_locations: { name: string } | null;
+        vehicles:               { make: string; model: string } | null;
+      };
+
+      const available = (slots as unknown as SlotRow[]).filter(s => s.current_bookings < s.max_bookings);
+
+      return ok(available.map(s => ({
+        id:                    s.id,
+        starts_at:             s.starts_at,
+        ends_at:               s.ends_at,
+        current_bookings:      s.current_bookings,
+        max_bookings:          s.max_bookings,
+        lesson_type_name:      s.lesson_types?.name             ?? null,
+        instructor_first_name: s.instructors?.first_name        ?? null,
+        instructor_last_name:  s.instructors?.last_name         ?? null,
+        location_name:         s.organization_locations?.name   ?? null,
+        vehicle_label:         s.vehicles ? `${s.vehicles.make} ${s.vehicles.model}` : null,
+      })));
+    }
+
+    // ── GET /bookings — student's booking history ─────────────────────────────
+    if (req.method === 'GET' && path === '/bookings') {
+      const { data: bookings, error: bErr } = await supabase
+        .from('lesson_bookings')
+        .select('id, slot_id, status, created_at, cancellation_reason, lesson_slots(starts_at, ends_at, instructors(first_name, last_name), lesson_types(name))')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(60);
+
+      if (bErr) return fail(500, 'Failed to fetch bookings');
+
+      type BookingRow = {
+        id: string; slot_id: string; status: string; created_at: string; cancellation_reason: string | null;
+        lesson_slots: {
+          starts_at: string; ends_at: string;
+          instructors:  { first_name: string; last_name: string } | null;
+          lesson_types: { name: string } | null;
+        } | null;
+      };
+
+      return ok((bookings as unknown as BookingRow[]).map(b => ({
+        id:                   b.id,
+        slot_id:              b.slot_id,
+        status:               b.status,
+        created_at:           b.created_at,
+        starts_at:            b.lesson_slots?.starts_at          ?? '',
+        ends_at:              b.lesson_slots?.ends_at            ?? '',
+        lesson_type_name:     b.lesson_slots?.lesson_types?.name ?? null,
+        instructor_first_name: b.lesson_slots?.instructors?.first_name ?? null,
+        instructor_last_name:  b.lesson_slots?.instructors?.last_name  ?? null,
+        cancellation_reason:  b.cancellation_reason,
+      })));
+    }
+
+    // ── POST /bookings — create a booking ─────────────────────────────────────
+    if (req.method === 'POST' && path === '/bookings') {
+      const body   = await req.json().catch(() => null);
+      const parsed = CreateBookingSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'slot_id required');
+
+      const { slot_id } = parsed.data;
+
+      // Verify slot exists and has capacity
+      const { data: slot } = await supabase
+        .from('lesson_slots')
+        .select('id, status, current_bookings, max_bookings')
+        .eq('id', slot_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .single();
+
+      if (!slot) return fail(404, 'Slot not found');
+      if ((slot as { status: string }).status !== 'open') return fail(409, 'Slot is not open for booking');
+      if ((slot as { current_bookings: number }).current_bookings >= (slot as { max_bookings: number }).max_bookings) {
+        return fail(409, 'Slot is fully booked');
+      }
+
+      // Prevent duplicate booking
+      const { data: existing } = await supabase
+        .from('lesson_bookings')
+        .select('id')
+        .eq('slot_id', slot_id)
+        .eq('student_id', student_id)
+        .neq('status', 'cancelled')
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (existing) return fail(409, 'Du har redan en bokning för detta pass');
+
+      const { data: booking, error: insertErr } = await supabase
+        .from('lesson_bookings')
+        .insert({ organization_id, slot_id, student_id, status: 'reserved' })
+        .select('id, slot_id, student_id, status, created_at')
+        .single();
+
+      if (insertErr) {
+        // 23505 = unique_violation: duplicate booking (TOCTOU race — same student, same slot)
+        if (insertErr.code === '23505') return fail(409, 'Du har redan en bokning för detta pass');
+        // 23P01 = exclusion_violation: slot overbooked concurrently
+        if (insertErr.code === '23P01') return fail(409, 'Platsen är fullbokad');
+        logger.error('student-portal: booking insert failed', { error: insertErr.message });
+        return fail(500, 'Booking failed — please try again');
+      }
+
+      return ok(booking, 201);
+    }
+
+    // ── POST /bookings/:id/cancel ─────────────────────────────────────────────
+    const cancelMatch = path.match(/^\/bookings\/([0-9a-f-]+)\/cancel$/);
+    if (req.method === 'POST' && cancelMatch) {
+      const bookingId = cancelMatch[1]!;
+      const body      = await req.json().catch(() => ({}));
+      const parsed    = CancelSchema.safeParse(body);
+
+      const { data: booking } = await supabase
+        .from('lesson_bookings')
+        .select('id, status')
+        .eq('id', bookingId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .single();
+
+      if (!booking) return fail(404, 'Booking not found');
+
+      const terminal = ['completed', 'cancelled', 'no_show', 'rescheduled'];
+      if (terminal.includes((booking as { status: string }).status)) {
+        return fail(409, 'This booking cannot be cancelled');
+      }
+
+      const { error: updateErr } = await supabase
+        .from('lesson_bookings')
+        .update({
+          status:                'cancelled',
+          cancelled_at:          new Date().toISOString(),
+          cancellation_category: 'student_request',
+          cancellation_reason:   parsed.success ? (parsed.data.reason ?? null) : null,
+        })
+        .eq('id', bookingId);
+
+      if (updateErr) return fail(500, 'Cancel failed');
+      return ok({ success: true });
+    }
+
+    // ── POST /bookings/:id/reschedule ─────────────────────────────────────────
+    const rescheduleMatch = path.match(/^\/bookings\/([0-9a-f-]+)\/reschedule$/);
+    if (req.method === 'POST' && rescheduleMatch) {
+      const bookingId = rescheduleMatch[1]!;
+      const body      = await req.json().catch(() => null);
+      const parsed    = RescheduleSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'new_slot_id required');
+
+      const { new_slot_id } = parsed.data;
+
+      const { data: booking } = await supabase
+        .from('lesson_bookings')
+        .select('id, status')
+        .eq('id', bookingId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .single();
+
+      if (!booking) return fail(404, 'Booking not found');
+
+      const reschedulable = ['reserved', 'confirmed'];
+      if (!reschedulable.includes((booking as { status: string }).status)) {
+        return fail(409, 'This booking cannot be rescheduled');
+      }
+
+      // Verify new slot availability
+      const { data: newSlot } = await supabase
+        .from('lesson_slots')
+        .select('id, status, current_bookings, max_bookings')
+        .eq('id', new_slot_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .single();
+
+      type SlotBasic = { status: string; current_bookings: number; max_bookings: number };
+      const s = newSlot as unknown as SlotBasic | null;
+      if (!s || s.status !== 'open' || s.current_bookings >= s.max_bookings) {
+        return fail(409, 'The selected slot is not available');
+      }
+
+      const originalStatus = (booking as { status: string }).status;
+
+      // Mark old booking as rescheduled
+      const { error: markErr } = await supabase
+        .from('lesson_bookings')
+        .update({ status: 'rescheduled', cancelled_at: new Date().toISOString() })
+        .eq('id', bookingId);
+
+      if (markErr) return fail(500, 'Reschedule failed');
+
+      // Create new booking
+      const { data: newBooking, error: insertErr } = await supabase
+        .from('lesson_bookings')
+        .insert({ organization_id, slot_id: new_slot_id, student_id, status: 'reserved' })
+        .select('id, slot_id, status, created_at')
+        .single();
+
+      if (insertErr) {
+        // Compensating rollback: restore the original booking status so the
+        // student is not left without a booking if the insert failed.
+        await supabase
+          .from('lesson_bookings')
+          .update({ status: originalStatus, cancelled_at: null })
+          .eq('id', bookingId);
+        return fail(500, 'Failed to create rescheduled booking');
+      }
+      return ok(newBooking, 201);
+    }
+
+    // ── GET /balance — outstanding invoices ───────────────────────────────────
+    if (req.method === 'GET' && path === '/balance') {
+      const { data: invoices } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, total_sek, status, issued_at, due_date')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .order('issued_at', { ascending: false })
+        .limit(10);
+
+      type InvoiceRow = { id: string; invoice_number: string | null; total_sek: number; status: string; issued_at: string; due_date: string | null };
+      const rows = (invoices as unknown as InvoiceRow[] | null) ?? [];
+
+      const outstanding = rows
+        .filter(i => i.status === 'issued' || i.status === 'overdue')
+        .reduce((sum, i) => sum + (i.total_sek ?? 0), 0);
+
+      return ok({
+        outstanding_sek: outstanding,
+        recent_invoices: rows.map(i => ({
+          id:             i.id,
+          invoice_number: i.invoice_number,
+          total_sek:      i.total_sek,
+          status:         i.status,
+          issued_at:      i.issued_at,
+          due_date:       i.due_date,
+        })),
+      });
+    }
+
+    // ── GET /history — past lessons with attendance notes ─────────────────────
+    if (req.method === 'GET' && path === '/history') {
+      const { data: bookings, error: bErr } = await supabase
+        .from('lesson_bookings')
+        .select(`
+          id, slot_id, status, created_at,
+          lesson_slots(starts_at, ends_at, instructors(first_name, last_name), lesson_types(name)),
+          booking_attendance(instructor_notes, performance_rating),
+          booking_notes(content, created_at, is_internal)
+        `)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['completed', 'no_show', 'cancelled'])
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (bErr) {
+        logger.error('student-portal: history fetch failed', { error: bErr.message });
+        return fail(500, 'Failed to fetch lesson history');
+      }
+
+      type AttRow  = { instructor_notes: string | null; performance_rating: number | null };
+      type NoteRow = { content: string; created_at: string; is_internal: boolean };
+      type HRow = {
+        id: string; slot_id: string; status: string; created_at: string;
+        lesson_slots: { starts_at: string; ends_at: string; instructors: { first_name: string; last_name: string } | null; lesson_types: { name: string } | null } | null;
+        booking_attendance: AttRow[] | AttRow | null;
+        booking_notes:      NoteRow[] | null;
+      };
+
+      return ok((bookings as unknown as HRow[]).map(b => {
+        const attArr = Array.isArray(b.booking_attendance) ? b.booking_attendance : (b.booking_attendance ? [b.booking_attendance] : []);
+        const att    = attArr[0] ?? null;
+        const publicNotes = (b.booking_notes ?? []).filter(n => !n.is_internal);
+        return {
+          id:                    b.id,
+          slot_id:               b.slot_id,
+          status:                b.status,
+          created_at:            b.created_at,
+          starts_at:             b.lesson_slots?.starts_at             ?? '',
+          ends_at:               b.lesson_slots?.ends_at               ?? '',
+          lesson_type_name:      b.lesson_slots?.lesson_types?.name    ?? null,
+          instructor_first_name: b.lesson_slots?.instructors?.first_name ?? null,
+          instructor_last_name:  b.lesson_slots?.instructors?.last_name  ?? null,
+          instructor_notes:      att?.instructor_notes     ?? null,
+          performance_rating:    att?.performance_rating   ?? null,
+          notes: publicNotes.map(n => ({ content: n.content, created_at: n.created_at })),
+        };
+      }));
+    }
+
+    // ── GET /lesson-types — available lesson types for booking ────────────────
+    if (req.method === 'GET' && path === '/lesson-types') {
+      const { data: types, error: tErr } = await supabase
+        .from('lesson_types')
+        .select('id, name')
+        .eq('organization_id', organization_id)
+        .eq('is_active', true)
+        .order('display_order')
+        .order('name')
+        .limit(30);
+
+      if (tErr) return fail(500, 'Failed to fetch lesson types');
+      return ok(types ?? []);
+    }
+
+    // ── GET /waitlist — student's active waitlist entries ─────────────────────
+    if (req.method === 'GET' && path === '/waitlist') {
+      const { data: entries } = await supabase
+        .from('lesson_waitlist_entries')
+        .select('id, lesson_type_id, status, created_at, expires_at, lesson_types(name)')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['waiting', 'notified'])
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+
+      type WRow = { id: string; lesson_type_id: string; status: string; created_at: string; expires_at: string | null; lesson_types: { name: string } | null };
+      return ok((entries as unknown as WRow[] ?? []).map(e => ({
+        id:               e.id,
+        lesson_type_id:   e.lesson_type_id,
+        lesson_type_name: e.lesson_types?.name ?? null,
+        status:           e.status,
+        created_at:       e.created_at,
+        expires_at:       e.expires_at,
+      })));
+    }
+
+    // ── POST /waitlist — join the waitlist for a lesson type ──────────────────
+    if (req.method === 'POST' && path === '/waitlist') {
+      const body   = await req.json().catch(() => null);
+      const parsed = WaitlistJoinSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'lesson_type_id required');
+
+      const { lesson_type_id, preferred_instructor_id } = parsed.data;
+
+      // Verify lesson type belongs to org
+      const { data: lt } = await supabase
+        .from('lesson_types')
+        .select('id')
+        .eq('id', lesson_type_id)
+        .eq('organization_id', organization_id)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (!lt) return fail(404, 'Lesson type not found');
+
+      // Check for duplicate active entry
+      const { data: existing } = await supabase
+        .from('lesson_waitlist_entries')
+        .select('id')
+        .eq('student_id', student_id)
+        .eq('lesson_type_id', lesson_type_id)
+        .in('status', ['waiting', 'notified'])
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (existing) return fail(409, 'Du är redan på väntelistan för denna lektionstyp');
+
+      const expiresAt = new Date(Date.now() + 60 * 86_400_000).toISOString();
+
+      const { data: entry, error: insertErr } = await supabase
+        .from('lesson_waitlist_entries')
+        .insert({
+          organization_id:         organization_id,
+          student_id:              student_id,
+          lesson_type_id:          lesson_type_id,
+          preferred_instructor_id: preferred_instructor_id ?? null,
+          status:                  'waiting',
+          expires_at:              expiresAt,
+        })
+        .select('id, lesson_type_id, status, created_at, expires_at')
+        .single();
+
+      if (insertErr) {
+        if (insertErr.code === '23505') return fail(409, 'Du är redan på väntelistan');
+        logger.error('student-portal: waitlist insert failed', { error: insertErr.message });
+        return fail(500, 'Could not join waitlist');
+      }
+
+      logger.info('student-portal: joined waitlist', { org_id: organization_id, student_id, lesson_type_id });
+      return ok(entry, 201);
+    }
+
+    // ── DELETE /waitlist/:id — leave the waitlist ─────────────────────────────
+    const waitlistLeaveMatch = path.match(/^\/waitlist\/([0-9a-f-]+)$/);
+    if (req.method === 'DELETE' && waitlistLeaveMatch) {
+      const entryId = waitlistLeaveMatch[1]!;
+
+      const { error: delErr } = await supabase
+        .from('lesson_waitlist_entries')
+        .update({ status: 'withdrawn', withdrawn_at: new Date().toISOString() })
+        .eq('id', entryId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['waiting', 'notified']);
+
+      if (delErr) return fail(500, 'Could not leave waitlist');
+      return ok({ success: true });
+    }
+
+    // ── GET /org — public org info (name + Swish number for payment) ──────────
+    if (req.method === 'GET' && path === '/org') {
+      const { data: org, error: orgErr } = await supabase
+        .from('organizations')
+        .select('name, settings')
+        .eq('id', organization_id)
+        .maybeSingle();
+      if (orgErr) return fail(500, 'Failed to fetch org info');
+      if (!org)   return fail(404, 'Organization not found');
+      const settings = (org.settings ?? {}) as Record<string, unknown>;
+      return ok({
+        name:          org.name,
+        swish_number:  (settings['swish_number']  as string | undefined) ?? null,
+        contact_phone: (settings['contact_phone'] as string | undefined) ?? null,
+        contact_email: (settings['contact_email'] as string | undefined) ?? null,
+      });
+    }
+
+    // ── GET /materials — published training materials for this org ────────────
+    if (req.method === 'GET' && path === '/materials') {
+      const { data: materials, error: mErr } = await supabase
+        .from('training_materials')
+        .select('id, title, description, category, content_type, url, display_order')
+        .eq('organization_id', organization_id)
+        .eq('is_published', true)
+        .is('deleted_at', null)
+        .order('category')
+        .order('display_order')
+        .order('title')
+        .limit(200);
+
+      if (mErr) {
+        logger.error('student-portal: materials fetch failed', { error: mErr.message });
+        return fail(500, 'Failed to fetch materials');
+      }
+      return ok(materials ?? []);
+    }
+
+    // ── GET /completions — student's completed material IDs ───────────────────
+    if (req.method === 'GET' && path === '/completions') {
+      const { data, error } = await supabase
+        .from('student_material_completions')
+        .select('material_id')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null);
+      if (error) return fail(500, 'Failed to fetch completions');
+      return ok((data ?? []).map((r: { material_id: string }) => r.material_id));
+    }
+
+    // ── POST /completions — mark a material as complete ───────────────────────
+    if (req.method === 'POST' && path === '/completions') {
+      const body = await req.json().catch(() => null) as { material_id?: string } | null;
+      if (!body?.material_id) return fail(400, 'material_id required');
+
+      const materialId = body.material_id;
+
+      // Verify the material belongs to this org and is published
+      const { data: material } = await supabase
+        .from('training_materials')
+        .select('id')
+        .eq('id', materialId)
+        .eq('organization_id', organization_id)
+        .eq('is_published', true)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (!material) return fail(404, 'Material not found');
+
+      const { error: insertErr } = await supabase
+        .from('student_material_completions')
+        .upsert(
+          { organization_id, student_id, material_id: materialId, completed_at: new Date().toISOString(), deleted_at: null },
+          { onConflict: 'organization_id,student_id,material_id' },
+        );
+
+      if (insertErr) return fail(500, 'Failed to mark completion');
+      return ok({ success: true });
+    }
+
+    // ── DELETE /completions/:materialId — unmark a material ──────────────────
+    const completionDeleteMatch = path.match(/^\/completions\/([0-9a-f-]+)$/);
+    if (req.method === 'DELETE' && completionDeleteMatch) {
+      const materialId = completionDeleteMatch[1]!;
+
+      const { error: delErr } = await supabase
+        .from('student_material_completions')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .eq('material_id', materialId)
+        .is('deleted_at', null);
+
+      if (delErr) return fail(500, 'Failed to remove completion');
+      return ok({ success: true });
+    }
+
+    // ── GET /terms — student's T&C acceptance status ─────────────────────────
+    if (req.method === 'GET' && path === '/terms') {
+      const { data, error } = await supabase
+        .from('student_terms_acceptances')
+        .select('terms_version, accepted_at')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .maybeSingle();
+      if (error) return fail(500, 'Failed to fetch terms status');
+      return ok({
+        accepted:      data !== null,
+        accepted_at:   (data as { accepted_at: string } | null)?.accepted_at   ?? null,
+        terms_version: (data as { terms_version: string } | null)?.terms_version ?? null,
+      });
+    }
+
+    // ── POST /terms/accept — record T&C acceptance ────────────────────────────
+    if (req.method === 'POST' && path === '/terms/accept') {
+      const { error: upsertErr } = await supabase
+        .from('student_terms_acceptances')
+        .upsert(
+          { organization_id, student_id, terms_version: '1.0', accepted_at: new Date().toISOString() },
+          { onConflict: 'organization_id,student_id' },
+        );
+      if (upsertErr) return fail(500, 'Failed to record acceptance');
+      return ok({ success: true });
+    }
+
+    // ── GET /practice-log — student's private practice sessions ──────────────
+    if (req.method === 'GET' && path === '/practice-log') {
+      const { data, error } = await supabase
+        .from('student_practice_log')
+        .select('id, practice_date, duration_minutes, notes, created_at')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .order('practice_date', { ascending: false })
+        .limit(50);
+      if (error) return fail(500, 'Failed to fetch practice log');
+      return ok(data ?? []);
+    }
+
+    // ── POST /practice-log — log a private practice session ──────────────────
+    if (req.method === 'POST' && path === '/practice-log') {
+      const body   = await req.json().catch(() => null);
+      const parsed = PracticeLogSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid practice log entry');
+
+      const { practice_date, duration_minutes, notes } = parsed.data;
+      const { data: entry, error: insertErr } = await supabase
+        .from('student_practice_log')
+        .insert({ organization_id, student_id, practice_date, duration_minutes, notes: notes ?? null })
+        .select('id, practice_date, duration_minutes, notes, created_at')
+        .single();
+
+      if (insertErr) {
+        logger.error('student-portal: practice log insert failed', { error: insertErr.message });
+        return fail(500, 'Failed to save practice entry');
+      }
+      return ok(entry, 201);
+    }
+
+    // ── DELETE /practice-log/:id — remove a practice session ─────────────────
+    const practiceDeleteMatch = path.match(/^\/practice-log\/([0-9a-f-]+)$/);
+    if (req.method === 'DELETE' && practiceDeleteMatch) {
+      const entryId = practiceDeleteMatch[1]!;
+      const { error: delErr } = await supabase
+        .from('student_practice_log')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', entryId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null);
+      if (delErr) return fail(500, 'Failed to delete practice entry');
+      return ok({ success: true });
+    }
+
+    // ── POST /payments/swish — record Swish deeplink initiation ──────────────
+    if (req.method === 'POST' && path === '/payments/swish') {
+      const body        = await req.json().catch(() => null) as { invoice_id?: string } | null;
+      const invoiceId   = body?.invoice_id;
+      if (!invoiceId) return fail(400, 'invoice_id required');
+
+      // Verify invoice belongs to this student
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, total_sek')
+        .eq('id', invoiceId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['issued', 'overdue'])
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (!inv) return fail(404, 'Invoice not found or already paid');
+
+      const { data: pr, error: prErr } = await supabase
+        .from('payment_requests')
+        .insert({
+          organization_id,
+          student_id,
+          invoice_id: invoiceId,
+          provider:   'swish',
+          amount_sek: (inv as { total_sek: number }).total_sek,
+          status:     'initiated',
+          expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        })
+        .select('id')
+        .single();
+
+      if (prErr) {
+        logger.error('student-portal: swish payment_request insert failed', { error: prErr.message });
+        return fail(500, 'Failed to record payment initiation');
+      }
+
+      return ok({ payment_request_id: (pr as { id: string }).id }, 201);
+    }
+
+    // ── POST /payments/stripe/checkout — create Stripe Checkout session ───────
+    if (req.method === 'POST' && path === '/payments/stripe/checkout') {
+      const body      = await req.json().catch(() => null) as { invoice_id?: string } | null;
+      const invoiceId = body?.invoice_id;
+      if (!invoiceId) return fail(400, 'invoice_id required');
+
+      // Verify invoice belongs to this student
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, total_sek, invoice_number')
+        .eq('id', invoiceId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['issued', 'overdue'])
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (!inv) return fail(404, 'Invoice not found or already paid');
+
+      // Fetch org settings for Stripe key
+      const { data: orgRow } = await supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', organization_id)
+        .maybeSingle();
+
+      const settings  = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
+      const stripeKey = (settings['stripe_secret_key'] as string | undefined)
+                     ?? Deno.env.get('STRIPE_SECRET_KEY')
+                     ?? '';
+
+      if (!stripeKey) return fail(503, 'Online card payment is not configured for this school');
+
+      const appUrl    = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+      const prId      = crypto.randomUUID();
+      const invNum    = (inv as { invoice_number: string | null }).invoice_number;
+      const amountSek = (inv as { total_sek: number }).total_sek;
+
+      const params = new URLSearchParams({
+        'mode':                                      'payment',
+        'currency':                                  'sek',
+        'line_items[0][price_data][currency]':       'sek',
+        'line_items[0][price_data][unit_amount]':    String(Math.round(amountSek * 100)),
+        'line_items[0][price_data][product_data][name]':
+          `Faktura ${invNum ?? invoiceId.slice(0, 8)}`,
+        'line_items[0][quantity]':                   '1',
+        'success_url':                               `${appUrl}/portal/konto?payment=success&req=${prId}`,
+        'cancel_url':                                `${appUrl}/portal/konto?payment=cancelled`,
+        'metadata[invoice_id]':                      invoiceId,
+        'metadata[payment_request_id]':              prId,
+        'metadata[organization_id]':                 organization_id,
+        'metadata[student_id]':                      student_id,
+      });
+
+      const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${stripeKey}`,
+          'Content-Type':  'application/x-www-form-urlencoded',
+        },
+        body: params.toString(),
+      });
+
+      type StripeSession = { id: string; url: string; error?: { message: string } };
+      const stripeData = await stripeRes.json() as StripeSession;
+
+      if (!stripeRes.ok || stripeData.error) {
+        logger.error('student-portal: Stripe session creation failed', {
+          status: stripeRes.status,
+          error:  stripeData.error?.message,
+        });
+        return fail(502, 'Payment provider error — please try again');
+      }
+
+      // Record payment_request with the Stripe session ID (using the pre-generated UUID as PK)
+      const { error: prErr } = await supabase
+        .from('payment_requests')
+        .insert({
+          id:                  prId,
+          organization_id,
+          student_id,
+          invoice_id:          invoiceId,
+          provider:            'stripe',
+          provider_session_id: stripeData.id,
+          amount_sek:          amountSek,
+          status:              'pending',
+          return_url:          `${appUrl}/portal/konto`,
+          expires_at:          new Date(Date.now() + 30 * 60_000).toISOString(),
+          metadata:            { stripe_session_id: stripeData.id },
+        });
+
+      if (prErr) {
+        logger.error('student-portal: payment_request insert failed', { error: prErr.message });
+        // Session was already created at Stripe — log but don't fail
+        logger.warn('student-portal: proceeding without payment_request record', { prId });
+      }
+
+      logger.info('student-portal: Stripe checkout created', {
+        org_id: organization_id, student_id, invoice_id: invoiceId, pr_id: prId,
+      });
+
+      return ok({ session_url: stripeData.url, payment_request_id: prId }, 201);
+    }
+
+    // ── GET /payments/requests/:id — poll payment request status ─────────────
+    const paymentRequestMatch = path.match(/^\/payments\/requests\/([0-9a-f-]+)$/);
+    if (req.method === 'GET' && paymentRequestMatch) {
+      const prId = paymentRequestMatch[1]!;
+
+      const { data: pr, error: prErr } = await supabase
+        .from('payment_requests')
+        .select('id, provider, amount_sek, status, completed_at, payment_id')
+        .eq('id', prId)
+        .eq('organization_id', organization_id)
+        .eq('student_id', student_id)
+        .maybeSingle();
+
+      if (prErr) return fail(500, 'Failed to fetch payment request');
+      if (!pr)   return fail(404, 'Payment request not found');
+      return ok(pr);
+    }
+
+    // ── GET /quiz/categories — categories with question count + student progress ─
+    if (req.method === 'GET' && path === '/quiz/categories') {
+      const { data, error } = await supabase.rpc('get_quiz_categories', {
+        p_org_id:     organization_id,
+        p_student_id: student_id,
+      });
+
+      if (error) {
+        logger.error('student-portal: get_quiz_categories failed', { error: error.message });
+        return fail(500, 'Failed to fetch quiz categories');
+      }
+      return ok(data ?? []);
+    }
+
+    // ── POST /quiz/sessions — start a new quiz, receive questions ────────────
+    if (req.method === 'POST' && path === '/quiz/sessions') {
+      const StartQuizSchema = z.object({
+        category:       z.string().optional(),
+        question_count: z.number().int().min(5).max(40).default(10),
+      });
+      const body   = await req.json().catch(() => null);
+      const parsed = StartQuizSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid quiz start params');
+      const { category, question_count } = parsed.data;
+
+      // Fetch questions (system-wide or org-specific, shuffled)
+      let query = supabase
+        .from('quiz_questions')
+        .select('id, question_text, options, category, difficulty')
+        .eq('is_active', true)
+        .or(`organization_id.is.null,organization_id.eq.${organization_id}`);
+
+      if (category) query = query.eq('category', category);
+
+      const { data: allQs, error: qErr } = await query.order('sort_order').limit(200);
+      if (qErr) return fail(500, 'Failed to fetch questions');
+
+      const pool = (allQs ?? []) as Array<{
+        id: string;
+        question_text: string;
+        options: Array<{ text: string; is_correct: boolean }>;
+        category: string;
+        difficulty: string;
+      }>;
+
+      if (pool.length === 0) return fail(404, 'No questions available for this category');
+
+      // Shuffle using crypto.getRandomValues() for unpredictable question ordering
+      const shuffled = pool
+        .map(q => {
+          const arr = new Uint32Array(1);
+          crypto.getRandomValues(arr);
+          return { q, sort: arr[0]! };
+        })
+        .sort((a, b) => a.sort - b.sort)
+        .slice(0, question_count)
+        .map(({ q }) => q);
+
+      // Create session row
+      const { data: session, error: sessErr } = await supabase
+        .from('quiz_sessions')
+        .insert({
+          organization_id,
+          student_id,
+          category:       category ?? null,
+          question_count: shuffled.length,
+        })
+        .select('id, created_at')
+        .single();
+
+      if (sessErr || !session) {
+        logger.error('student-portal: create quiz_session failed', { error: sessErr?.message });
+        return fail(500, 'Failed to create quiz session');
+      }
+
+      // Strip is_correct from options before sending to client
+      const questions = shuffled.map(q => ({
+        id:           q.id,
+        question_text: q.question_text,
+        category:     q.category,
+        difficulty:   q.difficulty,
+        options:      q.options.map((o: { text: string; is_correct: boolean }) => ({ text: o.text })),
+      }));
+
+      return ok({ session_id: (session as { id: string }).id, questions }, 201);
+    }
+
+    // ── POST /quiz/sessions/:id/submit — submit answers + get results ─────────
+    const quizSubmitMatch = path.match(/^\/quiz\/sessions\/([0-9a-f-]+)\/submit$/);
+    if (req.method === 'POST' && quizSubmitMatch) {
+      const sessionId = quizSubmitMatch[1]!;
+
+      // Verify session belongs to this student
+      const { data: sess, error: sessErr } = await supabase
+        .from('quiz_sessions')
+        .select('id, question_count, completed_at')
+        .eq('id', sessionId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .maybeSingle();
+
+      if (sessErr) return fail(500, 'Failed to look up session');
+      if (!sess)   return fail(404, 'Session not found');
+      if ((sess as { completed_at: string | null }).completed_at) {
+        return fail(409, 'Session already submitted');
+      }
+
+      const SubmitSchema = z.object({
+        answers:        z.array(z.object({
+          question_id:    z.string().uuid(),
+          selected_index: z.number().int().min(0).nullable(),
+        })),
+        time_spent_sec: z.number().int().min(0).optional(),
+      });
+      const body   = await req.json().catch(() => null);
+      const parsed = SubmitSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid answer payload');
+      const { answers, time_spent_sec } = parsed.data;
+
+      type QuestionRow = {
+        id:            string;
+        question_text: string;
+        options:       Array<{ text: string; is_correct: boolean }>;
+        explanation:   string | null;
+      };
+
+      // Fetch correct answers — restrict to questions belonging to this org (or system-wide)
+      const questionIds = answers.map((a: { question_id: string }) => a.question_id);
+      const { data: correctQs, error: cqErr } = await supabase
+        .from('quiz_questions')
+        .select('id, question_text, options, explanation')
+        .in('id', questionIds)
+        .or(`organization_id.is.null,organization_id.eq.${organization_id}`);
+
+      if (cqErr) return fail(500, 'Failed to verify answers');
+
+      const qMap = new Map<string, QuestionRow>(
+        (correctQs ?? []).map((q: QuestionRow) => [q.id, q] as [string, QuestionRow]),
+      );
+
+      // Grade answers
+      let score = 0;
+      const answerRows: Array<{
+        session_id:     string;
+        question_id:    string;
+        selected_index: number | null;
+        is_correct:     boolean;
+      }> = [];
+      const resultDetails: Array<{
+        question_id:    string;
+        question_text:  string;
+        selected_index: number | null;
+        correct_index:  number;
+        is_correct:     boolean;
+        explanation:    string | null;
+      }> = [];
+
+      for (const answer of answers) {
+        const q = qMap.get(answer.question_id);
+        if (!q) continue;
+
+        const correctIdx = q.options.findIndex((o) => o.is_correct);
+        const isCorrect = answer.selected_index === correctIdx;
+        if (isCorrect) score++;
+
+        answerRows.push({
+          session_id:     sessionId,
+          question_id:    answer.question_id,
+          selected_index: answer.selected_index,
+          is_correct:     isCorrect,
+        });
+
+        resultDetails.push({
+          question_id:    answer.question_id,
+          question_text:  q.question_text,
+          selected_index: answer.selected_index,
+          correct_index:  correctIdx,
+          is_correct:     isCorrect,
+          explanation:    q.explanation,
+        });
+      }
+
+      // Persist answers
+      if (answerRows.length > 0) {
+        const { error: insErr } = await supabase
+          .from('quiz_session_answers')
+          .insert(answerRows);
+        if (insErr) logger.warn('student-portal: quiz_session_answers insert failed', { error: insErr.message });
+      }
+
+      // Mark session complete
+      const { error: updErr } = await supabase
+        .from('quiz_sessions')
+        .update({
+          score,
+          completed_at:   new Date().toISOString(),
+          time_spent_sec: time_spent_sec ?? null,
+        })
+        .eq('id', sessionId);
+
+      if (updErr) logger.warn('student-portal: quiz_session update failed', { error: updErr.message });
+
+      return ok({
+        session_id:     sessionId,
+        score,
+        total:          answers.length,
+        percentage:     Math.round((score / Math.max(answers.length, 1)) * 100),
+        passed:         score >= Math.ceil(answers.length * 0.75),
+        details:        resultDetails,
+      });
+    }
+
+    // ── GET /quiz/sessions — student's quiz history ───────────────────────────
+    if (req.method === 'GET' && path === '/quiz/sessions') {
+      const { data: history, error: hErr } = await supabase
+        .from('quiz_sessions')
+        .select('id, category, question_count, score, completed_at, time_spent_sec, created_at')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .not('completed_at', 'is', null)
+        .order('completed_at', { ascending: false })
+        .limit(50);
+
+      if (hErr) return fail(500, 'Failed to fetch quiz history');
+      return ok(history ?? []);
+    }
+
+    // ── GET /documents — student's approved documents with signed download URLs ─
+    if (req.method === 'GET' && path === '/documents') {
+      const { data: docs, error: docsErr } = await supabase
+        .from('student_documents')
+        .select('id, category, file_name, mime_type, file_size_bytes, description, expires_at, storage_path, storage_bucket, created_at')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .eq('status', 'approved')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (docsErr) {
+        logger.error('student-portal: documents fetch failed', { error: docsErr.message });
+        return fail(500, 'Failed to fetch documents');
+      }
+
+      type DocRow = {
+        id:              string;
+        category:        string;
+        file_name:       string;
+        mime_type:       string | null;
+        file_size_bytes: number | null;
+        description:     string | null;
+        expires_at:      string | null;
+        storage_path:    string;
+        storage_bucket:  string;
+        created_at:      string;
+      };
+
+      const rows = (docs ?? []) as DocRow[];
+
+      const withUrls = await Promise.all(rows.map(async (doc) => {
+        const { data: signed } = await supabase.storage
+          .from(doc.storage_bucket)
+          .createSignedUrl(doc.storage_path, 3600);
+
+        return {
+          id:              doc.id,
+          category:        doc.category,
+          file_name:       doc.file_name,
+          mime_type:       doc.mime_type,
+          file_size_bytes: doc.file_size_bytes,
+          description:     doc.description,
+          expires_at:      doc.expires_at,
+          created_at:      doc.created_at,
+          download_url:    signed?.signedUrl ?? null,
+        };
+      }));
+
+      return ok(withUrls);
+    }
+
+    // ── GET /notifications — student's received notification history ──────────
+    if (req.method === 'GET' && path === '/notifications') {
+      const url_    = new URL(req.url);
+      const limit   = Math.min(Number(url_.searchParams.get('limit') ?? '40'), 50);
+
+      const { data: notifs, error: nErr } = await supabase
+        .from('notifications')
+        .select('id, subject, body, template_key, channel, status, created_at, reference_type, reference_id, metadata')
+        .eq('organization_id', organization_id)
+        .eq('recipient_id', student_id)
+        .eq('recipient_type', 'student')
+        .eq('status', 'sent')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (nErr) {
+        logger.error('student-portal: notifications fetch failed', { error: nErr.message });
+        return fail(500, 'Failed to fetch notifications');
+      }
+
+      type NotifRow = {
+        id:             string;
+        subject:        string | null;
+        body:           string | null;
+        template_key:   string;
+        channel:        string;
+        status:         string;
+        created_at:     string;
+        reference_type: string | null;
+        reference_id:   string | null;
+        metadata:       Record<string, unknown>;
+      };
+
+      return ok((notifs ?? []) as NotifRow[]);
+    }
+
+    // ── GET /packages — student's active lesson packages ─────────────────────
+    if (req.method === 'GET' && path === '/packages') {
+      const { data: pkgs, error: pkgsErr } = await supabase
+        .from('student_packages')
+        .select(`
+          id, quantity_granted, quantity_consumed, quantity_expired,
+          expires_at, purchased_at, status,
+          package_offerings!offering_id ( name, category )
+        `)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['active', 'exhausted'])
+        .order('purchased_at', { ascending: false })
+        .limit(20);
+
+      if (pkgsErr) return fail(500, 'Failed to fetch packages');
+
+      type PkgRow = {
+        id: string; quantity_granted: number; quantity_consumed: number;
+        quantity_expired: number; expires_at: string | null; purchased_at: string; status: string;
+        package_offerings: { name: string; category: string } | null;
+      };
+
+      const result = ((pkgs ?? []) as PkgRow[]).map(p => ({
+        id:                 p.id,
+        name:               p.package_offerings?.name ?? 'Paket',
+        category:           p.package_offerings?.category ?? null,
+        quantity_granted:   p.quantity_granted,
+        quantity_consumed:  p.quantity_consumed,
+        quantity_remaining: Math.max(0, p.quantity_granted - p.quantity_consumed - p.quantity_expired),
+        expires_at:         p.expires_at,
+        purchased_at:       p.purchased_at,
+        status:             p.status,
+      }));
+
+      return ok(result);
+    }
+
+    return fail(404, 'Route not found');
+  }),
+);

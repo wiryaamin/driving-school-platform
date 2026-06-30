@@ -40,7 +40,7 @@ async function fetchGiftCards(): Promise<GiftCard[]> {
 async function voidGiftCard(id: string): Promise<void> {
   const { error } = await supabase
     .from('gift_cards')
-    .update({ status: 'void', voided_at: new Date().toISOString() })
+    .update({ status: 'void', voided_at: new Date().toISOString() } as never)
     .eq('id', id);
   if (error) throw new Error(error.message);
 }

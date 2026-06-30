@@ -46,7 +46,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const orgId  = ctx.organizationId;
 
   const canStudents = ctx.isPlatformAdmin || ctx.permissions.includes('students:student:read');
-  const canSlots    = ctx.isPlatformAdmin || ctx.permissions.includes('scheduling:booking:read');
+  const canSlots    = ctx.isPlatformAdmin || ctx.permissions.includes('scheduling:slot:read');
   const canFinance  = ctx.isPlatformAdmin || ctx.permissions.includes('finance:invoice:read');
 
   const startedAt = Date.now();
@@ -92,8 +92,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             .eq('status', 'paid')
             .is('deleted_at', null)
             .gte('created_at', monthFrom)
-            // No .limit() — PostgREST default (max_rows=1000 per config.toml) is sufficient
-            // for monthly invoice volume at any Swedish driving school.
+            .limit(5000)
         : Promise.resolve({ data: null, count: null, error: null }),
     ]);
 

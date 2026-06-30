@@ -169,10 +169,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       is_platform_admin: custom?.is_platform_admin ?? false,
     });
 
-    // ── 5. Impersonation gate (foundation — not yet active) ────────────────────
-    const safeImpersonatorId: string | undefined = undefined;
-
-    // ── 6. Merge and return enriched claims ───────────────────────────────────
+    // ── 5. Merge and return enriched claims ───────────────────────────────────
     const enriched: AuthHookResponse['claims'] = {
       ...claims,
       organization_id:      custom?.organization_id       ?? null,
@@ -182,7 +179,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
       location_ids:         custom?.location_ids          ?? [],
       subscription_tier:    custom?.subscription_tier     ?? 'trial',
       is_platform_admin:    custom?.is_platform_admin     ?? false,
-      ...(safeImpersonatorId !== undefined && { impersonator_id: safeImpersonatorId }),
     };
 
     // ── 7. JWT size guard ─────────────────────────────────────────────────────

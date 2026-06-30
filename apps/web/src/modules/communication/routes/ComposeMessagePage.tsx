@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ChevronRight, Send, Calendar, User, Phone, Mail } from 'lucide-react';
+import { ChevronRight, Send, Calendar, Phone, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { useSendMessage, useCommTemplates, useChannelConfigs } from '../hooks/useCommunication.js';

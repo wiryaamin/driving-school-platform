@@ -1,6 +1,6 @@
-import { useRef, useMemo, useState, useCallback } from 'react';
-import FullCalendar from '@fullcalendar/react';
-import { ChevronLeft, ChevronRight, Search, Clock, FileText, CreditCard, User, Eye } from 'lucide-react';
+import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
+import type FullCalendar from '@fullcalendar/react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from '@platform/ui';
 import { SchedulingCalendar } from '../components/SchedulingCalendar.js';
@@ -8,7 +8,10 @@ import { SlotDetailSheet } from '../components/SlotDetailSheet.js';
 import { BookingDialog } from '../components/BookingDialog.js';
 import { CreateSlotSheet } from '../components/CreateSlotSheet.js';
 import { MultiInstructorGrid } from '../components/MultiInstructorGrid.js';
-import { useCalendarView, type CalendarViewType } from '../hooks/useCalendarView.js';
+import { SchedulingActionToolbar } from '../components/SchedulingActionToolbar.js';
+import { SubstituteInstructorDialog } from '../components/SubstituteInstructorDialog.js';
+import { HittaLedigTidDialog } from '../components/HittaLedigTidDialog.js';
+import { useCalendarView } from '../hooks/useCalendarView.js';
 import { useSlotList } from '../hooks/useSlots.js';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useInstructorList } from '@modules/instructors/index.js';
@@ -43,129 +46,33 @@ function formatWeekTitle(weekStart: Date, numWeeks: number): string {
   return `${startFmt} – ${endFmt}`;
 }
 
-function isoDateOnly(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SchemaTab  = 'bokningsschema' | 'resursschema';
 type GridView   = 'dag' | 'vecka' | '5veckor';
 
-// ─── Action Toolbar ───────────────────────────────────────────────────────────
-
-function ActionToolbar({ onNavigate }: { onNavigate: (path: string) => void }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 bg-muted/40 border-b border-border">
-
-      {/* Customer search area */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => onNavigate('/students')}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-        >
-          <Search className="w-3 h-3" />
-          Sök efter kund
-        </button>
-        <button
-          disabled
-          title="Välj en kund för att se kundkortet"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs text-muted-foreground/40 cursor-not-allowed"
-        >
-          <User className="w-3 h-3" />
-          Ingen kund vald
-        </button>
-        <button
-          disabled
-          title="Välj en kund för att visa visningsläge"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs text-muted-foreground/40 cursor-not-allowed"
-        >
-          <Eye className="w-3 h-3" />
-          Ingen kund vald
-        </button>
-      </div>
-
-      <div className="w-px h-5 bg-border mx-1 hidden sm:block" />
-
-      {/* Action buttons */}
-      <div className="flex items-center gap-1">
-        <button
-          disabled
-          title="Kommer snart — sök efter lediga tider per körkortskategori"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground/40 cursor-not-allowed"
-        >
-          <Clock className="w-3 h-3" />
-          Hitta ledig tid
-          <span className="ml-1 text-[9px] font-semibold bg-muted px-1 py-0.5 rounded text-muted-foreground">Snart</span>
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-          onClick={() => onNavigate('/scheduling/list')}
-        >
-          <FileText className="w-3 h-3" />
-          Bokningar
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-          onClick={() => onNavigate('/finance/cash')}
-        >
-          <CreditCard className="w-3 h-3" />
-          Kassa
-        </button>
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-background text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-          onClick={() => onNavigate('/students')}
-        >
-          <User className="w-3 h-3" />
-          Kundkort
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ─── Filter Row ───────────────────────────────────────────────────────────────
 
 function FilterRow({
   filterDate,
   showWeekends,
-  groupPerDay,
   onFilterDateChange,
   onShowWeekendsChange,
-  onGroupPerDayChange,
 }: {
   filterDate:           string;
   showWeekends:         boolean;
-  groupPerDay:          boolean;
   onFilterDateChange:   (d: string) => void;
   onShowWeekendsChange: (v: boolean) => void;
-  onGroupPerDayChange:  (v: boolean) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-muted/20 border-b border-border">
 
-      {/* Personalgrupp */}
-      <select className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
-        <option>Filtrera på personalgrupp</option>
-      </select>
-
-      {/* Tidmallsgrupp */}
-      <select className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
-        <option>Filtrera på tidmallsgrupp</option>
-      </select>
-
-      {/* Resurs search */}
-      <select className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
-        <option>Sök efter resurs</option>
-      </select>
-
       {/* Date filter */}
-      <div className="relative flex items-center">
-        <span className="text-muted-foreground/50 mr-1.5 text-xs">
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-          </svg>
-        </span>
+      <div className="relative flex items-center gap-1.5">
+        <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
         <input
           type="date"
           value={filterDate}
@@ -175,7 +82,8 @@ function FilterRow({
         {filterDate && (
           <button
             onClick={() => onFilterDateChange('')}
-            className="ml-1 text-muted-foreground/50 hover:text-muted-foreground"
+            className="text-muted-foreground/50 hover:text-muted-foreground"
+            aria-label="Rensa datum"
           >
             <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -185,15 +93,6 @@ function FilterRow({
       </div>
 
       <div className="flex items-center gap-3 ml-auto">
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={groupPerDay}
-            onChange={(e) => onGroupPerDayChange(e.target.checked)}
-            className="w-3.5 h-3.5 rounded accent-primary"
-          />
-          <span className="text-xs text-muted-foreground">Gruppera personal per dag</span>
-        </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input
             type="checkbox"
@@ -292,95 +191,25 @@ function GridNavBar({
 // ─── Resursschema Tab ─────────────────────────────────────────────────────────
 
 function ResursschemaTab() {
-  const [filterDate, setFilterDate] = useState('');
-  const [view, setView]             = useState<GridView>('vecka');
-  const [weekStart, setWeekStart]   = useState(() => getMonday(new Date()));
-
-  function handlePrev()  { setWeekStart((w) => addWeeks(w, view === '5veckor' ? -5 : -1)); }
-  function handleNext()  { setWeekStart((w) => addWeeks(w, view === '5veckor' ?  5 :  1)); }
-  function handleToday() { setWeekStart(getMonday(new Date())); }
-
-  const title = view === 'dag'
-    ? new Date().toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-    : formatWeekTitle(weekStart, view === '5veckor' ? 5 : 1);
-
   return (
-    <div>
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 px-3 py-2 border-b border-border bg-card">
-        {/* Resource search */}
-        <select className="h-7 text-xs border border-border rounded px-2 bg-background text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
-          <option>Sök efter resurser</option>
-        </select>
-
-        {/* Date filter */}
-        <div className="relative flex items-center">
-          <input
-            type="date"
-            value={filterDate}
-            onChange={(e) => setFilterDate(e.target.value)}
-            placeholder="Välj datum"
-            className="h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-          />
-          {filterDate && (
-            <button onClick={() => setFilterDate('')} className="ml-1 text-muted-foreground/50 hover:text-muted-foreground">
-              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          )}
-        </div>
+    <div className="flex flex-col items-center justify-center py-24 px-6 gap-4 text-center">
+      <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center">
+        <svg className="w-7 h-7 text-muted-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <line x1="16" y1="2" x2="16" y2="6" />
+          <line x1="8" y1="2" x2="8" y2="6" />
+          <line x1="3" y1="10" x2="21" y2="10" />
+        </svg>
       </div>
-
-      {/* Nav bar */}
-      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border bg-card">
-        <div className="flex items-center gap-1">
-          <button onClick={handleToday} className="px-3 py-1 text-xs font-medium rounded border border-border bg-background hover:bg-accent transition-colors">Idag</button>
-          <button onClick={handlePrev} className="p-1 rounded hover:bg-accent text-muted-foreground"><ChevronLeft className="w-4 h-4" /></button>
-          <button onClick={handleNext} className="p-1 rounded hover:bg-accent text-muted-foreground"><ChevronRight className="w-4 h-4" /></button>
-          <span className="text-sm font-semibold text-foreground ml-1">{title}</span>
-        </div>
-        <div className="flex items-center rounded border border-input bg-background p-0.5 gap-0.5">
-          {(['dag', 'vecka', '5veckor'] as GridView[]).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                'px-2.5 py-1 text-xs font-medium rounded transition-colors',
-                view === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-accent',
-              )}
-            >
-              {v === 'dag' ? 'Dag' : v === 'vecka' ? 'Vecka' : '5 veckor'}
-            </button>
-          ))}
-        </div>
+      <div className="space-y-1.5">
+        <p className="text-sm font-semibold text-foreground">Resursschema</p>
+        <p className="text-xs text-muted-foreground max-w-xs leading-relaxed">
+          Schemalägg fordon, simulatorer och lokaler. Koppla resurser till lektioner och se konflikter i realtid.
+        </p>
       </div>
-
-      {/* Empty time grid */}
-      <div className="overflow-auto">
-        <table className="border-collapse w-full text-xs">
-          <thead>
-            <tr className="bg-card">
-              <th className="border border-border px-2 py-1 w-16 text-left text-muted-foreground font-medium">
-                {view !== 'dag' && `v. ${Math.ceil((weekStart.getDate() + 6) / 7)}`}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'].map((t) => (
-              <tr key={t}>
-                <td className="border border-border px-2 py-2 w-16 text-right font-mono text-muted-foreground text-[10px]">{t}</td>
-                <td className="border border-border h-8 bg-muted/5" />
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="text-center py-10 space-y-2">
-          <p className="text-sm text-muted-foreground">Resursschema under implementation</p>
-          <p className="text-xs text-muted-foreground max-w-xs mx-auto">Schemalägg fordon, simulatorer och lokaler. Koppla resurser till lektioner och se konflikter i realtid.</p>
-          <span className="inline-block text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">Kommer snart</span>
-        </div>
-      </div>
+      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
+        Kommer snart
+      </span>
     </div>
   );
 }
@@ -404,20 +233,20 @@ export function SchedulingCalendarPage() {
     return getMonday(new Date());
   });
   const [showWeekends, setShowWeekends] = useState(true);
-  const [groupPerDay,  setGroupPerDay]  = useState(false);
   const [filterDate,   setFilterDate]   = useState('');
 
   // ── Sheet / dialog state ─────────────────────────────────────────────────
-  const [selectedSlot,   setSelectedSlot]   = useState<LessonSlot | null>(null);
-  const [sheetOpen,      setSheetOpen]      = useState(false);
-  const [quickBookSlot,  setQuickBookSlot]  = useState<LessonSlot | null>(null);
-  const [quickBookOpen,  setQuickBookOpen]  = useState(false);
-  const [createSlotOpen, setCreateSlotOpen] = useState(false);
+  const [selectedSlot,    setSelectedSlot]    = useState<LessonSlot | null>(null);
+  const [sheetOpen,       setSheetOpen]       = useState(false);
+  const [quickBookSlot,   setQuickBookSlot]   = useState<LessonSlot | null>(null);
+  const [quickBookOpen,   setQuickBookOpen]   = useState(false);
+  const [createSlotOpen,  setCreateSlotOpen]  = useState(false);
+  const [substituteOpen,      setSubstituteOpen]      = useState(false);
+  const [hittaLedigTidOpen,   setHittaLedigTidOpen]   = useState(false);
 
   // ── FullCalendar (Dag view) state ────────────────────────────────────────
   const {
     initialView,
-    currentView,
     currentTitle,
     dateRange,
     selectedInstructorIds,
@@ -477,7 +306,7 @@ export function SchedulingCalendarPage() {
   });
 
   // FullCalendar day view: fetch filtered slots
-  const { data: fcSlotsData, isLoading: fcLoading, error: fcError } = useSlotList({
+  const { data: fcSlotsData, isLoading: fcLoading, error: fcError, refetch: fcRefetch } = useSlotList({
     per_page: 100,
     sort_by:  'starts_at',
     sort_dir: 'asc',
@@ -506,18 +335,18 @@ export function SchedulingCalendarPage() {
   function handleFCPrev()  { calendarRef.current?.getApi().prev(); }
   function handleFCNext()  { calendarRef.current?.getApi().next(); }
   function handleFCToday() { calendarRef.current?.getApi().today(); }
-  function handleFCViewChange(view: CalendarViewType) {
-    calendarRef.current?.getApi().changeView(view);
-  }
-
   // ── View change ───────────────────────────────────────────────────────────
+  // When switching to day-view we need FullCalendar to be rendered before calling
+  // its API. useEffect fires after the render cycle, replacing the fragile setTimeout.
   function handleGridViewChange(v: GridView) {
     setGridView(v);
-    if (v === 'dag') {
-      // Switch to FullCalendar day view
-      setTimeout(() => calendarRef.current?.getApi().changeView('timeGridDay'), 50);
-    }
   }
+
+  useEffect(() => {
+    if (gridView === 'dag') {
+      calendarRef.current?.getApi().changeView('timeGridDay');
+    }
+  }, [gridView]);
 
   // ── Slot interaction ──────────────────────────────────────────────────────
   function handleSlotClick(slot: LessonSlot) {
@@ -597,16 +426,29 @@ export function SchedulingCalendarPage() {
           <div className="flex flex-col flex-1 min-h-0">
 
             {/* Action toolbar */}
-            <ActionToolbar onNavigate={navigate} />
+            <SchedulingActionToolbar
+              onNavigate={navigate}
+              onHittaLedigTid={() => setHittaLedigTidOpen(true)}
+              onSubstitute={() => setSubstituteOpen(true)}
+            />
 
             {/* Filter row */}
             <FilterRow
               filterDate={filterDate}
               showWeekends={showWeekends}
-              groupPerDay={groupPerDay}
-              onFilterDateChange={setFilterDate}
+              onFilterDateChange={(d) => {
+                setFilterDate(d);
+                if (d) {
+                  const date = new Date(d + 'T12:00:00');
+                  if (!isNaN(date.getTime())) {
+                    setWeekStart(getMonday(date));
+                    if (gridView === 'dag') {
+                      calendarRef.current?.getApi().gotoDate(date);
+                    }
+                  }
+                }
+              }}
               onShowWeekendsChange={setShowWeekends}
-              onGroupPerDayChange={setGroupPerDay}
             />
 
             {/* Navigation bar */}
@@ -658,8 +500,14 @@ export function SchedulingCalendarPage() {
                   )}
 
                   {fcError && (
-                    <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-4 py-3">
-                      Det gick inte att hämta schemat.
+                    <div className="flex items-center justify-between text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-4 py-3">
+                      <span>Det gick inte att hämta schemat.</span>
+                      <button
+                        onClick={() => void fcRefetch()}
+                        className="ml-4 shrink-0 text-xs font-medium underline underline-offset-2 hover:no-underline"
+                      >
+                        Försök igen
+                      </button>
                     </div>
                   )}
 
@@ -717,6 +565,16 @@ export function SchedulingCalendarPage() {
           : weekStart
         }
         initialInstructorId={selectedInstructorId}
+      />
+
+      <SubstituteInstructorDialog
+        open={substituteOpen}
+        onOpenChange={setSubstituteOpen}
+      />
+
+      <HittaLedigTidDialog
+        open={hittaLedigTidOpen}
+        onOpenChange={setHittaLedigTidOpen}
       />
     </>
   );

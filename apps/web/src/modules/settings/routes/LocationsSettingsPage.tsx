@@ -83,7 +83,7 @@ export function LocationsSettingsPage() {
             </div>
           ) : (
             [...active, ...inactive].map(loc => (
-              <LocationRow key={loc.id} location={loc} />
+              <LocationListItem key={loc.id} location={loc} />
             ))
           )}
         </div>
@@ -94,7 +94,7 @@ export function LocationsSettingsPage() {
 
 // ─── LocationRow ──────────────────────────────────────────────────────────────
 
-function LocationRow({ location }: { location: LocationRow }) {
+function LocationListItem({ location }: { location: LocationRow }) {
   const isActive = location.status === 'active';
   const address  = `${location.address_line1}, ${location.postal_code} ${location.city}`;
 

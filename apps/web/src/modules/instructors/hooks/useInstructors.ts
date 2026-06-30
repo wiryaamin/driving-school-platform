@@ -2,6 +2,57 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import type { Instructor, InstructorEmploymentType, InstructorListQueryInput } from '@platform/types';
 
+// ─── Instructor booking log types ─────────────────────────────────────────────
+
+export type InstructorLogFilter = 'all' | 'booked' | 'cancelled';
+
+export interface InstructorLogEntry {
+  id: string;
+  datum: string;
+  handelse: string;
+  tillfalle: string;
+  kund: string;
+  status: string;
+}
+
+interface InstructorLogMeta {
+  total: number;
+  page: number;
+  per_page: number;
+  has_more: boolean;
+}
+
+export interface InstructorLogResponse {
+  data: InstructorLogEntry[];
+  meta: InstructorLogMeta;
+}
+
+// ─── Log helpers ──────────────────────────────────────────────────────────────
+
+function logHandelse(status: string, studentName: string, cancellationCategory: string | null): string {
+  if (status === 'confirmed' || status === 'reserved') return `${studentName} inbokad`;
+  if (status === 'completed')  return `${studentName} — lektion genomförd`;
+  if (status === 'cancelled') {
+    if (cancellationCategory === 'student_request') return `${studentName} avbokade sig`;
+    return `${studentName} avbokades`;
+  }
+  if (status === 'no_show')    return `${studentName} uteblev`;
+  if (status === 'rescheduled') return `${studentName} — ombokas`;
+  return `${studentName} — ${status}`;
+}
+
+function logTillfalle(lessonTypeName: string, startsAt: string, endsAt: string): string {
+  try {
+    const tz = 'Europe/Stockholm';
+    const s = new Date(startsAt), e = new Date(endsAt);
+    const dayRaw  = s.toLocaleDateString('sv-SE', { weekday: 'long', timeZone: tz });
+    const dateStr = s.toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric', timeZone: tz });
+    const st = s.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+    const et = e.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+    return `${lessonTypeName} (${dayRaw.charAt(0).toUpperCase() + dayRaw.slice(1)} ${dateStr} ${st}–${et})`;
+  } catch { return lessonTypeName; }
+}
+
 export type { Instructor, InstructorEmploymentType };
 
 // ─── Response shapes ──────────────────────────────────────────────────────────
@@ -122,17 +173,19 @@ export function useInstructorList(
   options?: { enabled?: boolean }
 ) {
   return useQuery({
-    queryKey: instructorKeys.list(params),
-    queryFn:  () => apiFetchInstructors({ per_page: 100, ...params }),
-    enabled:  options?.enabled ?? true,
+    queryKey:  instructorKeys.list(params),
+    queryFn:   () => apiFetchInstructors({ per_page: 100, ...params }),
+    enabled:   options?.enabled ?? true,
+    staleTime: 5 * 60_000,
   });
 }
 
 export function useInstructor(id: string | null) {
   return useQuery({
-    queryKey: instructorKeys.detail(id ?? ''),
-    queryFn:  () => apiFetchInstructor(id!),
-    enabled:  id !== null && id !== '',
+    queryKey:  instructorKeys.detail(id ?? ''),
+    queryFn:   () => apiFetchInstructor(id!),
+    enabled:   id !== null && id !== '',
+    staleTime: 2 * 60_000,
   });
 }
 
@@ -167,5 +220,61 @@ export function useArchiveInstructor() {
       void queryClient.invalidateQueries({ queryKey: instructorKeys.lists() });
       queryClient.removeQueries({ queryKey: instructorKeys.detail(id) });
     },
+  });
+}
+
+export function useInstructorBookingLogs(
+  instructorId: string | null,
+  params: { filter?: InstructorLogFilter; page?: number; per_page?: number } = {},
+) {
+  const { filter = 'all', page = 1, per_page = 50 } = params;
+  return useQuery<InstructorLogResponse>({
+    queryKey: ['instructors', 'logs', instructorId, { filter, page, per_page }],
+    queryFn: async () => {
+      const from = (page - 1) * per_page;
+      const to   = from + per_page - 1;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q = (supabase as unknown as any)
+        .from('lesson_bookings')
+        .select(
+          `id, status, created_at, starts_at, ends_at, cancellation_category,
+           students ( first_name, last_name ),
+           lesson_types ( name )`,
+          { count: 'exact' },
+        )
+        .eq('instructor_id', instructorId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (filter === 'booked')    q = q.in('status', ['confirmed', 'reserved', 'completed']);
+      if (filter === 'cancelled') q = q.eq('status', 'cancelled');
+
+      const { data, count, error } = await q;
+      if (error) throw new Error(error.message);
+
+      const mapped: InstructorLogEntry[] = (data ?? []).map((b: {
+        id: string; status: string; created_at: string; starts_at: string; ends_at: string;
+        cancellation_category: string | null;
+        students: { first_name: string; last_name: string } | null;
+        lesson_types: { name: string } | null;
+      }) => {
+        const studentName = b.students ? `${b.students.first_name} ${b.students.last_name}` : '—';
+        return {
+          id:        b.id,
+          datum:     b.created_at,
+          handelse:  logHandelse(b.status, studentName, b.cancellation_category),
+          tillfalle: logTillfalle(b.lesson_types?.name ?? '', b.starts_at, b.ends_at),
+          kund:      studentName,
+          status:    b.status,
+        };
+      });
+
+      const total = count ?? 0;
+      return { data: mapped, meta: { total, page, per_page, has_more: page * per_page < total } };
+    },
+    enabled: !!instructorId,
+    staleTime: 60_000,
   });
 }

@@ -13,17 +13,37 @@ const allowedOrigins = [
   Deno.env.get('STUDENT_APP_URL') ?? '',
 ].filter(Boolean);
 
+/**
+ * Security headers applied to every response from serveCors().
+ * These do not depend on the request origin and are always safe to include on API responses.
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options':    'nosniff',
+  'X-Frame-Options':           'DENY',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'Referrer-Policy':           'strict-origin-when-cross-origin',
+  'Cache-Control':             'no-store',
+};
+
 export function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get('Origin') ?? '';
   const isAllowed = allowedOrigins.includes(origin);
 
-  return {
-    'Access-Control-Allow-Origin':   isAllowed ? origin : (allowedOrigins[0] ?? ''),
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Methods':  'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers':  'authorization, x-client-info, apikey, content-type, x-correlation-id, x-app-env, x-app-version',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age':        '86400',
   };
+
+  // Only echo back the origin if it is in the allowlist. Omitting the header
+  // for disallowed origins lets the browser enforce same-origin policy correctly
+  // without sending a misleading ACAO value.
+  if (isAllowed) {
+    headers['Access-Control-Allow-Origin'] = origin;
+  }
+
+  return headers;
 }
 
 /**
@@ -60,7 +80,8 @@ export async function serveCors(
   }
 
   const headers = new Headers(res.headers);
-  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  for (const [k, v] of Object.entries(cors))            headers.set(k, v);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 

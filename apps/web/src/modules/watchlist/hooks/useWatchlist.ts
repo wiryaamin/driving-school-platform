@@ -10,7 +10,7 @@ export interface WatchlistItem {
   type: WatchlistType;
   note: string;
   created_at: string;
-  archived_at?: string;
+  archived_at?: string | undefined;
   status: 'active' | 'archived';
 }
 

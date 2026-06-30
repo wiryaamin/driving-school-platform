@@ -8,6 +8,8 @@ import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/Pag
 import { Button, Skeleton, toast } from '@platform/ui';
 import { useLessonTypes } from '../../scheduling/hooks/useLessonTypes.js';
 import { useStudentList } from '../../students/hooks/useStudents.js';
+import { useCreateInvoice, useAddInvoiceLine, useIssueInvoice, useRecordPayment } from '../hooks/useFinance.js';
+import type { PaymentMethod } from '../hooks/useFinance.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -38,6 +40,20 @@ function fmtSEK(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' kr';
 }
 
+// ─── Payment method mapping ───────────────────────────────────────────────────
+
+function toApiMethod(pm: KassaPM): PaymentMethod {
+  switch (pm) {
+    case 'visa':        return 'card';
+    case 'swish':       return 'swish';
+    case 'kontanter':   return 'manual';
+    case 'presentkort': return 'manual';
+    case 'bankgiro':    return 'bank_transfer';
+    case 'plusgiro':    return 'bank_transfer';
+    case 'elevsaldo':   return 'invoice_credit';
+  }
+}
+
 // ─── KassaPage ────────────────────────────────────────────────────────────────
 
 export function KassaPage() {
@@ -47,7 +63,13 @@ export function KassaPage() {
   const [paymentMethod, setPaymentMethod] = useState<KassaPM | null>(null);
   const [search,        setSearch]        = useState('');
   const [showDropdown,  setShowDropdown]  = useState(false);
+  const [isSaving,      setIsSaving]      = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const createInvoice = useCreateInvoice();
+  const addLine       = useAddInvoiceLine();
+  const issueInvoice  = useIssueInvoice();
+  const recordPayment = useRecordPayment();
 
   const { data: lessonTypes = [], isLoading: ltLoading } = useLessonTypes();
   const { data: studentsData } = useStudentList(
@@ -112,6 +134,8 @@ export function KassaPage() {
   function handleGuestPurchase() {
     setIsGuest(true);
     setCustomer(null);
+    // elevsaldo requires a student account — clear it if selected
+    if (paymentMethod === 'elevsaldo') setPaymentMethod(null);
   }
 
   function handleReset() {
@@ -122,9 +146,9 @@ export function KassaPage() {
     setSearch('');
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!customer && !isGuest) {
-      toast({ title: 'Välj en kund eller Gästköp för att fortsätta', variant: 'destructive' });
+      toast({ title: 'Välj en kund eller välj Gästköp', variant: 'destructive' });
       return;
     }
     if (cart.length === 0) {
@@ -135,12 +159,52 @@ export function KassaPage() {
       toast({ title: 'Välj ett betalningsmedel', variant: 'destructive' });
       return;
     }
-    // TODO: wire up to createInvoice → addInvoiceLine → recordPayment API
-    toast({ title: 'Kontantfaktura sparad' });
-    handleReset();
+
+    setIsSaving(true);
+    try {
+      // 1. Create draft invoice (student_id null for guest purchases)
+      const invoice = await createInvoice.mutateAsync(
+        customer
+          ? { student_id: customer.id }
+          : { is_guest: true },
+      );
+
+      // 2. Add one line per cart item (prices are incl. 25% VAT)
+      const VAT_RATE = 0.25;
+      for (const item of cart) {
+        await addLine.mutateAsync({
+          invoiceId:   invoice.id,
+          description: item.name,
+          quantity:    item.qty,
+          unit_price:  item.priceInclVat / (1 + VAT_RATE),
+          vat_rate:    VAT_RATE,
+        });
+      }
+
+      // 3. Issue (assigns invoice number)
+      await issueInvoice.mutateAsync(invoice.id);
+
+      // 4. Record the payment
+      await recordPayment.mutateAsync({
+        invoice_id:     invoice.id,
+        amount:         totalInclVat,
+        payment_method: toApiMethod(paymentMethod),
+      });
+
+      toast({
+        title:       'Kontantfaktura sparad',
+        description: `Betalning mottagen: ${fmtSEK(totalInclVat)}`,
+      });
+      handleReset();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Försök igen';
+      toast({ title: 'Betalning misslyckades', description: msg, variant: 'destructive' });
+    } finally {
+      setIsSaving(false);
+    }
   }
 
-  const canSave = (customer !== null || isGuest) && cart.length > 0 && paymentMethod !== null;
+  const canSave = (customer !== null || isGuest) && cart.length > 0 && paymentMethod !== null && !isSaving;
 
   function togglePM(id: KassaPM) {
     setPaymentMethod(prev => prev === id ? null : id);
@@ -335,7 +399,12 @@ export function KassaPage() {
                 <span className="text-[10px] text-muted-foreground">Plusgiro</span>
               </PMCard>
 
-              <PMCard selected={paymentMethod === 'elevsaldo'}   onSelect={() => togglePM('elevsaldo')} dimmed>
+              <PMCard
+                selected={paymentMethod === 'elevsaldo'}
+                onSelect={() => !isGuest && togglePM('elevsaldo')}
+                dimmed={isGuest || paymentMethod !== 'elevsaldo'}
+                title={isGuest ? 'Elevsaldo kräver registrerad elev' : undefined}
+              >
                 <CreditCard className="w-5 h-5 text-muted-foreground" />
                 <span className="text-[10px] text-muted-foreground">Elevsaldo</span>
               </PMCard>
@@ -439,11 +508,16 @@ export function KassaPage() {
                   <Button
                     className="w-full"
                     disabled={!canSave}
-                    onClick={handleSave}
+                    onClick={() => { void handleSave(); }}
                   >
-                    Spara kontantfaktura
+                    {isSaving ? 'Registrerar...' : 'Spara kontantfaktura'}
                   </Button>
-                  <Button variant="outline" className="w-full" onClick={handleReset}>
+                  {!customer && !isGuest && (
+                    <p className="text-xs text-muted-foreground text-center">
+                      Välj en kund eller Gästköp för att fortsätta
+                    </p>
+                  )}
+                  <Button variant="outline" className="w-full" onClick={handleReset} disabled={isSaving}>
                     Avbryt
                   </Button>
                 </div>
@@ -464,16 +538,19 @@ function PMCard({
   selected,
   onSelect,
   dimmed = false,
+  title,
   children,
 }: {
   selected:  boolean;
   onSelect:  () => void;
-  dimmed?:   boolean;
+  dimmed?:   boolean | undefined;
+  title?:    string | undefined;
   children:  ReactNode;
 }) {
   return (
     <button
       onClick={onSelect}
+      title={title}
       className={cn(
         'flex flex-col items-center justify-center gap-0.5 p-2.5 rounded-lg border-2 min-h-[60px] transition-colors',
         selected

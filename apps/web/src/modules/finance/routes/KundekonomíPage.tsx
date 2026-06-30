@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { User } from 'lucide-react';
@@ -29,6 +29,12 @@ interface InvoiceRow {
   created_at:     string;
   total_amount:   number;
   student_id:     string | null;
+}
+
+interface StudentNameRow {
+  id:         string;
+  first_name: string;
+  last_name:  string;
 }
 
 // ─── Data hooks ───────────────────────────────────────────────────────────────
@@ -125,6 +131,34 @@ function InvoiceTable({ statuses }: { statuses: string[] }) {
     staleTime: 60_000,
   });
 
+  const rows = data ?? [];
+
+  const studentIds = useMemo(() => {
+    const ids = new Set(rows.map((r) => r.student_id).filter(Boolean) as string[]);
+    return [...ids];
+  }, [rows]);
+
+  const { data: studentData } = useQuery<StudentNameRow[]>({
+    queryKey: ['kundekonomi-students', studentIds],
+    queryFn: async () => {
+      if (studentIds.length === 0) return [];
+      const { data } = await supabase
+        .from('students')
+        .select('id, first_name, last_name')
+        .in('id', studentIds)
+        .is('deleted_at', null);
+      return (data ?? []) as StudentNameRow[];
+    },
+    enabled: studentIds.length > 0,
+    staleTime: 5 * 60_000,
+  });
+
+  const studentMap = useMemo(() => {
+    const m: Record<string, StudentNameRow> = {};
+    for (const s of studentData ?? []) m[s.id] = s;
+    return m;
+  }, [studentData]);
+
   if (isLoading) {
     return (
       <div className="p-4 space-y-2">
@@ -132,8 +166,6 @@ function InvoiceTable({ statuses }: { statuses: string[] }) {
       </div>
     );
   }
-
-  const rows = data ?? [];
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -152,7 +184,7 @@ function InvoiceTable({ statuses }: { statuses: string[] }) {
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Datum</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Kund</th>
               <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Fakturabelopp</th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Senaste betalningen</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -163,39 +195,52 @@ function InvoiceTable({ statuses }: { statuses: string[] }) {
                 </td>
               </tr>
             ) : (
-              rows.map((inv) => (
-                <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
-                  <td className="px-4 py-2.5">
-                    <span className="text-xs text-muted-foreground">
-                      {inv.corporate_customer_id ? 'Billecta-faktura' : 'Faktura'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <Link
-                      to={`/finance/invoices/${inv.id}`}
-                      className="text-xs font-medium text-blue-600 hover:underline"
-                    >
-                      {inv.invoice_number ?? '—'}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-2.5 text-sm">{fmtDate(inv.due_date)}</td>
-                  <td className="px-4 py-2.5 text-sm">
-                    {fmtDate(inv.issued_at ?? inv.created_at)}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-1.5 text-sm">
-                      <User className="w-3 h-3 text-muted-foreground shrink-0" />
-                      <span className="text-muted-foreground">Elev</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5 text-sm text-right tabular-nums font-medium">
-                    {SEK.format(inv.total_amount)}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <InvoiceStatusBadge status={inv.status as never} />
-                  </td>
-                </tr>
-              ))
+              rows.map((inv) => {
+                const student = inv.student_id ? studentMap[inv.student_id] : null;
+                const name    = student
+                  ? `${student.first_name} ${student.last_name}`
+                  : null;
+                return (
+                  <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
+                    <td className="px-4 py-2.5">
+                      <span className="text-xs text-muted-foreground">Faktura</span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Link
+                        to={`/finance/invoices/${inv.id}`}
+                        className="text-xs font-medium text-blue-600 hover:underline"
+                      >
+                        {inv.invoice_number ?? '—'}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5 text-sm">{fmtDate(inv.due_date)}</td>
+                    <td className="px-4 py-2.5 text-sm">
+                      {fmtDate(inv.issued_at ?? inv.created_at)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1.5 text-sm">
+                        <User className="w-3 h-3 text-muted-foreground shrink-0" />
+                        {name ? (
+                          <Link
+                            to={`/students/${inv.student_id}`}
+                            className="text-foreground hover:text-primary hover:underline truncate max-w-[140px]"
+                          >
+                            {name}
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-sm text-right tabular-nums font-medium">
+                      {SEK.format(inv.total_amount)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <InvoiceStatusBadge status={inv.status as never} />
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

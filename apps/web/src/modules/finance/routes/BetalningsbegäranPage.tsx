@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
-import { Button, Skeleton } from '@platform/ui';
+import { Skeleton } from '@platform/ui';
 import { InvoiceStatusBadge } from '../components/InvoiceStatusBadge.js';
 import { cn } from '@/lib/utils.js';
 import type { Invoice, InvoiceStatus } from '../hooks/useFinance.js';

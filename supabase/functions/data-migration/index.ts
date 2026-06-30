@@ -1,7 +1,10 @@
 // deno-lint-ignore-file no-explicit-any
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { getOrgIdFromBearer, getUserIdFromBearer, getRoleFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext } from '../_shared/context.ts';
+import { createServiceClient } from '../_shared/supabase.ts';
+import { getRoleFromBearer } from '../_shared/jwt.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { requireFeature } from '../_shared/subscription.ts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -738,7 +741,7 @@ async function handleCancelSession(supabase: any, orgId: string, id: string): Pr
     .eq('id', id).eq('organization_id', orgId).is('deleted_at', null)
     .maybeSingle();
 
-  if (!existing) return err(`Session '${id}' hittades inte`, 404, 'NOT_FOUND');
+  if (!existing) return json({ success: true, already_cancelled: true });
 
   const { error } = await supabase
     .from('data_migration_sessions')
@@ -746,7 +749,7 @@ async function handleCancelSession(supabase: any, orgId: string, id: string): Pr
     .eq('id', id).eq('organization_id', orgId);
 
   if (error) return err('Kunde inte avbryta importsession', 500, 'INTERNAL_ERROR');
-  return new Response(null, { status: 204 });
+  return json({ success: true });
 }
 
 async function handleUploadRows(supabase: any, orgId: string, id: string, req: Request): Promise<Response> {
@@ -1335,17 +1338,25 @@ function handleTemplate(entity: string): Response {
 // ─── Main router ──────────────────────────────────────────────────────────────
 
 Deno.serve((req: Request) => serveCors(req, async () => {
-  const orgId  = getOrgIdFromBearer(req);
-  const userId = getUserIdFromBearer(req);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
+
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const subGuard = requireFeature(ctx, 'admin:data-migration:run');
+  if (subGuard) return subGuard;
+
+  const orgId  = ctx.organizationId!;
+  const userId = ctx.actorId!;
   const role   = getRoleFromBearer(req);
 
-  if (!orgId || !userId) return err('Unauthorized', 401, 'UNAUTHORIZED');
-
-  const supabaseClient = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    { auth: { persistSession: false } },
-  );
+  const supabaseClient = createServiceClient();
 
   const url     = new URL(req.url);
   const segs    = url.pathname.split('/').filter(Boolean);

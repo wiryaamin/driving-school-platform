@@ -1,58 +1,81 @@
-import { useState } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight, MessageSquare, Pencil, Trash2 } from 'lucide-react';
-import { Button } from '@platform/ui';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button, toast } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
-interface Phrase {
-  id:   number;
-  text: string;
-}
-
-const INITIAL_PHRASES: Phrase[] = [
-  { id: 1, text: 'Bra jobbat idag! Vi ses nästa gång.' },
-  { id: 2, text: 'Kom ihåg att öva på backning inför nästa lektion.' },
-  { id: 3, text: 'Glöm inte att ta med körkortsbeviset.' },
-];
-
-// ─── GemensammaFraserPage ─────────────────────────────────────────────────────
+interface Phrase { id: string; text: string; }
 
 export function GemensammaFraserPage() {
-  const [phrases,    setPhrases]    = useState<Phrase[]>(INITIAL_PHRASES);
-  const [showForm,   setShowForm]   = useState(false);
-  const [editId,     setEditId]     = useState<number | null>(null);
-  const [draftText,  setDraftText]  = useState('');
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
 
-  function openCreate() {
-    setEditId(null);
-    setDraftText('');
-    setShowForm(true);
-  }
+  const [phrases,   setPhrases]   = useState<Phrase[]>([]);
+  const [showForm,  setShowForm]  = useState(false);
+  const [editId,    setEditId]    = useState<string | null>(null);
+  const [draftText, setDraftText] = useState('');
 
-  function openEdit(p: Phrase) {
-    setEditId(p.id);
-    setDraftText(p.text);
-    setShowForm(true);
-  }
+  const { data: orgSettings } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['org-settings-common-phrases', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      return ((data as unknown as { settings: Record<string, unknown> } | null)?.settings) ?? null;
+    },
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!orgSettings) return;
+    const saved = orgSettings['common_phrases'];
+    if (Array.isArray(saved)) setPhrases(saved as Phrase[]);
+  }, [orgSettings]);
+
+  const saveMut = useMutation({
+    mutationFn: async (next: Phrase[]) => {
+      if (!orgId) return;
+      await supabase.from('organizations').update({
+        settings: { ...(orgSettings ?? {}), common_phrases: next },
+      } as never).eq('id', orgId);
+    },
+    onSuccess: () => {
+      toast({ title: 'Sparat' });
+      void qc.invalidateQueries({ queryKey: ['org-settings-common-phrases', orgId] });
+    },
+    onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
+  });
+
+  function openCreate() { setEditId(null); setDraftText(''); setShowForm(true); }
+
+  function openEdit(p: Phrase) { setEditId(p.id); setDraftText(p.text); setShowForm(true); }
 
   function save() {
     if (!draftText.trim()) return;
+    let next: Phrase[];
     if (editId != null) {
-      setPhrases(prev => prev.map(p => p.id === editId ? { ...p, text: draftText.trim() } : p));
+      next = phrases.map(p => p.id === editId ? { ...p, text: draftText.trim() } : p);
     } else {
-      setPhrases(prev => [...prev, { id: Date.now(), text: draftText.trim() }]);
+      next = [...phrases, { id: crypto.randomUUID(), text: draftText.trim() }];
     }
+    setPhrases(next);
+    saveMut.mutate(next);
     setShowForm(false);
     setDraftText('');
     setEditId(null);
   }
 
-  function remove(id: number) {
-    setPhrases(prev => prev.filter(p => p.id !== id));
+  function remove(id: string) {
+    const next = phrases.filter(p => p.id !== id);
+    setPhrases(next);
+    saveMut.mutate(next);
   }
 
   return (
     <div className="max-w-xl space-y-4">
-      {/* Breadcrumb + action */}
       <div className="flex items-center justify-between">
         <nav className="flex items-center gap-1 text-xs text-muted-foreground">
           <Link to="/settings" className="hover:text-foreground">Inställningar</Link>
@@ -69,7 +92,6 @@ export function GemensammaFraserPage() {
         </div>
       </div>
 
-      {/* Header card */}
       <div className="rounded-xl border border-border bg-card p-6 flex items-start gap-4">
         <div className="w-10 h-10 rounded-xl bg-teal-100 text-teal-500 flex items-center justify-center shrink-0">
           <MessageSquare className="w-5 h-5" />
@@ -83,12 +105,9 @@ export function GemensammaFraserPage() {
         </div>
       </div>
 
-      {/* Create/edit form */}
       {showForm && (
         <div className="rounded-xl border border-border bg-card p-5 space-y-3">
-          <h2 className="text-sm font-semibold text-foreground">
-            {editId != null ? 'Redigera fras' : 'Ny fras'}
-          </h2>
+          <h2 className="text-sm font-semibold text-foreground">{editId != null ? 'Redigera fras' : 'Ny fras'}</h2>
           <textarea
             autoFocus
             value={draftText}
@@ -96,20 +115,18 @@ export function GemensammaFraserPage() {
             rows={3}
             maxLength={200}
             placeholder="Skriv frasen här..."
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none
-                       focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
           />
           <p className="text-xs text-muted-foreground">{draftText.length}/200 tecken</p>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setShowForm(false)}>Avbryt</Button>
-            <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={save}>
-              Spara
+            <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={save} disabled={saveMut.isPending}>
+              {saveMut.isPending ? 'Sparar…' : 'Spara'}
             </Button>
           </div>
         </div>
       )}
 
-      {/* Phrase list */}
       {phrases.length === 0 ? (
         <div className="rounded-xl border border-border bg-card py-12 flex flex-col items-center gap-3 text-center">
           <MessageSquare className="w-8 h-8 text-muted-foreground/40" />
@@ -121,18 +138,10 @@ export function GemensammaFraserPage() {
           {phrases.map(p => (
             <div key={p.id} className="flex items-center gap-3 px-5 py-3 hover:bg-accent/20 transition-colors">
               <p className="flex-1 text-sm text-foreground">{p.text}</p>
-              <button
-                type="button"
-                onClick={() => openEdit(p)}
-                className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <button type="button" onClick={() => openEdit(p)} className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                 <Pencil className="w-3.5 h-3.5" />
               </button>
-              <button
-                type="button"
-                onClick={() => remove(p.id)}
-                className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-              >
+              <button type="button" onClick={() => remove(p.id)} className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>

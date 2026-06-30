@@ -41,9 +41,18 @@ const WORKER_SECRET        = Deno.env.get('WORKER_SECRET');
 // ─── Template key mapping ─────────────────────────────────────────────────────
 
 const REMINDER_TYPE_TO_TEMPLATE: Record<string, string> = {
-  reminder_24h: 'lesson.reminder.24h',
-  reminder_2h:  'lesson.reminder.2h',
-  reminder_1h:  'lesson.reminder.1h',
+  reminder_24h:      'lesson.reminder.24h',
+  reminder_same_day: 'lesson.reminder.same_day',
+  reminder_2h:       'lesson.reminder.2h',
+  reminder_1h:       'lesson.reminder.1h',
+};
+
+// Maps reminder_type → communication-worker trigger_event name
+const REMINDER_TYPE_TO_TRIGGER: Record<string, string> = {
+  reminder_24h:      'booking_reminder_24h',
+  reminder_same_day: 'booking_reminder_same_day',
+  reminder_2h:       'booking_reminder_24h',
+  reminder_1h:       'booking_reminder_24h',
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -73,20 +82,23 @@ interface HandlerResult {
 type EventHandler = (event: OutboxEvent, client: any) => Promise<HandlerResult>;
 
 interface WorkerMetrics {
-  worker_id:             string;
-  run_started_at:        string;
-  run_duration_ms:       number;
-  events_claimed:        number;
-  events_delivered:      number;
-  events_failed:         number;
-  events_dead_lettered:  number;
-  events_no_handler:     number;
-  reminders_processed:   number;
-  reminders_failed:      number;
-  reservations_expired:  number;
-  accounting_delivered:  number;
-  credits_expired:       number;
-  dunning_processed:     number;
+  worker_id:               string;
+  run_started_at:          string;
+  run_duration_ms:         number;
+  events_claimed:          number;
+  events_delivered:        number;
+  events_failed:           number;
+  events_dead_lettered:    number;
+  events_no_handler:       number;
+  reminders_processed:     number;
+  reminders_failed:        number;
+  reservations_expired:    number;
+  accounting_delivered:    number;
+  credits_expired:         number;
+  dunning_processed:       number;
+  instructor_digests_sent: number;
+  campaigns_transitioned:  number;
+  packages_expired:        number;
 }
 
 // ─── Outbox event handlers ────────────────────────────────────────────────────
@@ -157,10 +169,11 @@ async function handleLessonSlotCancelled(event: OutboxEvent, _client: unknown): 
   return { success: true };
 }
 
-// Lesson.Created: schedule reminders for the new booking
+// Lesson.Created: schedule reminders + send booking confirmation notification
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleLessonCreated(event: OutboxEvent, client: any): Promise<HandlerResult> {
   const bookingId = event.payload['booking_id'] as string | undefined;
+  const orgId     = event.organization_id;
 
   if (bookingId === undefined) {
     logger.warn('handler.lesson_created.missing_booking_id', { event_id: event.id });
@@ -178,6 +191,77 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
       error:      error.message,
     });
     return { success: false, error: error.message };
+  }
+
+  // Send booking confirmation — fetch slot + student contact in parallel
+  if (orgId !== null) {
+    try {
+      const [bookingResult, slotResult] = await Promise.all([
+        client
+          .from('lesson_bookings')
+          .select('slot_id, student_id')
+          .eq('id', bookingId)
+          .single(),
+        null,
+      ]);
+
+      const booking = bookingResult.data as { slot_id: string; student_id: string } | null;
+      if (booking !== null) {
+        const [slotRes, studentRes] = await Promise.all([
+          client.from('lesson_slots').select('starts_at').eq('id', booking.slot_id).single(),
+          client.from('students').select('first_name, phone, email').eq('id', booking.student_id).single(),
+        ]);
+
+        const slot    = slotRes.data    as { starts_at: string }                                         | null;
+        const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+
+        if (slot !== null && student !== null && (student.phone !== null || student.email !== null)) {
+          const startsAt = new Date(slot.starts_at);
+          const datum    = startsAt.toLocaleDateString('sv-SE',  { weekday: 'long', day: 'numeric', month: 'long',  timeZone: 'Europe/Stockholm' });
+          const tid      = startsAt.toLocaleTimeString('sv-SE',  { hour: '2-digit', minute: '2-digit',              timeZone: 'Europe/Stockholm' });
+
+          const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+          const workerSecret = Deno.env.get('WORKER_SECRET');
+
+          if (workerSecret !== undefined && workerSecret !== '') {
+            const payload: Record<string, string> = {
+              trigger_event:   'booking_confirmed',
+              organization_id: orgId,
+              förnamn:         student.first_name ?? '',
+              datum,
+              tid,
+            };
+            if (student.phone !== null) payload['student_phone'] = student.phone;
+            if (student.email !== null) payload['student_email'] = student.email;
+
+            await fetch(workerUrl, {
+              method:  'POST',
+              headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+              body:    JSON.stringify(payload),
+            }).catch((fetchErr: unknown) => {
+              logger.warn('booking_confirmed.dispatch_failed', { event_id: event.id, booking_id: bookingId, error: String(fetchErr) });
+            });
+          }
+        }
+      }
+    } catch (notifErr) {
+      // Notification failure is non-fatal — reminders were already scheduled
+      logger.warn('booking_confirmed.notification_error', { event_id: event.id, booking_id: bookingId, error: String(notifErr) });
+    }
+  }
+
+  // H-2: emit lesson_booked event on the student's active package (non-critical)
+  if (orgId !== null) {
+    await (client as any).rpc('record_lesson_booked_event', {
+      p_booking_id:      bookingId,
+      p_organization_id: orgId,
+    }).catch((e: unknown) => {
+      logger.warn('handler.lesson_created.record_lesson_booked_failed', {
+        event_id:   event.id,
+        booking_id: bookingId,
+        error:      String(e),
+      });
+    });
   }
 
   logger.info('handler.lesson_created', {
@@ -235,6 +319,54 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
         slot_id:           slotId,
         promoted_entry_id: promotedId,
       });
+    }
+  }
+
+  // Send cancellation notification to student
+  const orgId     = event.organization_id;
+  const studentId = event.payload['student_id'] as string | undefined;
+  if (orgId !== null && studentId !== undefined) {
+    try {
+      const [studentRes, slotRes] = await Promise.all([
+        client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
+        slotId !== undefined
+          ? client.from('lesson_slots').select('starts_at').eq('id', slotId).single()
+          : Promise.resolve({ data: null }),
+      ]);
+
+      const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+      const slot    = slotRes.data    as { starts_at: string }                                               | null;
+
+      if (student !== null && (student.phone !== null || student.email !== null)) {
+        const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+        const workerSecret = Deno.env.get('WORKER_SECRET');
+
+        if (workerSecret !== undefined && workerSecret !== '') {
+          const startsAt = slot ? new Date(slot.starts_at) : null;
+          const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long',  timeZone: 'Europe/Stockholm' }) : '';
+          const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',              timeZone: 'Europe/Stockholm' }) : '';
+
+          const payload: Record<string, string> = {
+            trigger_event:   'booking_cancelled',
+            organization_id: orgId,
+            förnamn:         student.first_name ?? '',
+            datum,
+            tid,
+          };
+          if (student.phone !== null) payload['student_phone'] = student.phone;
+          if (student.email !== null) payload['student_email'] = student.email;
+
+          await fetch(workerUrl, {
+            method:  'POST',
+            headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload),
+          }).catch((fetchErr: unknown) => {
+            logger.warn('booking_cancelled.dispatch_failed', { event_id: event.id, error: String(fetchErr) });
+          });
+        }
+      }
+    } catch (notifErr) {
+      logger.warn('booking_cancelled.notification_error', { event_id: event.id, error: String(notifErr) });
     }
   }
 
@@ -514,6 +646,7 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
   'Instructor.Archived':     handleInstructorArchived,
   'Lesson.SlotCreated':      handleLessonSlotCreated,
   'Lesson.SlotCancelled':    handleLessonSlotCancelled,
+  'booking.created':         handleLessonCreated,   // Phase 2B DB trigger alias
   'Lesson.Created':          handleLessonCreated,
   'Lesson.Updated':          handleLessonUpdated,
   'Lesson.Cancelled':        handleLessonCancelled,
@@ -546,26 +679,56 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
 // driven by outbox events: reminder dispatch + stale reservation expiry.
 
 interface MaintenanceMetrics {
-  reminders_processed:  number;
-  reminders_failed:     number;
-  reservations_expired: number;
-  credits_expired:      number;
-  dunning_processed:    number;
+  reminders_processed:     number;
+  reminders_failed:        number;
+  reservations_expired:    number;
+  credits_expired:         number;
+  dunning_processed:       number;
+  instructor_digests_sent: number;
+  campaigns_transitioned:  number;
+  packages_expired:        number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processReminder(client: any, reminder: Record<string, unknown>, workerId: string): Promise<boolean> {
-  const reminderId   = reminder['id']              as string;
-  const orgId        = reminder['organization_id'] as string;
-  const bookingId    = reminder['booking_id']      as string;
-  const recipientId  = reminder['recipient_id']    as string;
-  const recipientType = reminder['recipient_type'] as string;
-  const reminderType = reminder['reminder_type']   as string;
-  const templateKey  = REMINDER_TYPE_TO_TEMPLATE[reminderType] ?? `lesson.${reminderType}`;
-  const idemKey      = `notif:reminder:${reminderId}`;
+  const reminderId    = reminder['id']              as string;
+  const orgId         = reminder['organization_id'] as string;
+  const bookingId     = reminder['booking_id']      as string;
+  const recipientId   = reminder['recipient_id']    as string;
+  const recipientType = reminder['recipient_type']  as string;
+  const reminderType  = reminder['reminder_type']   as string;
+  const templateKey   = REMINDER_TYPE_TO_TEMPLATE[reminderType] ?? `lesson.${reminderType}`;
+  const triggerEvent  = REMINDER_TYPE_TO_TRIGGER[reminderType]  ?? 'booking_reminder_24h';
+  const idemKey       = `notif:reminder:${reminderId}`;
 
   try {
-    // Create notification record (idempotent via unique idempotency_key)
+    // Fetch booking → slot start time + student contact for dispatch payload
+    const { data: booking, error: bookingErr } = await client
+      .from('lesson_bookings')
+      .select('slot_id, student_id')
+      .eq('id', bookingId)
+      .single();
+
+    if (bookingErr !== null || booking === null) {
+      logger.warn('reminder.booking_not_found', { worker_id: workerId, reminder_id: reminderId, booking_id: bookingId });
+      await client.from('lesson_reminders').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', reminderId);
+      return false;
+    }
+
+    // Parallel fetch: slot start time + student contact details
+    const [slotResult, studentResult] = await Promise.all([
+      client.from('lesson_slots').select('starts_at').eq('id', booking.slot_id).single(),
+      client.from('students').select('first_name, phone, email, communication_opt_in_sms').eq('id', booking.student_id).single(),
+    ]);
+
+    const slot    = slotResult.data    as { starts_at: string }                                                                     | null;
+    const student = studentResult.data as { first_name: string; phone: string | null; email: string | null; communication_opt_in_sms: boolean } | null;
+
+    const startsAt = slot ? new Date(slot.starts_at) : null;
+    const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
+    const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' })            : '';
+
+    // Create idempotent notification row (internal visibility + dedup guard)
     const { data: notif, error: insertErr } = await client
       .from('notifications')
       .insert({
@@ -583,22 +746,49 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
       .select('id')
       .single();
 
-    // Tolerate duplicate key (reminder already processed by a concurrent worker)
-    if (insertErr !== null && !insertErr.message.includes('duplicate key')) {
+    // Duplicate key = reminder already processed by a concurrent worker; skip dispatch
+    const isDuplicate = insertErr !== null && insertErr.message.includes('duplicate key');
+    if (insertErr !== null && !isDuplicate) {
       throw new Error(insertErr.message);
     }
 
     const notifId = notif?.id ?? null;
 
-    // Stub dispatch — logs the notification. In production, call SendGrid / Twilio here.
-    logger.info('notification.dispatch', {
-      worker_id:     workerId,
-      template_key:  templateKey,
-      recipient_id:  recipientId,
-      recipient_type: recipientType,
-      booking_id:    bookingId,
-      channel:       'email',
-    });
+    // Route through communication-worker/notify so notification_rules are respected,
+    // templates are rendered, and outbound_messages rows are created for DeliveryLog visibility.
+    if (!isDuplicate && student !== null && (student.phone !== null || student.email !== null)) {
+      const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+      const workerSecret = Deno.env.get('WORKER_SECRET');
+
+      if (workerSecret !== undefined && workerSecret !== '') {
+        const payload: Record<string, string> = {
+          trigger_event:   triggerEvent,
+          organization_id: orgId,
+          förnamn:         student.first_name ?? '',
+          datum,
+          tid,
+        };
+        if (student.phone !== null) payload['student_phone'] = student.phone;
+        if (student.email !== null) payload['student_email'] = student.email;
+
+        const dispatchResp = await fetch(workerUrl, {
+          method:  'POST',
+          headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        }).catch((fetchErr: unknown) => {
+          logger.warn('reminder.dispatch_fetch_failed', { worker_id: workerId, reminder_id: reminderId, error: String(fetchErr) });
+          return null;
+        });
+
+        if (dispatchResp !== null && !dispatchResp.ok) {
+          logger.warn('reminder.dispatch_non_ok', { worker_id: workerId, reminder_id: reminderId, http_status: dispatchResp.status });
+        } else if (dispatchResp !== null) {
+          logger.info('notification.dispatched', { worker_id: workerId, trigger_event: triggerEvent, recipient_id: recipientId, booking_id: bookingId });
+        }
+      }
+    } else if (!isDuplicate) {
+      logger.info('reminder.no_contact', { worker_id: workerId, reminder_id: reminderId, recipient_id: recipientId });
+    }
 
     // Mark notification sent
     if (notifId !== null) {
@@ -611,23 +801,14 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
     // Mark reminder sent and link notification
     await client
       .from('lesson_reminders')
-      .update({
-        status:          'sent',
-        notification_id: notifId,
-        updated_at:      new Date().toISOString(),
-      })
+      .update({ status: 'sent', notification_id: notifId, updated_at: new Date().toISOString() })
       .eq('id', reminderId);
 
     // Publish Reminder.Sent event
     await client.rpc('insert_outbox_event', {
       p_event_type:      'Reminder.Sent',
       p_channel:         'internal',
-      p_payload:         {
-        reminder_id:  reminderId,
-        booking_id:   bookingId,
-        recipient_id: recipientId,
-        template_key: templateKey,
-      },
+      p_payload:         { reminder_id: reminderId, booking_id: bookingId, recipient_id: recipientId, template_key: templateKey },
       p_organization_id: orgId,
       p_target_id:       reminderId,
     });
@@ -635,13 +816,8 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error('notification.dispatch_failed', {
-      worker_id:   workerId,
-      reminder_id: reminderId,
-      error:       msg,
-    });
+    logger.error('notification.dispatch_failed', { worker_id: workerId, reminder_id: reminderId, error: msg });
 
-    // Mark reminder failed
     await client
       .from('lesson_reminders')
       .update({ status: 'failed', updated_at: new Date().toISOString() })
@@ -651,14 +827,135 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
   }
 }
 
+// ─── Instructor daily schedule digest ─────────────────────────────────────────
+// Runs once per day during the 05:00–06:59 UTC window (≈ 07:00 Stockholm).
+// Sends each instructor their lesson schedule for the day via communication-worker.
+// Deduplication: skips instructor if outbound_messages already contains a
+// 'instructor_schedule_daily' message for their contact address today.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendInstructorDigests(client: any, workerId: string): Promise<number> {
+  const nowUtcHour = new Date().getUTCHours();
+  if (nowUtcHour < 5 || nowUtcHour >= 7) return 0;
+
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setUTCHours(23, 59, 59, 999);
+
+  // Get today's non-cancelled slots that have an instructor assigned
+  const { data: slots, error: slotsErr } = await client
+    .from('lesson_slots')
+    .select('organization_id, instructor_id, starts_at')
+    .gte('starts_at', todayStart.toISOString())
+    .lte('starts_at', todayEnd.toISOString())
+    .not('instructor_id', 'is', null)
+    .is('deleted_at', null)
+    .neq('status', 'cancelled');
+
+  if (slotsErr !== null) {
+    logger.warn('digest.slots_query_failed', { worker_id: workerId, error: slotsErr.message });
+    return 0;
+  }
+  if (!slots?.length) return 0;
+
+  // Group slots by org:instructor pair, counting lessons per instructor
+  const instructorMap = new Map<string, { orgId: string; instructorId: string; slotCount: number }>();
+  for (const slot of slots as Array<{ organization_id: string; instructor_id: string }>) {
+    const key = `${slot.organization_id}:${slot.instructor_id}`;
+    const existing = instructorMap.get(key);
+    if (existing !== undefined) {
+      existing.slotCount++;
+    } else {
+      instructorMap.set(key, { orgId: slot.organization_id, instructorId: slot.instructor_id, slotCount: 1 });
+    }
+  }
+  if (instructorMap.size === 0) return 0;
+
+  // Batch-fetch instructor contact details
+  const instructorIds = [...new Set([...instructorMap.values()].map((v) => v.instructorId))];
+  const { data: instructors, error: instErr } = await client
+    .from('instructors')
+    .select('id, first_name, last_name, phone, email')
+    .in('id', instructorIds)
+    .is('deleted_at', null);
+
+  if (instErr !== null || !instructors?.length) {
+    if (instErr !== null) logger.warn('digest.instructors_query_failed', { worker_id: workerId, error: instErr.message });
+    return 0;
+  }
+
+  const instrById = new Map<string, { first_name: string; last_name: string; phone: string | null; email: string | null }>();
+  for (const instr of instructors as Array<{ id: string; first_name: string; last_name: string; phone: string | null; email: string | null }>) {
+    instrById.set(instr.id, instr);
+  }
+
+  const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+  const workerSecret = Deno.env.get('WORKER_SECRET');
+  if (workerSecret === undefined || workerSecret === '') return 0;
+
+  const datum = todayStart.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' });
+  let sent = 0;
+
+  for (const [, { orgId, instructorId, slotCount }] of instructorMap) {
+    const instr = instrById.get(instructorId);
+    if (instr === undefined) continue;
+
+    const contactAddress = instr.phone ?? instr.email ?? '';
+    if (contactAddress === '') continue;
+
+    // Dedup: skip if digest already sent today to this instructor address
+    const { count: alreadySent } = await client
+      .from('outbound_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+      .eq('recipient_address', contactAddress)
+      .gte('created_at', todayStart.toISOString())
+      .filter('metadata->>trigger_event', 'eq', 'instructor_schedule_daily');
+
+    if ((alreadySent ?? 0) > 0) {
+      logger.debug('digest.already_sent_today', { worker_id: workerId, instructor_id: instructorId });
+      continue;
+    }
+
+    const payload: Record<string, string> = {
+      trigger_event:    'instructor_schedule_daily',
+      organization_id:  orgId,
+      förnamn:          instr.first_name,
+      datum,
+      antal_lektioner:  String(slotCount),
+    };
+    if (instr.phone !== null) payload['instructor_phone'] = instr.phone;
+    if (instr.email !== null) payload['instructor_email'] = instr.email;
+
+    const resp = await fetch(workerUrl, {
+      method:  'POST',
+      headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    }).catch(() => null);
+
+    if (resp?.ok === true) {
+      sent++;
+      logger.info('digest.sent', { worker_id: workerId, instructor_id: instructorId, org_id: orgId, slot_count: slotCount });
+    } else {
+      logger.warn('digest.dispatch_failed', { worker_id: workerId, instructor_id: instructorId, http_status: resp?.status });
+    }
+  }
+
+  return sent;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runMaintenanceTick(client: any, workerId: string): Promise<MaintenanceMetrics> {
   const metrics: MaintenanceMetrics = {
-    reminders_processed:  0,
-    reminders_failed:     0,
-    reservations_expired: 0,
-    credits_expired:      0,
-    dunning_processed:    0,
+    reminders_processed:     0,
+    reminders_failed:        0,
+    reservations_expired:    0,
+    credits_expired:         0,
+    dunning_processed:       0,
+    instructor_digests_sent: 0,
+    campaigns_transitioned:  0,
+    packages_expired:        0,
   };
 
   // 1. Drain due reminders (atomic claim via SKIP LOCKED in DB function)
@@ -744,6 +1041,49 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     }
   }
 
+  // 5. Instructor daily schedule digest (07:00 window, deduped per instructor per day)
+  metrics.instructor_digests_sent = await sendInstructorDigests(client as any, workerId);
+
+  // 6. Campaign lifecycle: scheduled→active, active→expired
+  const { data: campaignsTransitioned, error: lifecycleErr } = await (client as any).rpc(
+    'process_campaign_lifecycle',
+  );
+
+  if (lifecycleErr !== null) {
+    logger.warn('maintenance.campaign_lifecycle_failed', {
+      worker_id: workerId,
+      error:     lifecycleErr.message,
+    });
+  } else {
+    metrics.campaigns_transitioned = (campaignsTransitioned as number) ?? 0;
+    if (metrics.campaigns_transitioned > 0) {
+      logger.info('maintenance.campaigns_transitioned', {
+        worker_id: workerId,
+        count:     metrics.campaigns_transitioned,
+      });
+    }
+  }
+
+  // 7. H-1: Expire stale package assignments (Sprint 4 package consumption)
+  const { data: packagesExpired, error: pkgExpireErr } = await (client as any).rpc(
+    'expire_stale_packages_all',
+  );
+
+  if (pkgExpireErr !== null) {
+    logger.warn('maintenance.expire_packages_failed', {
+      worker_id: workerId,
+      error:     pkgExpireErr.message,
+    });
+  } else {
+    metrics.packages_expired = (packagesExpired as number) ?? 0;
+    if (metrics.packages_expired > 0) {
+      logger.info('maintenance.packages_expired', {
+        worker_id: workerId,
+        count:     metrics.packages_expired,
+      });
+    }
+  }
+
   return metrics;
 }
 
@@ -754,19 +1094,23 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
   const runStartedAt  = new Date().toISOString();
 
   const metrics: WorkerMetrics = {
-    worker_id:            workerId,
-    run_started_at:       runStartedAt,
-    run_duration_ms:      0,
-    events_claimed:       0,
-    events_delivered:     0,
-    events_failed:        0,
-    events_dead_lettered: 0,
-    events_no_handler:    0,
-    reminders_processed:  0,
-    reminders_failed:     0,
-    reservations_expired: 0,
-    accounting_delivered: 0,
-    credits_expired:      0,
+    worker_id:               workerId,
+    run_started_at:          runStartedAt,
+    run_duration_ms:         0,
+    events_claimed:          0,
+    events_delivered:        0,
+    events_failed:           0,
+    events_dead_lettered:    0,
+    events_no_handler:       0,
+    reminders_processed:     0,
+    reminders_failed:        0,
+    reservations_expired:    0,
+    accounting_delivered:    0,
+    credits_expired:         0,
+    dunning_processed:       0,
+    instructor_digests_sent: 0,
+    campaigns_transitioned:  0,
+    packages_expired:        0,
   };
 
   const client = createServiceClient();
@@ -896,11 +1240,14 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
 
   // Phase 3D + 4A: Maintenance tick — runs every invocation regardless of outbox state
   const maintMetrics = await runMaintenanceTick(client as any, workerId);
-  metrics.reminders_processed  = maintMetrics.reminders_processed;
-  metrics.reminders_failed     = maintMetrics.reminders_failed;
-  metrics.reservations_expired = maintMetrics.reservations_expired;
-  metrics.credits_expired      = maintMetrics.credits_expired;
-  metrics.dunning_processed    = maintMetrics.dunning_processed;
+  metrics.reminders_processed     = maintMetrics.reminders_processed;
+  metrics.reminders_failed        = maintMetrics.reminders_failed;
+  metrics.reservations_expired    = maintMetrics.reservations_expired;
+  metrics.credits_expired         = maintMetrics.credits_expired;
+  metrics.dunning_processed       = maintMetrics.dunning_processed;
+  metrics.instructor_digests_sent = maintMetrics.instructor_digests_sent;
+  metrics.campaigns_transitioned  = maintMetrics.campaigns_transitioned;
+  metrics.packages_expired        = maintMetrics.packages_expired;
 
   metrics.run_duration_ms = Date.now() - startedAt;
 

@@ -66,11 +66,12 @@ async function apiFetchBooking(id: string): Promise<LessonBooking> {
 
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
-export function useBookingList(params: LessonBookingListQueryInput = {}) {
+export function useBookingList(params: LessonBookingListQueryInput = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: bookingKeys.list(params),
     queryFn: () => apiFetchBookings({ per_page: 100, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
-    enabled: Boolean(params.from && params.to),
+    enabled:   (options?.enabled ?? true) && Boolean(params.from && params.to),
+    staleTime: 2 * 60_000,
   });
 }
 
@@ -79,6 +80,7 @@ export function useBooking(id: string | null) {
     queryKey: bookingKeys.detail(id ?? ''),
     queryFn: () => apiFetchBooking(id!),
     enabled: id !== null && id !== '',
+    staleTime: 60_000,
   });
 }
 
@@ -92,6 +94,7 @@ export function useBookingsForSlot(slotId: string | null) {
       sort_dir: 'asc',
     }),
     enabled: slotId !== null && slotId !== '',
+    staleTime: 60_000,
   });
 }
 

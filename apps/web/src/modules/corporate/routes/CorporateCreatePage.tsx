@@ -94,20 +94,26 @@ export function CorporateCreateDialog({ open, onOpenChange, onSuccess }: Corpora
     const contact_first_name = nameParts[0] ?? '';
     const contact_last_name  = nameParts.slice(1).join(' ') || undefined;
 
+    const discPct = Number(values.default_discount);
+
     create.mutate(
       {
-        company_name:        values.company_name,
-        org_number:          values.org_number  || undefined,
-        address_line1:       values.address_line1 || undefined,
-        address_line2:       values.show_address2 ? (values.address_line2 || undefined) : undefined,
-        postal_code:         values.postal_code  || undefined,
-        city:                values.city         || undefined,
-        contact_first_name:  contact_first_name  || undefined,
+        company_name:         values.company_name,
+        org_number:           values.org_number  || undefined,
+        address_line1:        values.address_line1 || undefined,
+        address_line2:        values.show_address2 ? (values.address_line2 || undefined) : undefined,
+        postal_code:          values.postal_code  || undefined,
+        city:                 values.city         || undefined,
+        contact_first_name:   contact_first_name  || undefined,
         contact_last_name,
-        contact_email:       values.contact_email || undefined,
-        contact_phone:       values.contact_phone || undefined,
-        notes:               values.notes        || undefined,
-        status:              values.is_active ? 'active' : 'paused',
+        contact_email:        values.contact_email || undefined,
+        contact_phone:        values.contact_phone || undefined,
+        notes:                values.notes        || undefined,
+        status:               values.is_active ? 'active' : 'paused',
+        alt_name:             values.alt_name     || undefined,
+        default_discount_pct: values.default_discount && !Number.isNaN(discPct) ? discPct : undefined,
+        economy_notes:        values.economy_notes || undefined,
+        has_debt_collection:  values.has_debt_collection ?? false,
       },
       {
         onSuccess: (created) => {
@@ -128,7 +134,7 @@ export function CorporateCreateDialog({ open, onOpenChange, onSuccess }: Corpora
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[1000px] p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-[1000px] p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
         <DialogHeader className="px-6 py-4 border-b border-border">
           <DialogTitle className="text-base font-semibold">Nytt företag</DialogTitle>
         </DialogHeader>

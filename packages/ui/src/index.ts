@@ -44,6 +44,7 @@ export {
   SheetHeader, SheetFooter, SheetTitle, SheetDescription,
 } from './components/ui/sheet.js';
 export { Skeleton } from './components/ui/skeleton.js';
+export { Switch, type SwitchProps } from './components/ui/switch.js';
 export { Separator } from './components/ui/separator.js';
 export { ScrollArea, ScrollBar } from './components/ui/scroll-area.js';
 export {

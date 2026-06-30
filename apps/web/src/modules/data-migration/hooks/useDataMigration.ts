@@ -162,7 +162,7 @@ export function useMigrationRows(sessionId: string, params: RowListParams) {
 export function useCreateMigrationSession() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (params: { entity_type: MigrationEntity; file_name?: string; file_size_bytes?: number }) =>
+    mutationFn: (params: { entity_type: MigrationEntity; file_name?: string | undefined; file_size_bytes?: number | undefined }) =>
       invoke<{ data: MigrationSession }>('data-migration', {
         method: 'POST',
         body:   JSON.stringify(params),
@@ -174,8 +174,8 @@ export function useCreateMigrationSession() {
 export interface UploadRowsParams {
   id:               string;
   rows:             Array<Record<string, string>>;
-  file_name?:       string;
-  file_size_bytes?: number;
+  file_name?:       string | undefined;
+  file_size_bytes?: number | undefined;
 }
 
 export function useUploadMigrationRows() {

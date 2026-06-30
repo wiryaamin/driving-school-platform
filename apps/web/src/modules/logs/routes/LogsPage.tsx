@@ -24,13 +24,12 @@ export function LogsPage() {
     <div className="max-w-screen-2xl mx-auto">
 
       {/* Breadcrumb */}
-      <div className="flex items-center justify-between pb-3">
+      <div className="pb-3">
         <nav className="flex items-center gap-1.5 text-sm">
           <span className="text-muted-foreground">Loggar</span>
           <span className="text-muted-foreground/50">/</span>
           <span className="font-medium text-foreground">{current?.label ?? ''}</span>
         </nav>
-        <button className="text-xs text-primary hover:underline">Ge feedback</button>
       </div>
 
       {/* Sub-tab bar */}

@@ -40,20 +40,23 @@ const CreateStudentSchema = z.object({
   assigned_instructor_id:  z.string().uuid().optional(),
   target_licence_category: z.string().max(10).optional(),
   permit_stage:            z.enum(PERMIT_STAGES).optional(),
+  notes:                   z.string().max(5000).nullable().optional(),
+  corporate_customer_id:   z.string().uuid().nullable().optional(),
 });
 
 const UpdateStudentSchema = CreateStudentSchema.partial();
 
 const StudentListQuerySchema = z.object({
   page:             z.coerce.number().int().positive().max(1000).default(1),
-  per_page:         z.coerce.number().int().positive().max(100).default(25),
+  per_page:         z.coerce.number().int().positive().max(500).default(25),
   sort_by:          z.string().optional(),
   sort_dir:         z.enum(['asc', 'desc']).optional(),
   search:           z.string().min(1).max(200).optional(),
   status:           z.enum(STUDENT_STATUSES).optional(),
   instructor_id:    z.string().uuid().optional(),
-  permit_stage:     z.enum(PERMIT_STAGES).optional(),
-  licence_category: z.string().max(10).optional(),
+  permit_stage:          z.enum(PERMIT_STAGES).optional(),
+  licence_category:      z.string().max(10).optional(),
+  corporate_customer_id: z.string().uuid().optional(),
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -129,26 +132,47 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
 
   const {
     page, per_page, sort_by = 'created_at', sort_dir = 'desc',
-    search, status, instructor_id, permit_stage, licence_category,
+    search, status, instructor_id, permit_stage, licence_category, corporate_customer_id,
   } = parsed.data;
+
+  const ALLOWED_SORT_COLUMNS = new Set([
+    'created_at', 'updated_at', 'first_name', 'last_name',
+    'status', 'permit_stage', 'target_licence_category',
+  ]);
+  const safeSortBy = ALLOWED_SORT_COLUMNS.has(sort_by) ? sort_by : 'created_at';
 
   const client = createSupabaseClient(req);
   const from = (page - 1) * per_page;
   const to   = from + per_page - 1;
 
+  // Exclude PII fields not needed for list context.
+  // personnummer_encrypted and personnummer_hash are only returned on detail (GET /:id).
+  const LIST_COLUMNS = [
+    'id', 'organization_id', 'first_name', 'last_name', 'date_of_birth',
+    'identity_type', 'personnummer_last4',
+    'email', 'phone', 'address_line1', 'address_line2', 'postal_code', 'city',
+    'preferred_language', 'communication_opt_in_email', 'communication_opt_in_sms',
+    'data_processing_consent', 'marketing_consent', 'gdpr_consent_given_at', 'gdpr_consent_version',
+    'status', 'enrolled_at', 'enrollment_location_id', 'assigned_instructor_id',
+    'target_licence_category', 'permit_stage',
+    'notes', 'corporate_customer_id',
+    'created_at', 'updated_at', 'created_by', 'updated_by',
+  ].join(', ');
+
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('students')
-    .select('*', { count: 'exact' })
+    .select(LIST_COLUMNS, { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
-    .order(sort_by, { ascending: sort_dir === 'asc' })
+    .order(safeSortBy, { ascending: sort_dir === 'asc' })
     .range(from, to);
 
-  if (status !== undefined)           q = q.eq('status', status);
-  if (instructor_id !== undefined)    q = q.eq('assigned_instructor_id', instructor_id);
-  if (permit_stage !== undefined)     q = q.eq('permit_stage', permit_stage);
-  if (licence_category !== undefined) q = q.eq('target_licence_category', licence_category);
+  if (status !== undefined)                q = q.eq('status', status);
+  if (instructor_id !== undefined)         q = q.eq('assigned_instructor_id', instructor_id);
+  if (permit_stage !== undefined)          q = q.eq('permit_stage', permit_stage);
+  if (licence_category !== undefined)      q = q.eq('target_licence_category', licence_category);
+  if (corporate_customer_id !== undefined) q = q.eq('corporate_customer_id', corporate_customer_id);
   if (search !== undefined && search !== '') {
     q = q.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
   }
@@ -252,7 +276,7 @@ async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Respo
   const client = createSupabaseClient(req);
   const { data, error } = await (client as any)
     .from('students')
-    .select('*')
+    .select('id, organization_id, first_name, last_name, date_of_birth, identity_type, personnummer_last4, email, phone, status, permit_stage, target_licence_category, assigned_instructor_id, enrollment_location_id, enrolled_at, corporate_customer_id, created_at, updated_at')
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .in('id', ids);

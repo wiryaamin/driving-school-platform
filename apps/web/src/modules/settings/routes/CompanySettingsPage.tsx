@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight, Upload } from 'lucide-react';
+import { Building2, ChevronRight, Upload, Eye, EyeOff } from 'lucide-react';
 import { Button, Skeleton } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
@@ -28,9 +28,10 @@ interface OrgSettings {
   customer_email?:   string;
   customer_phone?:   string;
   // Payment gateways
-  swish_number?:     string;
-  nets_secret_key?:  string;
-  nets_checkout_key?:string;
+  swish_number?:       string;
+  stripe_secret_key?:  string;
+  nets_secret_key?:    string;
+  nets_checkout_key?:  string;
   // Social
   instagram?:        string;
   facebook?:         string;
@@ -95,6 +96,7 @@ export function CompanySettingsPage() {
     visit_city:         '',
     // payment gateways
     swish_number:       '',
+    stripe_secret_key:  '',
     nets_secret_key:    '',
     nets_checkout_key:  '',
     // social
@@ -126,6 +128,7 @@ export function CompanySettingsPage() {
       visit_zip:          settings.visit_zip ?? '',
       visit_city:         settings.visit_city ?? '',
       swish_number:       settings.swish_number ?? '',
+      stripe_secret_key:  settings.stripe_secret_key ?? '',
       nets_secret_key:    settings.nets_secret_key ?? '',
       nets_checkout_key:  settings.nets_checkout_key ?? '',
       instagram:          settings.instagram ?? '',
@@ -143,7 +146,7 @@ export function CompanySettingsPage() {
         name:       form.name,
         org_number: form.org_number || null,
         vat_number: form.vat_number || null,
-      }).eq('id', orgId);
+      } as never).eq('id', orgId);
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['org-company-settings'] }),
   });
@@ -164,7 +167,7 @@ export function CompanySettingsPage() {
           customer_email: form.customer_email,
           customer_phone: form.customer_phone,
         },
-      }).eq('id', orgId);
+      } as never).eq('id', orgId);
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['org-company-settings'] }),
   });
@@ -181,7 +184,24 @@ export function CompanySettingsPage() {
           tiktok:    form.tiktok,
           youtube:   form.youtube,
         },
-      }).eq('id', orgId);
+      } as never).eq('id', orgId);
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['org-company-settings'] }),
+  });
+
+  const updatePaymentGateways = useMutation({
+    mutationFn: async () => {
+      if (!orgId) return;
+      const currentSettings = (org?.settings ?? {}) as OrgSettings;
+      await supabase.from('organizations').update({
+        settings: {
+          ...currentSettings,
+          swish_number:      form.swish_number      || undefined,
+          stripe_secret_key: form.stripe_secret_key || undefined,
+          nets_secret_key:   form.nets_secret_key   || undefined,
+          nets_checkout_key: form.nets_checkout_key || undefined,
+        },
+      } as never).eq('id', orgId);
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['org-company-settings'] }),
   });
@@ -309,27 +329,54 @@ export function CompanySettingsPage() {
 
       {/* Payment gateways */}
       <div className="rounded-xl border border-border bg-card p-6 space-y-5">
-        <div className="grid grid-cols-2 gap-6">
-          {/* Swish */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Swish</h3>
-            <Field label="Swish nummer" placeholder="1231234567" {...field('swish_number')} />
-          </div>
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Betallösningar</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Konfigurerade betalningsmetoder visas för elever i elevportalen.
+          </p>
+        </div>
 
-          {/* Nets */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-foreground">Nets</h3>
+        {/* Swish */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-foreground">Swish</p>
+          <Field label="Swish-nummer" placeholder="1231234567" {...field('swish_number')} />
+          <p className="text-[11px] text-muted-foreground">
+            Eleverna skickas till Swish-appen med ifyllt belopp och fakturanummer.
+          </p>
+        </div>
+
+        {/* Stripe */}
+        <div className="space-y-2 pt-3 border-t border-border">
+          <p className="text-xs font-semibold text-foreground">Stripe (kortbetalning)</p>
+          <SecretField
+            label="Stripe Secret Key"
+            placeholder="sk_live_… eller sk_test_…"
+            value={form.stripe_secret_key}
+            onChange={v => setForm(prev => ({ ...prev, stripe_secret_key: v }))}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Hämtas från{' '}
+            <span className="font-medium">Stripe Dashboard → API-nycklar</span>.
+            Konfigurera även webhook-URL:en i Stripe:
+            {' '}<span className="font-mono text-[10px] bg-muted px-1 rounded">
+              /functions/v1/stripe-webhook
+            </span>{' '}
+            (händelse: <span className="font-mono text-[10px]">checkout.session.completed</span>).
+          </p>
+        </div>
+
+        {/* Nets */}
+        <div className="space-y-2 pt-3 border-t border-border">
+          <p className="text-xs font-semibold text-foreground">Nets</p>
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Nets Secret Key" placeholder="Nets Secret Key" {...field('nets_secret_key')} />
             <Field label="Nets Checkout Key" placeholder="Nets Checkout Key" {...field('nets_checkout_key')} />
           </div>
         </div>
 
         {/* Apple Pay */}
-        <div className="pt-2 border-t border-border space-y-2">
-          <h3 className="text-sm font-semibold text-foreground">Apple Pay (via Nets)</h3>
-          <p className="text-xs text-muted-foreground">
-            Ladda upp Apple Domain Verification-filen för att aktivera Apple Pay.
-          </p>
+        <div className="pt-3 border-t border-border space-y-2">
+          <p className="text-xs font-semibold text-foreground">Apple Pay (via Nets)</p>
           <label className="inline-flex items-center gap-2 cursor-pointer">
             <span className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
               <Upload className="w-4 h-4" />
@@ -343,10 +390,10 @@ export function CompanySettingsPage() {
           <Button
             size="sm"
             className="bg-green-500 hover:bg-green-600 text-white"
-            onClick={() => updateContact.mutate()}
-            disabled={updateContact.isPending}
+            onClick={() => updatePaymentGateways.mutate()}
+            disabled={updatePaymentGateways.isPending}
           >
-            {updateContact.isPending ? 'Sparar…' : 'Spara'}
+            {updatePaymentGateways.isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </div>
       </div>
@@ -400,6 +447,46 @@ function Field({
         className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background text-foreground
                    focus:outline-none focus:ring-2 focus:ring-primary/40 placeholder:text-muted-foreground/50"
       />
+    </div>
+  );
+}
+
+// ─── Secret field (password toggle) ──────────────────────────────────────────
+
+function SecretField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label:       string;
+  placeholder: string;
+  value:       string;
+  onChange:    (v: string) => void;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="space-y-1">
+      <label className="block text-xs font-medium text-foreground">{label}</label>
+      <div className="relative">
+        <input
+          type={show ? 'text' : 'password'}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="new-password"
+          className="w-full h-9 pl-3 pr-9 text-sm border border-border rounded-md bg-background text-foreground
+                     focus:outline-none focus:ring-2 focus:ring-primary/40 placeholder:text-muted-foreground/50"
+        />
+        <button
+          type="button"
+          onClick={() => setShow(v => !v)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+          tabIndex={-1}
+        >
+          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
     </div>
   );
 }

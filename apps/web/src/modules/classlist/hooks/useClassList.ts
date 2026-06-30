@@ -19,9 +19,9 @@ export interface ClassListEntry {
 }
 
 export interface ClassListParams {
-  licence_category?: string;
-  page?: number;
-  per_page?: number;
+  licence_category?: string | undefined;
+  page?: number | undefined;
+  per_page?: number | undefined;
 }
 
 // ─── Query keys ───────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ export function useClassList(params: ClassListParams = {}) {
       const from = (page - 1) * per_page;
       const to   = from + per_page - 1;
 
-      // eslint-disable-next-line prefer-const
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q = (supabase as unknown as any)
         .from('students')
         .select(
@@ -85,6 +85,7 @@ export function useClassList(params: ClassListParams = {}) {
       // Fetch booking counts + training time for these students in one query
       let bookingMap = new Map<string, RawBookingCount>();
       if (studentIds.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data: bookings, error: bErr } = await (supabase as unknown as any)
           .from('lesson_bookings')
           .select('student_id, starts_at, ends_at')
@@ -126,7 +127,6 @@ export function useClassList(params: ClassListParams = {}) {
       return { data: mapped, total: count ?? 0 };
     },
     staleTime: 60_000,
-    refetchOnMount: 'always',
   });
 }
 
@@ -134,6 +134,7 @@ export function useLicenceCategories() {
   return useQuery({
     queryKey: classListKeys.licenceCategories(),
     queryFn: async (): Promise<string[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as unknown as any)
         .from('students')
         .select('target_licence_category')

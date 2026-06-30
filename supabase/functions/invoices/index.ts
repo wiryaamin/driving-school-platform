@@ -1,4 +1,4 @@
-﻿/**
+/**
  * invoices — Invoice lifecycle management.
  *
  * Routes:
@@ -10,26 +10,48 @@
  *   POST  /invoices/:id/void          — void invoice
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { serveCors }           from '../_shared/cors.ts';
+import { buildEdgeContext }    from '../_shared/context.ts';
+import { createSupabaseClient } from '../_shared/supabase.ts';
+import { createFunctionLogger } from '../_shared/logger.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import type { EdgeRequestContext } from '../_shared/context.ts';
 
-const JSON_CT = { 'Content-Type': 'application/json' };
+const log     = createFunctionLogger('invoices');
+const JSON_CT = { 'Content-Type': 'application/json' } as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: JSON_CT });
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function ok<T>(ctx: EdgeRequestContext, body: T, status = 200): Response {
+  return new Response(JSON.stringify({ data: body }), {
+    status,
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+  });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+
+function fail(
+  ctx: EdgeRequestContext,
+  status: number,
+  code: string,
+  message: string,
+  details?: unknown
+): Response {
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  if (details !== undefined) body['details'] = details;
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+  });
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+
+function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
+  return null;
 }
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
-}
+
 function extractPathParts(req: Request): { id: string | null; action: string | null } {
   const segments = new URL(req.url).pathname.split('/').filter(Boolean);
   const fnIdx    = segments.findLastIndex((s) => s === 'invoices');
@@ -40,21 +62,24 @@ function extractPathParts(req: Request): { id: string | null; action: string | n
   return { id: null, action: first };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:read')) return err('Forbidden', 403, 'FORBIDDEN');
+// ─── Route handlers ───────────────────────────────────────────────────────────
 
-  const url      = new URL(req.url);
-  const page     = Number(url.searchParams.get('page')     ?? '1');
-  const perPage  = Number(url.searchParams.get('per_page') ?? '25');
-  const from     = (page - 1) * perPage;
-  const to       = from + perPage - 1;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleList(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:read');
+  if (guard) return guard;
+
+  const url     = new URL(req.url);
+  const page    = Math.max(1, Number(url.searchParams.get('page')     ?? '1'));
+  const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page') ?? '25')));
+  const from    = (page - 1) * perPage;
+  const to      = from + perPage - 1;
 
   // eslint-disable-next-line prefer-const
   let q = client
     .from('invoices')
     .select('*', { count: 'exact' })
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .order('created_at', { ascending: false })
     .range(from, to);
 
@@ -63,90 +88,123 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   const dateFrom  = url.searchParams.get('from');
   const dateTo    = url.searchParams.get('to');
 
-  if (studentId !== null) q = q.eq('student_id', studentId);
+  if (studentId !== null)                  q = q.eq('student_id', studentId);
   if (status    !== null && status !== 'all') q = q.eq('status', status);
-  if (dateFrom  !== null) q = q.gte('created_at', dateFrom);
-  if (dateTo    !== null) q = q.lte('created_at', dateTo);
+  if (dateFrom  !== null)                  q = q.gte('created_at', dateFrom);
+  if (dateTo    !== null)                  q = q.lte('created_at', dateTo);
 
   const { data, error, count } = await q;
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
-  return json({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0 } });
+  if (error) {
+    log.error('invoices.list_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to list invoices');
+  }
+
+  return new Response(
+    JSON.stringify({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0, has_more: page * perPage < (count ?? 0) } }),
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+  );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreate(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:create')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreate(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:create');
+  if (guard) return guard;
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
 
-  if (!body['student_id']) return err('student_id is required', 400, 'VALIDATION_ERROR');
+  const isGuest = body['is_guest'] === true;
+  if (!isGuest && !body['student_id']) {
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'student_id is required for non-guest invoices');
+  }
 
   const { data, error } = await client
     .from('invoices')
     .insert({
-      organization_id:    orgId,
-      student_id:         body['student_id'],
+      organization_id:    ctx.organizationId,
+      student_id:         body['student_id']         ?? null,
       student_package_id: body['student_package_id'] ?? null,
       currency:           body['currency']            ?? 'SEK',
       due_date:           body['due_date']            ?? null,
       notes:              body['notes']               ?? null,
       metadata:           body['metadata']            ?? {},
-      created_by:         user.id,
+      created_by:         ctx.actorId,
     })
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
-  return json(data, 201);
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetOne(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:read')) return err('Forbidden', 403, 'FORBIDDEN');
-
-  const [{ data: invoice, error: invErr }, { data: lines, error: lineErr }] = await Promise.all([
-    client.from('invoices').select('*').eq('id', id).eq('organization_id', orgId).maybeSingle(),
-    client.from('invoice_line_items').select('*').eq('invoice_id', id).eq('organization_id', orgId).order('sort_order'),
-  ]);
-
-  if (invErr) return err(invErr.message, 500, 'QUERY_FAILED');
-  if (invoice === null) return err('Invoice not found', 404, 'NOT_FOUND');
-  if (lineErr) return err(lineErr.message, 500, 'QUERY_FAILED');
-
-  return json({ invoice, line_items: lines ?? [] });
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleAddLine(id: string, req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:create')) return err('Forbidden', 403, 'FORBIDDEN');
-
-  let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
-
-  if (!body['description'] || body['unit_price'] === undefined) {
-    return err('description and unit_price are required', 400, 'VALIDATION_ERROR');
+  if (error) {
+    log.error('invoices.create_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return fail(ctx, 422, 'INTERNAL_ERROR', 'Failed to create invoice');
   }
 
-  // Verify invoice is draft
+  log.info('Invoice.Created', {
+    correlation_id: ctx.correlationId,
+    org_id:         ctx.organizationId,
+    invoice_id:     (data as Record<string, unknown>)['id'],
+    actor_id:       ctx.actorId,
+  });
+
+  return ok(ctx, data, 201);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleGetOne(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:read');
+  if (guard) return guard;
+
+  const [{ data: invoice, error: invErr }, { data: lines, error: lineErr }] = await Promise.all([
+    client.from('invoices').select('*').eq('id', id).eq('organization_id', ctx.organizationId).maybeSingle(),
+    client.from('invoice_line_items').select('*').eq('invoice_id', id).eq('organization_id', ctx.organizationId).order('sort_order'),
+  ]);
+
+  if (invErr) {
+    log.error('invoices.get_failed', { correlation_id: ctx.correlationId, error: invErr.message, invoice_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch invoice');
+  }
+  if (invoice === null) return fail(ctx, 404, 'NOT_FOUND', `Invoice '${id}' not found`);
+  if (lineErr) {
+    log.error('invoices.lines_failed', { correlation_id: ctx.correlationId, error: lineErr.message, invoice_id: id });
+    return fail(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch invoice line items');
+  }
+
+  return ok(ctx, { invoice, line_items: lines ?? [] });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleAddLine(id: string, req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:create');
+  if (guard) return guard;
+
+  let body: Record<string, unknown>;
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+
+  if (!body['description'] || body['unit_price'] === undefined) {
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'description and unit_price are required');
+  }
+
   const { data: invoice } = await client
     .from('invoices')
     .select('status')
     .eq('id', id)
-    .eq('organization_id', orgId)
+    .eq('organization_id', ctx.organizationId)
     .maybeSingle();
 
-  if (invoice === null) return err('Invoice not found', 404, 'NOT_FOUND');
-  if (invoice.status !== 'draft') return err(`Cannot add lines to a ${invoice.status} invoice`, 409, 'CONFLICT');
+  if (invoice === null) return fail(ctx, 404, 'NOT_FOUND', `Invoice '${id}' not found`);
+  if (invoice.status !== 'draft') {
+    return fail(ctx, 409, 'CONFLICT', `Cannot add lines to a ${invoice.status} invoice`);
+  }
 
-  const qty      = Number(body['quantity']  ?? 1);
-  const price    = Number(body['unit_price']);
-  const vatRate  = Number(body['vat_rate']  ?? 0.25);
+  const qty     = Number(body['quantity']  ?? 1);
+  const price   = Number(body['unit_price']);
+  const vatRate = Number(body['vat_rate']  ?? 0.25);
 
   const { data, error } = await client
     .from('invoice_line_items')
     .insert({
-      organization_id:    orgId,
+      organization_id:    ctx.organizationId,
       invoice_id:         id,
       student_package_id: body['student_package_id'] ?? null,
       line_type:          body['line_type']           ?? 'package',
@@ -162,34 +220,48 @@ async function handleAddLine(id: string, req: Request, client: any, orgId: strin
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
-  return json(data, 201);
+  if (error) {
+    log.error('invoices.add_line_failed', { correlation_id: ctx.correlationId, error: error.message, invoice_id: id });
+    return fail(ctx, 422, 'INTERNAL_ERROR', 'Failed to add line item');
+  }
+
+  return ok(ctx, data, 201);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleIssue(id: string, client: any, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:approve')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleIssue(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:approve');
+  if (guard) return guard;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: invoiceNumber, error } = await (client as any).rpc('issue_invoice', {
+  const { data: invoiceNumber, error } = await client.rpc('issue_invoice', {
     p_invoice_id: id,
-    p_actor_id:   user.id,
+    p_actor_id:   ctx.actorId,
   });
 
   if (error) {
     const msg = error.message as string;
-    if (msg.includes('INVOICE_NOT_FOUND'))   return err('Invoice not found', 404, 'NOT_FOUND');
-    if (msg.includes('INVOICE_NOT_DRAFT'))    return err('Invoice is not in draft status', 409, 'CONFLICT');
-    if (msg.includes('INVOICE_NO_LINES'))     return err('Cannot issue invoice with no line items', 409, 'CONFLICT');
-    return err(msg, 422, 'ISSUE_FAILED');
+    if (msg.includes('INVOICE_NOT_FOUND')) return fail(ctx, 404, 'NOT_FOUND', 'Invoice not found');
+    if (msg.includes('INVOICE_NOT_DRAFT')) return fail(ctx, 409, 'CONFLICT', 'Invoice is not in draft status');
+    if (msg.includes('INVOICE_NO_LINES'))  return fail(ctx, 409, 'CONFLICT', 'Cannot issue invoice with no line items');
+    log.error('invoices.issue_failed', { correlation_id: ctx.correlationId, error: msg, invoice_id: id });
+    return fail(ctx, 422, 'INTERNAL_ERROR', msg);
   }
 
-  return json({ invoice_number: invoiceNumber as string });
+  log.info('Invoice.Issued', {
+    correlation_id:  ctx.correlationId,
+    org_id:          ctx.organizationId,
+    invoice_id:      id,
+    invoice_number:  invoiceNumber,
+    actor_id:        ctx.actorId,
+  });
+
+  return ok(ctx, { invoice_number: invoiceNumber as string });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVoid(id: string, req: Request, client: any, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:invoice:void')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleVoid(id: string, req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:invoice:void');
+  if (guard) return guard;
 
   let reason: string | undefined;
   try {
@@ -197,64 +269,74 @@ async function handleVoid(id: string, req: Request, client: any, user: any): Pro
     reason = body['reason'] as string | undefined;
   } catch { /* reason stays undefined */ }
 
-  const args: Record<string, unknown> = { p_invoice_id: id, p_actor_id: user.id };
+  const args: Record<string, unknown> = { p_invoice_id: id, p_actor_id: ctx.actorId };
   if (reason !== undefined) args['p_reason'] = reason;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: voidAt, error } = await (client as any).rpc('void_invoice', args);
+  const { data: voidAt, error } = await client.rpc('void_invoice', args);
 
   if (error) {
     const msg = error.message as string;
-    if (msg.includes('INVOICE_NOT_FOUND')) return err('Invoice not found', 404, 'NOT_FOUND');
-    if (msg.includes('CANNOT_VOID'))       return err('Invoice cannot be voided in current status', 409, 'CONFLICT');
-    return err(msg, 422, 'VOID_FAILED');
+    if (msg.includes('INVOICE_NOT_FOUND')) return fail(ctx, 404, 'NOT_FOUND', 'Invoice not found');
+    if (msg.includes('CANNOT_VOID'))       return fail(ctx, 409, 'CONFLICT', 'Invoice cannot be voided in current status');
+    log.error('invoices.void_failed', { correlation_id: ctx.correlationId, error: msg, invoice_id: id });
+    return fail(ctx, 422, 'INTERNAL_ERROR', msg);
   }
 
-  return json({ void_at: voidAt as string });
-}
-
-Deno.serve((req: Request) => serveCors(req, async () => {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const anonKey     = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  const authHeader  = req.headers.get('Authorization') ?? '';
-
-  const client = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
+  log.info('Invoice.Voided', {
+    correlation_id: ctx.correlationId,
+    org_id:         ctx.organizationId,
+    invoice_id:     id,
+    actor_id:       ctx.actorId,
   });
 
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  return ok(ctx, { void_at: voidAt as string });
+}
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
+// ─── Router ───────────────────────────────────────────────────────────────────
+
+Deno.serve((req: Request) => serveCors(req, async () => {
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
+
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  log.requestStarted(req, ctx.correlationId, ctx.organizationId, ctx.actorId);
 
   const { id, action } = extractPathParts(req);
   const method = req.method;
+  const client = createSupabaseClient(req);
 
-  // /invoices/:id/lines
-  if (id !== null && action === 'lines' && method === 'POST') {
-    return handleAddLine(id, req, client, orgId, user);
+  let response: Response;
+
+  try {
+    if (id !== null && action === 'lines'  && method === 'POST') { response = await handleAddLine(id, req, ctx, client); }
+    else if (id !== null && action === 'issue' && method === 'POST') { response = await handleIssue(id, ctx, client); }
+    else if (id !== null && action === 'void'  && method === 'POST') { response = await handleVoid(id, req, ctx, client); }
+    else if (id !== null && action === null) {
+      if (method === 'GET') { response = await handleGetOne(id, ctx, client); }
+      else { response = fail(ctx, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed'); }
+    } else if (id === null) {
+      if (method === 'GET')  { response = await handleList(req, ctx, client); }
+      else if (method === 'POST') { response = await handleCreate(req, ctx, client); }
+      else { response = fail(ctx, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed'); }
+    } else {
+      response = fail(ctx, 404, 'NOT_FOUND', 'Route not found');
+    }
+  } catch (err) {
+    log.error('invoices.unhandled_error', {
+      correlation_id: ctx.correlationId,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack   : undefined,
+    });
+    response = fail(ctx, 500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
 
-  // /invoices/:id/issue
-  if (id !== null && action === 'issue' && method === 'POST') {
-    return handleIssue(id, client, user);
-  }
-
-  // /invoices/:id/void
-  if (id !== null && action === 'void' && method === 'POST') {
-    return handleVoid(id, req, client, user);
-  }
-
-  // /invoices/:id
-  if (id !== null && action === null) {
-    if (method === 'GET') return handleGetOne(id, client, orgId, user);
-    return err('Method not allowed', 405);
-  }
-
-  // /invoices
-  if (method === 'GET')  return handleList(req, client, orgId, user);
-  if (method === 'POST') return handleCreate(req, client, orgId, user);
-  return err('Method not allowed', 405);
+  log.requestCompleted(req, response.status, ctx.correlationId, ctx.startedAt);
+  return response;
 }));

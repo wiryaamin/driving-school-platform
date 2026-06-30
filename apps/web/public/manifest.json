@@ -1,0 +1,41 @@
+{
+  "name": "Trafikskola Platform",
+  "short_name": "Trafikskola",
+  "description": "Hantera körlektioner, elever och schema",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#2563eb",
+  "background_color": "#ffffff",
+  "lang": "sv",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Mitt schema",
+      "short_name": "Schema",
+      "url": "/instructor-app",
+      "description": "Öppna instruktörsschemat"
+    },
+    {
+      "name": "Portal",
+      "short_name": "Portal",
+      "url": "/portal",
+      "description": "Öppna elevportalen"
+    }
+  ],
+  "categories": ["education", "productivity"]
+}

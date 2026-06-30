@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, Minus, GraduationCap } from 'lucide-react';
+import { Check, Minus, GraduationCap, TrendingUp } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button, DataTable,
@@ -157,6 +157,51 @@ function buildColumns(navigate: (p: string) => void): ColumnDef<ClassListEntry>[
   ];
 }
 
+// ─── Group progress summary (Gap 9) ──────────────────────────────────────────
+
+function GroupProgressSummary({ entries }: { entries: ClassListEntry[] }) {
+  if (entries.length === 0) return null;
+
+  const n = entries.length;
+  const kktDone    = entries.filter(e => e.kkt).length;
+  const slutDone   = entries.filter(e => e.slutprov).length;
+  const risk1Done  = entries.filter(e => e.risk1_done).length;
+  const risk2Done  = entries.filter(e => e.risk2_done).length;
+
+  function StatBar({ label, done, total }: { label: string; done: number; total: number }) {
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    return (
+      <div className="space-y-1 min-w-0">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground truncate">{label}</span>
+          <span className="font-semibold text-foreground ml-2 shrink-0">{done}/{total}</span>
+        </div>
+        <div className="h-1.5 bg-muted/40 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-primary rounded-full transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-5 rounded-xl border border-border bg-card px-5 py-4">
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold text-foreground">Grupframsteg — {n} elever</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+        <StatBar label="KKT"       done={kktDone}   total={n} />
+        <StatBar label="Slutprov"  done={slutDone}   total={n} />
+        <StatBar label="Risk 1"    done={risk1Done}  total={n} />
+        <StatBar label="Risk 2"    done={risk2Done}  total={n} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function ClassListPage() {
@@ -226,6 +271,11 @@ export function ClassListPage() {
           Filtrera
         </Button>
       </div>
+
+      {/* Group progress */}
+      {!isLoading && records.length > 0 && (
+        <GroupProgressSummary entries={records} />
+      )}
 
       {/* Table */}
       {error ? (

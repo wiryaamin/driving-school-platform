@@ -12,6 +12,46 @@ export function reportToast() {
   toast({ title: 'Förbereder rapport…', description: 'Exportfunktionen aktiveras inom kort.' });
 }
 
+// ─── CSV download ─────────────────────────────────────────────────────────────
+
+export function csvDownload(rows: Record<string, unknown>[], filename: string) {
+  if (!rows.length) {
+    toast({ title: 'Inga data', description: 'Inga rader att exportera för den valda perioden.' });
+    return;
+  }
+  const esc = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    return /[;"'\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const keys = Object.keys(rows[0]!);
+  const csv  = [keys.join(';'), ...rows.map((r) => keys.map((k) => esc(r[k])).join(';'))].join('\r\n');
+  const url  = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  const a    = Object.assign(document.createElement('a'), { href: url, download: `${filename}.csv` });
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ─── Print report ─────────────────────────────────────────────────────────────
+
+export function printReport(title: string, headers: string[], rows: unknown[][]) {
+  const e  = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const th = headers.map((h) => `<th>${e(h)}</th>`).join('');
+  const tb = rows.map((r) => `<tr>${r.map((c) => `<td>${e(c)}</td>`).join('')}</tr>`).join('');
+  const html = `<!DOCTYPE html><html lang="sv"><head><meta charset="utf-8"><title>${e(title)}</title>`
+    + `<style>body{font:12px Arial,sans-serif;margin:16px}h1{font-size:15px;margin-bottom:10px}`
+    + `table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:4px 8px}`
+    + `th{background:#eee}tr:nth-child(even){background:#f8f8f8}@media print{body{margin:0}}</style>`
+    + `</head><body><h1>${e(title)}</h1>`
+    + `<table><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></body></html>`;
+  const w = window.open('', '_blank', 'width=900,height=650');
+  if (!w) {
+    toast({ title: 'Tillåt popup-fönster', description: 'Popup blockerades — ändra webbläsarinställningar.' });
+    return;
+  }
+  w.document.write(html); w.document.close(); w.focus();
+  setTimeout(() => { try { w.print(); } catch { /* noop */ } }, 350);
+}
+
 // ─── Export format buttons (pill style, not hyperlinks) ───────────────────────
 
 export function ExcelBtn({ onClick = reportToast }: { onClick?: () => void }) {

@@ -190,28 +190,28 @@ export interface LessonBookingUpdate {
 // ─── List query input types ───────────────────────────────────────────────────
 
 export interface LessonSlotListQueryInput {
-  page?:            number;
-  per_page?:        number;
-  sort_by?:         string;
-  sort_dir?:        'asc' | 'desc';
-  instructor_id?:   UUID;
-  vehicle_id?:      UUID;
-  location_id?:     UUID;
-  lesson_type_id?:  UUID;
-  status?:          LessonSlotStatus;
-  from?:            Timestamp;
-  to?:              Timestamp;
+  page?:            number | undefined;
+  per_page?:        number | undefined;
+  sort_by?:         string | undefined;
+  sort_dir?:        'asc' | 'desc' | undefined;
+  instructor_id?:   UUID | undefined;
+  vehicle_id?:      UUID | undefined;
+  location_id?:     UUID | undefined;
+  lesson_type_id?:  UUID | undefined;
+  status?:          LessonSlotStatus | undefined;
+  from?:            Timestamp | undefined;
+  to?:              Timestamp | undefined;
 }
 
 export interface LessonBookingListQueryInput {
-  page?:          number;
-  per_page?:      number;
-  sort_by?:       string;
-  sort_dir?:      'asc' | 'desc';
-  student_id?:    UUID;
-  instructor_id?: UUID;
-  slot_id?:       UUID;
-  status?:        BookingStatus;
-  from?:          Timestamp;
-  to?:            Timestamp;
+  page?:          number | undefined;
+  per_page?:      number | undefined;
+  sort_by?:       string | undefined;
+  sort_dir?:      'asc' | 'desc' | undefined;
+  student_id?:    UUID | undefined;
+  instructor_id?: UUID | undefined;
+  slot_id?:       UUID | undefined;
+  status?:        BookingStatus | undefined;
+  from?:          Timestamp | undefined;
+  to?:            Timestamp | undefined;
 }

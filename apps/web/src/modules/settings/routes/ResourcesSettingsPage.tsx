@@ -43,15 +43,6 @@ function isEv(v: VehicleRow): boolean {
   return v.fuel_type === 'electric' || v.fuel_type === 'ev';
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  available:      'Tillgänglig',
-  in_use:         'I bruk',
-  maintenance:    'Service',
-  inspection_due: 'Besiktning',
-  inactive:       'Inaktiv',
-  decommissioned: 'Avvecklad',
-};
-
 // ─── ResourcesSettingsPage ────────────────────────────────────────────────────
 
 export function ResourcesSettingsPage() {

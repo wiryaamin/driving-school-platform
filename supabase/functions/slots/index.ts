@@ -146,8 +146,43 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   const dto = parsed.data;
   const client = createSupabaseClient(req);
 
-  // Pre-flight: availability checks in parallel
   const hasVehicle = dto.vehicle_id !== undefined && dto.vehicle_id !== null;
+
+  // Vehicle operational status gate — enforces that non-operational vehicles
+  // cannot be assigned to new slots. check_vehicle_availability() only checks
+  // time overlap; this check enforces the operational_status contract.
+  if (hasVehicle) {
+    const { data: vehicle, error: vehStatusError } = await (client as any)
+      .from('vehicles')
+      .select('id, operational_status')
+      .eq('id', dto.vehicle_id)
+      .eq('organization_id', ctx.organizationId)
+      .maybeSingle();
+    if (vehStatusError) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch vehicle');
+    if (vehicle === null) return errorResp(ctx, 404, 'NOT_FOUND', `Vehicle '${String(dto.vehicle_id)}' not found`);
+    const NON_BOOKABLE_STATUSES = ['maintenance', 'inspection_due', 'inactive', 'decommissioned'];
+    if (NON_BOOKABLE_STATUSES.includes(vehicle.operational_status as string)) {
+      const STATUS_LABELS: Record<string, string> = {
+        maintenance:    'underhåll',
+        inspection_due: 'inväntar besiktning',
+        inactive:       'inaktivt',
+        decommissioned: 'avvecklat',
+      };
+      const statusLabel = STATUS_LABELS[vehicle.operational_status as string] ?? String(vehicle.operational_status);
+      logger.warn('slots.vehicle_unavailable', {
+        correlation_id:     ctx.correlationId,
+        org_id:             ctx.organizationId,
+        vehicle_id:         dto.vehicle_id,
+        operational_status: vehicle.operational_status,
+      });
+      return errorResp(ctx, 409, 'VEHICLE_UNAVAILABLE',
+        `Fordonet kan inte bokas – status: ${statusLabel}`,
+        { vehicle_id: dto.vehicle_id, operational_status: vehicle.operational_status },
+      );
+    }
+  }
+
+  // Pre-flight: time-overlap availability checks in parallel
   const [instrResult, vehResult] = await Promise.all([
     (client as any).rpc('check_instructor_availability', {
       p_instructor_id: dto.instructor_id,

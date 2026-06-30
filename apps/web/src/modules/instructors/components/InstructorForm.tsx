@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -143,16 +143,16 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-        <SheetHeader className="pb-4">
-          <SheetTitle>{isEdit ? 'Redigera lärare' : 'Skapa lärare'}</SheetTitle>
-          <SheetDescription>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl max-h-[88vh] overflow-y-auto">
+        <DialogHeader className="pb-4">
+          <DialogTitle>{isEdit ? 'Redigera lärare' : 'Skapa lärare'}</DialogTitle>
+          <DialogDescription>
             {isEdit
               ? 'Uppdatera lärarens uppgifter nedan.'
               : 'Fyll i uppgifterna för att registrera en ny lärare.'}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
@@ -351,7 +351,7 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
             </div>
           </form>
         </Form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

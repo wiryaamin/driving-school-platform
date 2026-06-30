@@ -81,6 +81,7 @@ export function FakturaunderlagPage() {
     staleTime: 5 * 60_000,
   });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally reset timestamp on each new fetchKey
   const printedAt = useMemo(() => DATETIME_FMT.format(new Date()), [fetchKey]);
 
   const byLicence = useMemo(() => {

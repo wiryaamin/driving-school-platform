@@ -216,7 +216,7 @@ export function InvoiceListPage() {
   const [voidTarget,      setVoidTarget]      = useState<Invoice | null>(null);
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
 
-  const { data, isLoading, error } = useInvoiceList({
+  const { data, isLoading, error, refetch } = useInvoiceList({
     ...(statusFilter !== 'all' ? { status: statusFilter } : {}),
     ...(studentIdFilter ? { student_id: studentIdFilter } : {}),
     per_page: 50,
@@ -289,9 +289,9 @@ export function InvoiceListPage() {
 
       <PageContent>
         {error ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3">
-            <p className="text-sm text-destructive">Det gick inte att hämta fakturalistan.</p>
-            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+          <div className="flex items-center justify-between px-4 py-3 rounded-lg border border-destructive/30 bg-destructive/5 text-sm text-destructive">
+            <span>Det gick inte att hämta fakturalistan.</span>
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>
               Försök igen
             </Button>
           </div>

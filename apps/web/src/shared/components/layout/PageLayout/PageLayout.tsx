@@ -24,10 +24,10 @@ export function PageLayout({ children, className }: PageLayoutProps) {
 
 interface PageHeaderProps {
   title: string;
-  description?: string;
-  actions?: ReactNode;
-  breadcrumbs?: BreadcrumbItem[];
-  className?: string;
+  description?: string | undefined;
+  actions?: ReactNode | undefined;
+  breadcrumbs?: BreadcrumbItem[] | undefined;
+  className?: string | undefined;
 }
 
 interface BreadcrumbItem {

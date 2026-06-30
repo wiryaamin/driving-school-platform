@@ -2,14 +2,20 @@ import { useState } from 'react';
 import { OverviewTab }   from './OverviewTab.js';
 import { DemografiTab }  from './DemografiTab.js';
 import { ElevtrendTab }  from './ElevtrendTab.js';
+import { KpiTab }        from './KpiTab.js';
+import { RapporterTab }  from './RapporterTab.js';
+import { CohortTab }     from './CohortTab.js';
 import { cn } from '@/lib/utils.js';
 
-type InsightsTab = 'overview' | 'demografi' | 'elevtrender';
+type InsightsTab = 'overview' | 'demografi' | 'elevtrender' | 'kpi' | 'kohort' | 'rapporter';
 
 const TABS: { key: InsightsTab; label: string }[] = [
-  { key: 'overview',     label: 'Översikt'    },
-  { key: 'demografi',    label: 'Demografi'   },
-  { key: 'elevtrender',  label: 'Elevtrender' },
+  { key: 'overview',    label: 'Översikt'    },
+  { key: 'demografi',   label: 'Demografi'   },
+  { key: 'elevtrender', label: 'Elevtrender' },
+  { key: 'kpi',         label: 'KPI'         },
+  { key: 'kohort',      label: 'Kohorter'    },
+  { key: 'rapporter',   label: 'Rapporter'   },
 ];
 
 export function InsightsPage() {
@@ -52,9 +58,12 @@ export function InsightsPage() {
       </div>
 
       {/* Content */}
-      {activeTab === 'overview'    && <OverviewTab  />}
-      {activeTab === 'demografi'   && <DemografiTab />}
-      {activeTab === 'elevtrender' && <ElevtrendTab />}
+      {activeTab === 'overview'    && <OverviewTab   />}
+      {activeTab === 'demografi'   && <DemografiTab  />}
+      {activeTab === 'elevtrender' && <ElevtrendTab  />}
+      {activeTab === 'kpi'         && <KpiTab        />}
+      {activeTab === 'kohort'      && <CohortTab     />}
+      {activeTab === 'rapporter'   && <RapporterTab  />}
     </div>
   );
 }

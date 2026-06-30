@@ -12,3 +12,6 @@ export { ErrorFallback } from './errors/ErrorFallback.js';
 // ─── Guards ───────────────────────────────────────────────────────────────────
 export { ProtectedRoute } from './guards/ProtectedRoute.js';
 export { PermissionGate } from '@core/rbac/PermissionGate.js';
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+export { PhoneLink } from './PhoneLink.js';

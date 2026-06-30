@@ -1,10 +1,10 @@
-import { Link } from 'react-router-dom';
-import { ChevronRight, Gauge, Timer, BarChart2, CheckCircle } from 'lucide-react';
+﻿import { Link } from 'react-router-dom';
+import { ChevronRight, Gauge, Timer, ChartBar, CheckCircle } from 'lucide-react';
 import { Button } from '@platform/ui';
 
 const FEATURES = [
   { icon: Timer,       title: 'Prestation',               desc: 'Få en inblick i hur många moment eleven har klarat av.' },
-  { icon: BarChart2,   title: 'Spåra varningar',          desc: 'Automatisk synkronisering av elevens varningar' },
+  { icon: ChartBar,   title: 'Spåra varningar',          desc: 'Automatisk synkronisering av elevens varningar' },
   { icon: CheckCircle, title: 'Kompletterande utbildning', desc: 'Kombinera praktisk undervisning med realistisk simulatorträning' },
 ];
 

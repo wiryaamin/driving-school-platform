@@ -77,15 +77,15 @@ export interface NotificationRule {
 
 export interface SendMessageParams {
   channel:            CommChannel;
-  recipient_type?:    'student' | 'instructor' | 'manual';
-  recipient_id?:      string;
+  recipient_type?:    'student' | 'instructor' | 'manual' | undefined;
+  recipient_id?:      string | undefined;
   recipient_address:  string;
-  template_id?:       string;
-  subject?:           string;
+  template_id?:       string | undefined;
+  subject?:           string | undefined;
   body:               string;
-  scheduled_at?:      string;
-  variables?:         Record<string, string>;
-  metadata?:          Record<string, unknown>;
+  scheduled_at?:      string | undefined;
+  variables?:         Record<string, string> | undefined;
+  metadata?:          Record<string, unknown> | undefined;
 }
 
 export interface CreateTemplateParams {
@@ -115,18 +115,18 @@ export interface CreateRuleParams {
 }
 
 export interface UpdateRuleParams {
-  enabled?:        boolean;
-  template_id?:    string;
-  recipient_type?: 'student' | 'instructor';
+  enabled?:        boolean | undefined;
+  template_id?:    string | undefined;
+  recipient_type?: 'student' | 'instructor' | undefined;
 }
 
 export interface MessageListParams {
-  channel?:   CommChannel;
-  status?:    MsgStatus;
-  from?:      string;
-  to?:        string;
-  page?:      number;
-  per_page?:  number;
+  channel?:   CommChannel | undefined;
+  status?:    MsgStatus | undefined;
+  from?:      string | undefined;
+  to?:        string | undefined;
+  page?:      number | undefined;
+  per_page?:  number | undefined;
 }
 
 export interface CommAnalyticsSummary {
@@ -180,7 +180,7 @@ async function invoke<T>(path: string, opts?: Parameters<typeof supabase.functio
 export function useChannelConfigs() {
   return useQuery({
     queryKey: commKeys.channels(),
-    queryFn:  () => invoke<{ data: ChannelConfig[] }>('communications/channels').then((r) => r.data),
+    queryFn:  () => invoke<{ data: ChannelConfig[] }>('communications/channels', { method: 'GET' }).then((r) => r.data),
     staleTime: 60_000,
   });
 }
@@ -205,6 +205,7 @@ export function useCommTemplates(channel?: CommChannel | 'all') {
     queryKey: commKeys.templates(ch),
     queryFn:  () => invoke<{ data: CommTemplate[] }>(
       `communications/templates${ch ? `?channel=${ch}` : ''}`,
+      { method: 'GET' },
     ).then((r) => r.data),
     staleTime: 5 * 60_000,
   });
@@ -248,7 +249,7 @@ export function useDeleteTemplate() {
 export function useNotificationRules() {
   return useQuery({
     queryKey: commKeys.rules(),
-    queryFn:  () => invoke<{ data: NotificationRule[] }>('communications/rules').then((r) => r.data),
+    queryFn:  () => invoke<{ data: NotificationRule[] }>('communications/rules', { method: 'GET' }).then((r) => r.data),
     staleTime: 30_000,
   });
 }
@@ -303,6 +304,7 @@ export function useMessageList(params: MessageListParams = {}) {
     queryKey: commKeys.messages(params),
     queryFn:  () => invoke<{ data: OutboundMessage[]; meta: { total: number; page: number; per_page: number } }>(
       `communications${query ? `?${query}` : ''}`,
+      { method: 'GET' },
     ),
     staleTime: 30_000,
   });
@@ -316,7 +318,10 @@ export function useSendMessage() {
         method: 'POST',
         body:   JSON.stringify(params),
       }).then((r) => r.data),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: commKeys.all }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...commKeys.all, 'messages'] });
+      void qc.invalidateQueries({ queryKey: commKeys.queueHealth() });
+    },
   });
 }
 
@@ -326,7 +331,10 @@ export function useRetryMessage() {
     mutationFn: (id: string) =>
       invoke<{ data: OutboundMessage }>(`communications/${id}/retry`, { method: 'PATCH' })
         .then((r) => r.data),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: commKeys.all }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...commKeys.all, 'messages'] });
+      void qc.invalidateQueries({ queryKey: commKeys.queueHealth() });
+    },
   });
 }
 
@@ -336,28 +344,51 @@ export function useCancelMessage() {
     mutationFn: (id: string) =>
       invoke<{ data: OutboundMessage }>(`communications/${id}/cancel`, { method: 'PATCH' })
         .then((r) => r.data),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: commKeys.all }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...commKeys.all, 'messages'] });
+      void qc.invalidateQueries({ queryKey: commKeys.queueHealth() });
+    },
   });
 }
 
 // ─── Analytics + queue health hooks ──────────────────────────────────────────
 
-export function useCommAnalytics(days = 7) {
+export function useCommAnalytics(days = 7, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: commKeys.analytics(days),
     queryFn:  () => invoke<{ data: CommAnalyticsSummary[]; days: number }>(
       `communications/analytics?days=${days}`,
+      { method: 'GET' },
+    ).then((r) => r.data),
+    enabled:   options?.enabled ?? true,
+    staleTime: 60_000,
+  });
+}
+
+export interface CommDailyStat {
+  date:   string;
+  total:  number;
+  sent:   number;
+  failed: number;
+}
+
+export function useCommDailyStats(days = 7) {
+  return useQuery({
+    queryKey: [...commKeys.all, 'daily-stats', days] as const,
+    queryFn:  () => invoke<{ data: CommDailyStat[]; days: number; format: string }>(
+      `communications/analytics?days=${days}&format=daily`,
+      { method: 'GET' },
     ).then((r) => r.data),
     staleTime: 60_000,
   });
 }
 
-export function useQueueHealth() {
+export function useQueueHealth(options?: { enabled?: boolean }) {
   return useQuery({
-    queryKey:       commKeys.queueHealth(),
-    queryFn:        () => invoke<{ data: QueueHealth }>('communications/queue-health').then((r) => r.data),
-    staleTime:      15_000,
-    refetchInterval: 30_000,
+    queryKey: commKeys.queueHealth(),
+    queryFn:  () => invoke<{ data: QueueHealth }>('communications/queue-health', { method: 'GET' }).then((r) => r.data),
+    enabled:   options?.enabled ?? true,
+    staleTime: 60_000,
   });
 }
 
@@ -369,6 +400,36 @@ export function useBulkRetry() {
         method: 'POST',
         body:   JSON.stringify({ channel: channel ?? null }),
       }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: commKeys.all }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...commKeys.all, 'messages'] });
+      void qc.invalidateQueries({ queryKey: commKeys.queueHealth() });
+    },
+  });
+}
+
+export function useSeedDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      invoke<{ success: boolean; channels_added: number; rules_added: number }>(
+        'communications/seed-defaults',
+        { method: 'POST', body: JSON.stringify({}) },
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: commKeys.channels() });
+      void qc.invalidateQueries({ queryKey: commKeys.rules() });
+    },
+  });
+}
+
+export function useStudentMessages(studentId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: [...commKeys.all, 'student-messages', studentId] as const,
+    queryFn:  () => invoke<{ data: OutboundMessage[]; meta: { total: number; page: number; per_page: number } }>(
+      `communications?recipient_id=${encodeURIComponent(studentId!)}&per_page=20`,
+      { method: 'GET' },
+    ),
+    enabled:   enabled && Boolean(studentId),
+    staleTime: 30_000,
   });
 }

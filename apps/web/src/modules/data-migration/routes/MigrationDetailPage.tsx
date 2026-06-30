@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import {
   Button, Badge, Skeleton,
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';

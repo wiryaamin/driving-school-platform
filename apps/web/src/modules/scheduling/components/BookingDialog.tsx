@@ -70,8 +70,12 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
           onSuccess?.();
         },
         onError: (err) => {
-          const msg = err instanceof Error ? err.message : 'Försök igen';
-          toast({ title: 'Bokning misslyckades', description: msg, variant: 'destructive' });
+          const msg = err instanceof Error ? err.message : '';
+          toast({
+            title:       msg.startsWith('Eleven saknar') ? 'Otillräckliga lektionstillgodokvitton' : 'Bokning misslyckades',
+            description: msg || 'Försök igen.',
+            variant:     'destructive',
+          });
         },
       }
     );

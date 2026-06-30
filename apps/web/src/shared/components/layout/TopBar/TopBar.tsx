@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
+import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
@@ -7,6 +7,85 @@ import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
 import { useNotificationDot, useRecentActivity } from '@shared/hooks/useNotifications.js';
 import type { Notification } from '@shared/hooks/useNotifications.js';
+import { useLocations } from '@modules/scheduling/hooks/useLocations.js';
+
+// ─── Location Picker (Gap 8) ──────────────────────────────────────────────────
+
+const LOCATION_KEY = 'platform_active_location';
+
+function LocationPicker() {
+  const { data: locations = [] } = useLocations();
+  const [open, setOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(() => {
+    try { return localStorage.getItem(LOCATION_KEY); } catch { return null; }
+  });
+
+  if (locations.length <= 1) return null;
+
+  const active = locations.find(l => l.id === activeId) ?? locations.find(l => l.is_primary) ?? locations[0];
+
+  function select(id: string | null) {
+    setActiveId(id);
+    try {
+      if (id) localStorage.setItem(LOCATION_KEY, id);
+      else localStorage.removeItem(LOCATION_KEY);
+    } catch { /* ignore */ }
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className={cn(
+          'hidden sm:flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-xs font-medium border border-border transition-colors',
+          open ? 'bg-accent text-foreground border-primary/50' : 'bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+      >
+        <MapPin className="w-3 h-3 shrink-0" />
+        <span className="max-w-[120px] truncate">{active?.name ?? 'Välj filial'}</span>
+        <ChevronDown className={cn('w-3 h-3 shrink-0 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute left-0 top-full mt-1 w-52 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden py-1">
+            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Filial</p>
+            <button
+              type="button"
+              onClick={() => select(null)}
+              className={cn(
+                'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent',
+                !activeId ? 'text-primary font-medium' : 'text-popover-foreground',
+              )}
+            >
+              Alla filialer
+            </button>
+            {locations.map(loc => (
+              <button
+                key={loc.id}
+                type="button"
+                onClick={() => select(loc.id)}
+                className={cn(
+                  'w-full flex items-start gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent text-left',
+                  activeId === loc.id ? 'text-primary font-medium' : 'text-popover-foreground',
+                )}
+              >
+                <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+                <div>
+                  <p className="leading-tight">{loc.name}</p>
+                  <p className="text-[10px] text-muted-foreground">{loc.city}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function TopBar() {
   const { user, profile, organization, isLoading } = useSessionStore();
@@ -26,8 +105,8 @@ export function TopBar() {
       </button>
 
       {/* Organization context */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-foreground truncate">
+      <div className="min-w-0 shrink-0">
+        <p className="text-sm font-semibold text-foreground truncate max-w-[160px]">
           {organization?.name ?? (isLoading ? '' : '—')}
         </p>
         {organization?.subscription_status === 'trialing' && (
@@ -37,8 +116,13 @@ export function TopBar() {
           <p className="text-[10px] font-medium text-destructive leading-none">Betalning försenad</p>
         )}
         {organization?.status === 'suspended' && (
-          <p className="text-[10px] font-medium text-destructive leading-none">Konto inaktivt</p>
+          <p className="text-[10px] font-medium text-destructive leading-none">Inaktivt konto</p>
         )}
+      </div>
+
+      {/* Location filter (multi-branch) */}
+      <div className="flex-1 flex justify-start pl-2">
+        <LocationPicker />
       </div>
 
       {/* Right side controls */}
@@ -108,7 +192,7 @@ function notifRoute(n: Notification): string | null {
 
 function NotifRow({ n, onNavigate }: { n: Notification; onNavigate: (path: string) => void }) {
   const ChannelIcon = CHANNEL_ICON[n.channel] ?? Mail;
-  const status      = STATUS_ICON[n.status] ?? STATUS_ICON['pending'];
+  const status      = STATUS_ICON[n.status] ?? { icon: Clock as typeof CheckCircle, cls: 'text-amber-500' };
   const StatusIcon  = status.icon;
   const when        = new Date(n.created_at).toLocaleString('sv-SE', {
     day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
@@ -120,7 +204,7 @@ function NotifRow({ n, onNavigate }: { n: Notification; onNavigate: (path: strin
       <ChannelIcon className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-foreground truncate">
-          {n.subject ?? n.template_key}
+          {n.subject ?? n.template_key ?? 'Notis'}
         </p>
         <p className="text-[10px] text-muted-foreground mt-0.5">{when}</p>
       </div>
@@ -236,13 +320,13 @@ function HelpSupportMenu() {
     {
       items: [
         { key: 'help',      labelSv: 'Hjälpcenter',    icon: LifeBuoy,      comingSoon: true },
-        { key: 'feedback',  labelSv: 'Feedback portal', icon: MessageSquare, comingSoon: true },
+        { key: 'feedback',  labelSv: 'Feedbackportal',  icon: MessageSquare, comingSoon: true },
         { key: 'changelog', labelSv: 'Ändringslogg',   icon: History,       comingSoon: true },
       ],
     },
     {
       items: [
-        { key: 'chat',       labelSv: 'Chatta',         icon: MessageCircle, href: '#' },
+        { key: 'chat',       labelSv: 'Chatta',         icon: MessageCircle, comingSoon: true },
         { key: 'facebook',   labelSv: 'Facebook-grupp', icon: Globe,         href: 'https://www.facebook.com/', external: true },
         { key: 'teamviewer', labelSv: 'TeamViewer',     icon: Monitor,       href: 'https://www.teamviewer.com/', external: true },
       ],
@@ -272,7 +356,7 @@ function HelpSupportMenu() {
           'text-muted-foreground hover:text-foreground hover:bg-accent',
           open && 'text-foreground bg-accent',
         )}
-        aria-label="Hjälp & Support"
+        aria-label="Hjälp och support"
         aria-haspopup="true"
         aria-expanded={open}
       >

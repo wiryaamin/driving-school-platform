@@ -1,11 +1,12 @@
-import { NavLink, useLocation } from 'react-router-dom';
+﻿import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Users, Building2, ClipboardList, Bell, GraduationCap, BarChart2, BarChart3, ListChecks,
+  Users, Building2, GraduationCap, ChartBar, LineChart,
   Calendar, CalendarDays, List, BookOpen, Clock, Route,
-  Receipt, CreditCard, Wallet, FileText, ShoppingBag, ShoppingCart, Gift,
-  Settings, UserCheck,
-  Mail, Send, Upload,
+  Receipt, CreditCard, Wallet, Link2,
+  Settings, UserCheck, Smartphone,
+  Send, Upload, Bell, CheckSquare, ScrollText, Boxes, Zap, LayoutTemplate,
+  BookMarked, UserPlus, BookOpenCheck, Package, Tag, ShoppingCart,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -22,7 +23,6 @@ interface NavItem {
   icon:        LucideIcon;
   path?:       string;
   href?:       string;
-  tel?:        string;
   permission?: Permission | null;
   badge?:      number;
   comingSoon?: boolean;
@@ -49,50 +49,63 @@ export const NAVIGATION: NavSection[] = [
     key:     'generellt',
     labelSv: 'GENERELLT',
     items: [
-      { key: 'customers',         labelSv: 'Kunder',            icon: Users,         path: '/students',             permission: 'students:student:read' as Permission },
-      { key: 'corporate',         labelSv: 'Företagskunder',    icon: Building2,     path: '/corporate',            permission: null },
-      { key: 'kommunikation',     labelSv: 'Kommunikation',     icon: Mail,          path: '/kommunikation',        permission: null },
-      { key: 'communication-hub', labelSv: 'Meddelandehubb',    icon: Send,          path: '/communication',        permission: null },
-      { key: 'logs',              labelSv: 'Loggar',            icon: ClipboardList, path: '/logs',                 permission: null },
-      { key: 'watchlist',         labelSv: 'Bevakningar',       icon: Bell,          path: '/watchlist',            permission: null },
-      { key: 'classlist',         labelSv: 'Klasslista',        icon: GraduationCap, path: '/class-list',           permission: null },
-      { key: 'reports',           labelSv: 'Rapporter',         icon: BarChart2,     path: '/reports',              permission: null },
-      { key: 'insights',          labelSv: 'Insikter',          icon: BarChart3,     path: '/insights',             permission: null },
-      { key: 'tasks',             labelSv: 'Uppgifter',         icon: ListChecks,    path: '/tasks',                permission: null },
+      { key: 'customers',      labelSv: 'Kunder',          icon: Users,          path: '/students',    permission: 'students:student:read' as Permission },
+      { key: 'leads',          labelSv: 'Leads',           icon: UserPlus,       path: '/leads',       permission: null },
+      { key: 'curriculum',     labelSv: 'Utbildningsplaner',icon: BookOpenCheck, path: '/curriculum',  permission: null },
+      { key: 'corporate',      labelSv: 'Företagskunder',  icon: Building2,      path: '/corporate',   permission: null },
+      { key: 'communication',  labelSv: 'Kommunikation',   icon: Send,          path: '/communication', permission: null },
+      { key: 'reports',        labelSv: 'Rapporter',       icon: ChartBar,     path: '/reports',       permission: null },
+      { key: 'insights',       labelSv: 'Insikter',        icon: LineChart,     path: '/insights',      permission: null },
+      { key: 'classlist',      labelSv: 'Klasslista',      icon: GraduationCap, path: '/class-list',    permission: null },
+      { key: 'watchlist',      labelSv: 'Bevakningar',     icon: Bell,          path: '/watchlist',     permission: null },
+      { key: 'tasks',          labelSv: 'Uppgifter',       icon: CheckSquare,   path: '/tasks',         permission: null },
+      { key: 'logs',           labelSv: 'Loggar',          icon: ScrollText,    path: '/logs',          permission: null },
     ],
   },
   {
     key:     'bokningssystem',
     labelSv: 'BOKNINGSSYSTEM',
     items: [
-      { key: 'scheduling',   labelSv: 'Bokningsschema',      icon: Calendar,     path: '/scheduling',           permission: 'scheduling:booking:read' as Permission },
-      { key: 'my-schedule',  labelSv: 'Mitt schema',         icon: CalendarDays, path: '/scheduling/mine',      permission: null },
-      { key: 'bokningar',    labelSv: 'Bokningar',           icon: BookOpen,     path: '/scheduling/bokningar', permission: null },
-      { key: 'booking-list', labelSv: 'Bokningslista',       icon: List,         path: '/scheduling/list',      permission: null },
-      { key: 'waitlist',     labelSv: 'Väntelista',          icon: Clock,        path: '/scheduling/waitlist',  permission: null },
-      { key: 'planner',      labelSv: 'Trafikövningsplatser', icon: Route,       path: '/scheduling/planner',   permission: null },
+      { key: 'scheduling',    labelSv: 'Bokningsschema',    icon: Calendar,     path: '/scheduling',            permission: 'scheduling:booking:read' as Permission },
+      { key: 'my-schedule',   labelSv: 'Mitt schema',       icon: CalendarDays, path: '/scheduling/mine',       permission: null },
+      { key: 'booking-flow',  labelSv: 'Bokningsflöde',     icon: BookOpen,     path: '/scheduling/bokningar',  permission: null },
+      { key: 'slot-list',     labelSv: 'Passöversikt',      icon: List,         path: '/scheduling/list',       permission: null },
+      { key: 'waitlist',      labelSv: 'Väntelista',        icon: Clock,        path: '/scheduling/waitlist',   permission: null },
+      { key: 'kurser',        labelSv: 'Kursöversikt',      icon: BookMarked,   path: '/scheduling/kurser',     permission: null },
+      { key: 'statistik',     labelSv: 'Statistik',         icon: ChartBar,    path: '/scheduling/statistik',  permission: null },
+      { key: 'generation',    labelSv: 'Passläggning',      icon: Zap,            path: '/scheduling/generation', permission: 'scheduling:generation:read' as Permission },
+      { key: 'mallar',        labelSv: 'Slotmallar',        icon: LayoutTemplate, path: '/scheduling/mallar',     permission: 'scheduling:slot:create' as Permission },
+    ],
+  },
+  {
+    key:     'resurser',
+    labelSv: 'RESURSER',
+    items: [
+      { key: 'resources', labelSv: 'Fordon & Platser',       icon: Boxes, path: '/resources',           permission: null },
+      { key: 'planner',   labelSv: 'Trafikövningsplatser',   icon: Route, path: '/scheduling/planner',  permission: null },
     ],
   },
   {
     key:     'ekonomi',
     labelSv: 'EKONOMI',
     items: [
-      { key: 'invoices',    labelSv: 'Fakturor',            icon: Receipt,      path: '/finance/invoices',   permission: 'finance:invoice:read' as Permission },
-      { key: 'payments',    labelSv: 'Betalningar',         icon: CreditCard,   path: '/finance/payments',   permission: 'finance:payment:read' as Permission },
-      { key: 'cash',        labelSv: 'Kassa',               icon: Wallet,       path: '/finance/cash',       permission: null },
-      { key: 'pay-request', labelSv: 'Betalningsbegäran',   icon: FileText,     path: '/finance/requests',   permission: null },
-      { key: 'cash-orders', labelSv: 'Kassaordrar',         icon: ShoppingBag,  path: '/finance/orders',     permission: null },
-      { key: 'ecommerce',   labelSv: 'E-handelsordrar',     icon: ShoppingCart, path: '/finance/ecommerce',  permission: null },
-      { key: 'giftcards',   labelSv: 'Presentkort',         icon: Gift,         path: '/finance/gift-cards', permission: null },
+      { key: 'invoices',  labelSv: 'Fakturor',         icon: Receipt,    path: '/finance/invoices',  permission: 'finance:invoice:read' as Permission },
+      { key: 'payments',  labelSv: 'Betalningar',      icon: CreditCard, path: '/finance/payments',  permission: 'finance:payment:read' as Permission },
+      { key: 'cash',      labelSv: 'Kassa',            icon: Wallet,     path: '/finance/cash',      permission: null },
+      { key: 'packages',   labelSv: 'Paket',            icon: Package,    path: '/packages',          permission: 'finance:package:read' as Permission },
+      { key: 'campaigns',  labelSv: 'Kampanjer',        icon: Tag,          path: '/campaigns',         permission: 'finance:campaign:read' as Permission },
+      { key: 'orders',    labelSv: 'Ordrar',           icon: ShoppingCart, path: '/orders',            permission: 'orders:order:read' as Permission },
+      { key: 'fortnox',   labelSv: 'Fortnox',          icon: Link2,        path: '/finance/fortnox',   permission: 'finance:fortnox:manage' as Permission },
     ],
   },
   {
     key:     'systeminst',
     labelSv: 'SYSTEMINSTÄLLNINGAR',
     items: [
-      { key: 'settings',       labelSv: 'Inställningar', icon: Settings,  path: '/settings',                permission: null },
-      { key: 'staff',          labelSv: 'Personal',      icon: UserCheck, path: '/instructors',             permission: 'instructors:instructor:read' as Permission },
-      { key: 'data-migration', labelSv: 'Dataimport',    icon: Upload,    path: '/settings/data-migration', permission: null },
+      { key: 'staff',           labelSv: 'Personal',       icon: UserCheck,  path: '/instructors',              permission: 'instructors:instructor:read' as Permission },
+      { key: 'instructor-app', labelSv: 'LärarApp',       icon: Smartphone, path: '/instructor-app',           permission: null },
+      { key: 'settings',       labelSv: 'Inställningar',  icon: Settings,   path: '/settings',                 permission: null },
+      { key: 'data-migration', labelSv: 'Dataimport',     icon: Upload,     path: '/settings/data-migration',  permission: null },
     ],
   },
 ];
@@ -100,7 +113,7 @@ export const NAVIGATION: NavSection[] = [
 // ─── Shared Nav Content ───────────────────────────────────────────────────────
 
 interface SidebarNavContentProps {
-  onNavClick?: () => void;
+  onNavClick?: (() => void) | undefined;
 }
 
 export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
@@ -195,7 +208,7 @@ function SidebarItem({
   onNavClick,
 }: {
   item:        NavItem;
-  onNavClick?: () => void;
+  onNavClick?: (() => void) | undefined;
 }) {
   const location = useLocation();
   const isActive = item.path

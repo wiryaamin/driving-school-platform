@@ -12,7 +12,17 @@ import {
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useQuery } from '@tanstack/react-query';
-import { useCorporateCustomer, useUpdateCorporateCustomer, useArchiveCorporateCustomer } from '../hooks/useCorporateCustomers.js';
+import type { CorporateContract } from '@platform/types';
+import {
+  useCorporateCustomer,
+  useUpdateCorporateCustomer,
+  useArchiveCorporateCustomer,
+  useCorporateContracts,
+  useCreateCorporateContract,
+  useUpdateCorporateContract,
+  useArchiveCorporateContract,
+} from '../hooks/useCorporateCustomers.js';
+import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,6 +79,55 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+// ─── Elev accordion ───────────────────────────────────────────────────────────
+
+function ElevAccordion({ id }: { id: string }) {
+  const [open, setOpen] = useState(true);
+  const { data, isLoading } = useStudentList({ corporate_customer_id: id, per_page: 100 });
+  const students = data?.data ?? [];
+  const total    = data?.meta.total ?? 0;
+
+  return (
+    <div className="border-t border-border">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 text-sm font-medium hover:bg-muted/30 transition-colors"
+      >
+        <span>Elever</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">
+            {isLoading ? '…' : total}
+          </span>
+          {open ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-5 pb-4">
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">Laddar…</p>
+          ) : students.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Inga elever kopplade till detta företag.</p>
+          ) : (
+            <ul className="space-y-1">
+              {students.map(s => (
+                <li key={s.id} className="text-sm">
+                  <a href={`/students/${s.id}`} className="text-blue-600 hover:underline">
+                    {s.first_name} {s.last_name}
+                  </a>
+                  {s.email && (
+                    <span className="text-xs text-muted-foreground ml-2">{s.email}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Tab: Företaget ───────────────────────────────────────────────────────────
 
 function ForetagetTab({ id }: { id: string }) {
@@ -77,7 +136,6 @@ function ForetagetTab({ id }: { id: string }) {
   const archiveMutation = useArchiveCorporateCustomer();
   const navigate        = useNavigate();
   const [deleteOpen, setDeleteOpen]   = useState(false);
-  const [elevOpen,   setElevOpen]     = useState(true);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -95,42 +153,49 @@ function ForetagetTab({ id }: { id: string }) {
     if (!customer) return;
     const ref = [customer.contact_first_name, customer.contact_last_name].filter(Boolean).join(' ');
     form.reset({
-      org_number:         customer.org_number ?? '',
-      company_name:       customer.company_name,
-      alt_name:           '',
-      address_line1:      customer.address_line1 ?? '',
-      address_line2:      customer.address_line2 ?? '',
-      postal_code:        customer.postal_code ?? '',
-      city:               customer.city ?? '',
-      contact_email:      customer.contact_email ?? '',
-      er_ref:             ref,
-      contact_phone:      customer.contact_phone ?? '',
-      standard_discount:  '',
-      payment_terms_days: '',
-      notes:              customer.notes ?? '',
-      economy_notes:      '',
-      is_active:          customer.status === 'active' || customer.status === 'paused',
-      has_debt_collection: false,
+      org_number:          customer.org_number ?? '',
+      company_name:        customer.company_name,
+      alt_name:            customer.alt_name ?? '',
+      address_line1:       customer.address_line1 ?? '',
+      address_line2:       customer.address_line2 ?? '',
+      postal_code:         customer.postal_code ?? '',
+      city:                customer.city ?? '',
+      contact_email:       customer.contact_email ?? '',
+      er_ref:              ref,
+      contact_phone:       customer.contact_phone ?? '',
+      standard_discount:   customer.default_discount_pct?.toString() ?? '',
+      payment_terms_days:  customer.payment_terms_days?.toString() ?? '',
+      notes:               customer.notes ?? '',
+      economy_notes:       customer.economy_notes ?? '',
+      is_active:           customer.status === 'active' || customer.status === 'paused',
+      has_debt_collection: customer.has_debt_collection ?? false,
     });
   }, [customer, form]);
 
   function onSubmit(values: FormValues) {
     const [firstName, ...rest] = (values.er_ref ?? '').trim().split(' ');
+    const discPct   = Number(values.standard_discount);
+    const termsDays = parseInt(values.payment_terms_days ?? '', 10);
     updateMutation.mutate({
       id,
       input: {
-        org_number:          values.org_number || undefined,
-        company_name:        values.company_name,
-        address_line1:       values.address_line1 || undefined,
-        address_line2:       values.address_line2 || undefined,
-        postal_code:         values.postal_code || undefined,
-        city:                values.city || undefined,
-        contact_email:       values.contact_email || undefined,
-        contact_first_name:  firstName || undefined,
-        contact_last_name:   rest.join(' ') || undefined,
-        contact_phone:       values.contact_phone || undefined,
-        notes:               values.notes || undefined,
-        status:              values.is_active ? 'active' : 'paused',
+        org_number:           values.org_number || undefined,
+        company_name:         values.company_name,
+        address_line1:        values.address_line1 || undefined,
+        address_line2:        values.address_line2 || undefined,
+        postal_code:          values.postal_code || undefined,
+        city:                 values.city || undefined,
+        contact_email:        values.contact_email || undefined,
+        contact_first_name:   firstName || undefined,
+        contact_last_name:    rest.join(' ') || undefined,
+        contact_phone:        values.contact_phone || undefined,
+        notes:                values.notes || undefined,
+        status:               values.is_active ? 'active' : 'paused',
+        alt_name:             values.alt_name || undefined,
+        default_discount_pct: values.standard_discount && !Number.isNaN(discPct) ? discPct : undefined,
+        payment_terms_days:   values.payment_terms_days && !Number.isNaN(termsDays) ? termsDays : undefined,
+        economy_notes:        values.economy_notes || undefined,
+        has_debt_collection:  values.has_debt_collection,
       },
     }, {
       onSuccess: () => toast({ title: 'Ändringar sparade' }),
@@ -340,24 +405,7 @@ function ForetagetTab({ id }: { id: string }) {
       </Form>
 
       {/* ── Elever accordion ──────────────────────────────────────────────── */}
-      <div className="border-t border-border">
-        <button
-          type="button"
-          onClick={() => setElevOpen(v => !v)}
-          className="w-full flex items-center justify-between px-5 py-3 text-sm font-medium hover:bg-muted/30 transition-colors"
-        >
-          <span>Elever</span>
-          <div className="flex items-center gap-2">
-            <span className="text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5">0</span>
-            {elevOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-          </div>
-        </button>
-        {elevOpen && (
-          <div className="px-5 pb-4 text-sm text-muted-foreground">
-            Inga elever kopplade till detta företag.
-          </div>
-        )}
-      </div>
+      <ElevAccordion id={id} />
 
       {/* Delete dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -550,7 +598,7 @@ function AktiviteterTab() {
   );
 }
 
-// ─── Avtal types & schema ─────────────────────────────────────────────────────
+// ─── Avtal schema ─────────────────────────────────────────────────────────────
 
 const avtalSchema = z.object({
   name:               z.string().trim().min(1, 'Avtalsnamn krävs').max(200),
@@ -566,73 +614,97 @@ const avtalSchema = z.object({
 });
 type AvtalValues = z.infer<typeof avtalSchema>;
 
-interface AvtalRecord {
-  id:                 string;
-  name:               string;
-  er_ref:             string;
-  payment_terms_days: string;
-  credit_limit:       string;
-  discount_pct:       string;
-  is_active:          boolean;
-  comment:            string;
-  contact_email:      string;
-  contact_name:       string;
-  contact_phone:      string;
-  created_at:         string;
+const AVTAL_DEFAULTS: AvtalValues = {
+  name: '', er_ref: '', payment_terms_days: '',
+  credit_limit: '', discount_pct: '10',
+  is_active: true, comment: '',
+  contact_email: '', contact_name: '', contact_phone: '',
+};
+
+function contractToFormValues(c: CorporateContract): AvtalValues {
+  return {
+    name:               c.name,
+    er_ref:             c.er_ref             ?? '',
+    payment_terms_days: c.payment_terms_days?.toString() ?? '',
+    credit_limit:       c.credit_limit_sek?.toString()  ?? '',
+    discount_pct:       c.discount_pct?.toString()       ?? '',
+    is_active:          c.is_active,
+    comment:            c.comment       ?? '',
+    contact_email:      c.contact_email ?? '',
+    contact_name:       c.contact_name  ?? '',
+    contact_phone:      c.contact_phone ?? '',
+  };
 }
 
-// ─── Nytt Avtal dialog ────────────────────────────────────────────────────────
+// ─── Contract dialog (create + edit) ─────────────────────────────────────────
 
 function NyttAvtalDialog({
-  open, onOpenChange, onSave,
+  open, onOpenChange, corporateCustomerId, editContract,
 }: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  onSave: (record: AvtalRecord) => void;
+  open:                boolean;
+  onOpenChange:        (v: boolean) => void;
+  corporateCustomerId: string;
+  editContract?:       CorporateContract | undefined;
 }) {
+  const isEdit        = editContract !== undefined;
+  const createContract = useCreateCorporateContract();
+  const updateContract = useUpdateCorporateContract();
+  const isPending      = createContract.isPending || updateContract.isPending;
+
   const form = useForm<AvtalValues>({
     resolver: zodResolver(avtalSchema),
-    defaultValues: {
-      name: '', er_ref: '', payment_terms_days: '',
-      credit_limit: '', discount_pct: '10',
-      is_active: true, comment: '',
-      contact_email: '', contact_name: '', contact_phone: '',
-    },
+    defaultValues: AVTAL_DEFAULTS,
   });
 
   useEffect(() => {
-    if (open) form.reset({
-      name: '', er_ref: '', payment_terms_days: '',
-      credit_limit: '', discount_pct: '10',
-      is_active: true, comment: '',
-      contact_email: '', contact_name: '', contact_phone: '',
-    });
-  }, [open, form]);
+    if (open) {
+      form.reset(isEdit && editContract ? contractToFormValues(editContract) : AVTAL_DEFAULTS);
+    }
+  }, [open, isEdit, editContract, form]);
 
   function onSubmit(values: AvtalValues) {
-    onSave({
-      id:                 crypto.randomUUID(),
+    const termsDays   = parseInt(values.payment_terms_days ?? '', 10);
+    const creditLimit = parseFloat(values.credit_limit ?? '');
+    const discountPct = parseFloat(values.discount_pct ?? '');
+
+    const payload = {
       name:               values.name,
-      er_ref:             values.er_ref             ?? '',
-      payment_terms_days: values.payment_terms_days ?? '',
-      credit_limit:       values.credit_limit       ?? '',
-      discount_pct:       values.discount_pct       ?? '',
+      er_ref:             values.er_ref || undefined,
+      payment_terms_days: values.payment_terms_days && !Number.isNaN(termsDays)   ? termsDays   : undefined,
+      credit_limit_sek:   values.credit_limit       && !Number.isNaN(creditLimit) ? creditLimit : undefined,
+      discount_pct:       values.discount_pct       && !Number.isNaN(discountPct) ? discountPct : undefined,
       is_active:          values.is_active,
-      comment:            values.comment            ?? '',
-      contact_email:      values.contact_email      ?? '',
-      contact_name:       values.contact_name       ?? '',
-      contact_phone:      values.contact_phone      ?? '',
-      created_at:         new Date().toISOString(),
-    });
-    onOpenChange(false);
+      comment:            values.comment        || undefined,
+      contact_email:      values.contact_email  || undefined,
+      contact_name:       values.contact_name   || undefined,
+      contact_phone:      values.contact_phone  || undefined,
+    };
+
+    if (isEdit && editContract) {
+      updateContract.mutate(
+        { id: editContract.id, corporateCustomerId, input: payload },
+        {
+          onSuccess: () => { toast({ title: 'Avtal uppdaterat' }); onOpenChange(false); },
+          onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
+        },
+      );
+    } else {
+      createContract.mutate(
+        { ...payload, corporate_customer_id: corporateCustomerId },
+        {
+          onSuccess: () => { toast({ title: 'Avtal sparat' }); onOpenChange(false); },
+          onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
+        },
+      );
+    }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <DialogTitle className="text-lg font-semibold">Nytt avtal</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">{isEdit ? 'Redigera avtal' : 'Nytt avtal'}</DialogTitle>
         </div>
 
         <Form {...form}>
@@ -755,11 +827,11 @@ function NyttAvtalDialog({
 
             {/* Footer */}
             <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border bg-muted/5">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
                 Avbryt
               </Button>
-              <Button type="submit" className="bg-[#1a2b4a] hover:bg-[#14213d] text-white px-8">
-                Spara
+              <Button type="submit" className="bg-[#1a2b4a] hover:bg-[#14213d] text-white px-8" disabled={isPending}>
+                {isPending ? 'Sparar...' : isEdit ? 'Uppdatera' : 'Spara'}
               </Button>
             </div>
           </form>
@@ -771,21 +843,41 @@ function NyttAvtalDialog({
 
 // ─── Tab: Avtal ───────────────────────────────────────────────────────────────
 
-function AvtalTab() {
-  const [filter,    setFilter]    = useState('aktiva');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [avtal,     setAvtal]     = useState<AvtalRecord[]>([]);
+function AvtalTab({ id }: { id: string }) {
+  const [filter,          setFilter]          = useState('aktiva');
+  const [dialogOpen,      setDialogOpen]      = useState(false);
+  const [editingContract, setEditingContract] = useState<CorporateContract | undefined>(undefined);
 
-  function handleSave(record: AvtalRecord) {
-    setAvtal(prev => [record, ...prev]);
-    toast({ title: 'Avtal sparat', description: record.name });
-  }
+  const { data, isLoading }  = useCorporateContracts(id);
+  const archiveContract      = useArchiveCorporateContract();
+  const contracts            = data?.data ?? [];
 
   const filtered = filter === 'aktiva'
-    ? avtal.filter(a => a.is_active)
+    ? contracts.filter(a => a.is_active)
     : filter === 'avslutade'
-    ? avtal.filter(a => !a.is_active)
-    : avtal;
+    ? contracts.filter(a => !a.is_active)
+    : contracts;
+
+  function openNew() {
+    setEditingContract(undefined);
+    setDialogOpen(true);
+  }
+
+  function openEdit(contract: CorporateContract) {
+    setEditingContract(contract);
+    setDialogOpen(true);
+  }
+
+  function handleArchive(e: React.MouseEvent, contractId: string) {
+    e.stopPropagation();
+    archiveContract.mutate(
+      { contractId, corporateCustomerId: id },
+      {
+        onSuccess: () => toast({ title: 'Avtal arkiverat' }),
+        onError: (err) => toast({ title: 'Kunde inte arkivera', description: err instanceof Error ? err.message : '', variant: 'destructive' }),
+      },
+    );
+  }
 
   return (
     <div className="p-5 space-y-4">
@@ -806,13 +898,13 @@ function AvtalTab() {
         <Button
           size="sm"
           className="bg-[#1a2b4a] hover:bg-[#14213d] text-white h-9"
-          onClick={() => setDialogOpen(true)}
+          onClick={openNew}
         >
           Nytt avtal
         </Button>
       </div>
 
-      {/* Avtal list */}
+      {/* Contract list */}
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
@@ -822,33 +914,51 @@ function AvtalTab() {
               <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Betalning</th>
               <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Oanvänd betalning</th>
               <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Total kredit/skyldig</th>
-              <th className="w-8"></th>
+              <th className="w-10"></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {isLoading ? (
+              [1, 2].map(i => (
+                <tr key={i}><td colSpan={6} className="px-4 py-2"><Skeleton className="h-8 w-full" /></td></tr>
+              ))
+            ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">
                   Inga avtal hittade.
                 </td>
               </tr>
             ) : (
-              filtered.map(a => (
-                <tr key={a.id} className="border-b border-border last:border-0 hover:bg-muted/10 cursor-pointer">
+              filtered.map(contract => (
+                <tr
+                  key={contract.id}
+                  className="border-b border-border last:border-0 hover:bg-muted/10 cursor-pointer"
+                  onClick={() => openEdit(contract)}
+                >
                   <td className="px-4 py-3">
-                    <p className="text-sm font-medium text-blue-600">{a.name}</p>
-                    {(a.er_ref || a.discount_pct) && (
+                    <p className="text-sm font-medium text-blue-600">{contract.name}</p>
+                    {(contract.er_ref || contract.discount_pct !== null) && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {[a.er_ref && `Ref: ${a.er_ref}`, a.discount_pct && `Rabatt: ${a.discount_pct}%`].filter(Boolean).join(' · ')}
+                        {[
+                          contract.er_ref && `Ref: ${contract.er_ref}`,
+                          contract.discount_pct !== null && `Rabatt: ${contract.discount_pct}%`,
+                        ].filter(Boolean).join(' · ')}
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums">–</td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums">–</td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums">–</td>
+                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
+                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
+                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
                   <td className="px-4 py-3 text-right text-sm tabular-nums font-medium text-green-600">0,00</td>
                   <td className="px-4 py-3 text-right">
-                    <ChevronDown className="w-4 h-4 text-muted-foreground rotate-[-90deg]" />
+                    <button
+                      type="button"
+                      onClick={(e) => handleArchive(e, contract.id)}
+                      className="p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-600 transition-colors"
+                      title="Arkivera avtal"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </td>
                 </tr>
               ))
@@ -857,7 +967,12 @@ function AvtalTab() {
         </table>
       </div>
 
-      <NyttAvtalDialog open={dialogOpen} onOpenChange={setDialogOpen} onSave={handleSave} />
+      <NyttAvtalDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        corporateCustomerId={id}
+        editContract={editingContract}
+      />
     </div>
   );
 }
@@ -919,6 +1034,7 @@ interface InvoiceRow {
   due_date:       string | null;
   created_at:     string;
   total_amount:   number;
+  student_id:     string;
 }
 
 function statusLabel(s: string) {
@@ -930,28 +1046,50 @@ function statusLabel(s: string) {
 }
 
 function HistorikTab({ id }: { id: string }) {
-  const { data: customer } = useCorporateCustomer(id);
+  // Step 1: resolve students linked to this company via the corporate_customer_id FK.
+  // This is the authoritative scope — only these students' invoices belong to this company.
+  const { data: studentData, isLoading: studentsLoading } = useStudentList(
+    { corporate_customer_id: id, per_page: 100 },
+  );
+  const students   = studentData?.data ?? [];
+  const studentIds = students.map(s => s.id);
+  const studentMap = Object.fromEntries(
+    students.map(s => [s.id, `${s.first_name} ${s.last_name}`]),
+  );
 
-  // Fetch invoices where company matches by name (approximation — no direct FK yet)
-  const { data: invoices = [], isLoading } = useQuery({
-    queryKey: ['corp-historik-invoices', id],
+  // Step 2: fetch invoices scoped to exactly those students — enforces per-company isolation.
+  const { data: invoices = [], isLoading: invLoading } = useQuery({
+    queryKey: ['corp-historik-invoices', id, studentIds.join(',')],
     queryFn: async (): Promise<InvoiceRow[]> => {
-      if (!customer) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (supabase as unknown as any)
         .from('invoices')
-        .select('id, invoice_number, status, issued_at, due_date, created_at, total_amount')
+        .select('id, invoice_number, status, issued_at, due_date, created_at, total_amount, student_id')
         .is('deleted_at', null)
-        .not('invoice_number', 'is', null)
+        .in('student_id', studentIds)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(200);
       return (data ?? []) as InvoiceRow[];
     },
-    enabled: !!customer,
+    // Don't run until students are loaded; skip entirely if no students are linked.
+    enabled: !studentsLoading && studentIds.length > 0,
     staleTime: 60_000,
   });
 
+  const isLoading  = studentsLoading || invLoading;
+  const noStudents = !studentsLoading && studentIds.length === 0;
+  const totalSEK   = invoices.reduce((sum, inv) => sum + inv.total_amount, 0);
+
   return (
-    <div className="p-5">
+    <div className="p-5 space-y-3">
+      {/* Summary bar — shown only when invoices are present */}
+      {!isLoading && !noStudents && invoices.length > 0 && (
+        <div className="flex gap-6 text-sm text-muted-foreground">
+          <span>{invoices.length} faktura{invoices.length !== 1 ? 'r' : ''}</span>
+          <span className="font-medium text-foreground">{SEK.format(totalSEK)} SEK totalt</span>
+        </div>
+      )}
+
       <div className="border border-border rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead>
@@ -966,10 +1104,16 @@ function HistorikTab({ id }: { id: string }) {
               [1, 2, 3].map(i => (
                 <tr key={i}><td colSpan={9} className="px-4 py-2"><Skeleton className="h-6 w-full" /></td></tr>
               ))
+            ) : noStudents ? (
+              <tr>
+                <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  Inga elever kopplade till företaget — inga fakturor att visa.
+                </td>
+              </tr>
             ) : invoices.length === 0 ? (
               <tr>
                 <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Inga fakturor hittades.
+                  Inga fakturor kopplade till företagets elever.
                 </td>
               </tr>
             ) : (
@@ -977,11 +1121,11 @@ function HistorikTab({ id }: { id: string }) {
                 <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
                   <td className="px-4 py-2.5 text-xs font-medium text-blue-600">{inv.invoice_number ?? '—'}</td>
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">Faktura</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">—</td>
+                  <td className="px-4 py-2.5 text-xs">{studentMap[inv.student_id] ?? '—'}</td>
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">—</td>
                   <td className="px-4 py-2.5 text-xs">{fmtDate(inv.issued_at ?? inv.created_at)}</td>
                   <td className="px-4 py-2.5 text-xs">{fmtDate(inv.due_date)}</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">—</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{inv.issued_at ? fmtDate(inv.issued_at) : '—'}</td>
                   <td className="px-4 py-2.5 text-xs tabular-nums font-medium text-right">
                     {SEK.format(inv.total_amount)}
                   </td>
@@ -1057,7 +1201,7 @@ export function CorporateDetailPage() {
         {activeTab === 'dokument'    &&        <DokumentTab />}
         {activeTab === 'billecta'    && id && <BillectaTab    id={id} />}
         {activeTab === 'aktiviteter' &&        <AktiviteterTab />}
-        {activeTab === 'avtal'       &&        <AvtalTab />}
+        {activeTab === 'avtal'       && id && <AvtalTab id={id} />}
         {activeTab === 'konto'       &&        <KontoTab />}
         {activeTab === 'historik'    && id && <HistorikTab    id={id} />}
       </div>

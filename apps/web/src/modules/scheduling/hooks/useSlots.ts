@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { supabase } from '@core/api/supabase.js';
 import type { LessonSlot, LessonSlotListQueryInput } from '@platform/types';
 
@@ -71,6 +72,7 @@ export function useSlotList(params: LessonSlotListQueryInput = {}, options?: { e
     queryKey: slotKeys.list(params),
     queryFn: () => apiFetchSlots({ per_page: 200, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
     enabled: options?.enabled !== false && Boolean(params.from && params.to),
+    staleTime: 2 * 60_000,
   });
 }
 
@@ -83,9 +85,16 @@ export function useSlot(id: string | null) {
 }
 
 export function useInstructorUpcomingSlots(instructorId: string | null | undefined) {
-  const from  = new Date().toISOString();
-  const to    = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  const today = from.slice(0, 10);
+  // Memoize to today-boundary so the query key is stable within a calendar day.
+  // New Date() inside a hook without memoization creates a new key on every render,
+  // which triggers a fresh fetch even when nothing has changed.
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const from  = useMemo(() => `${today}T00:00:00.000Z`, [today]);
+  const to    = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 30);
+    return d.toISOString();
+  }, [today]);
 
   return useQuery({
     queryKey: [...slotKeys.all, 'instructor-upcoming', instructorId ?? '', today],

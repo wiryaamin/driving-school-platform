@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from '../Sidebar/Sidebar.js';
 import { TopBar } from '../TopBar/TopBar.js';
 import { MobileSidebar } from '../Sidebar/MobileSidebar.js';
+import { CommandPalette } from '../../CommandPalette/CommandPalette.js';
 import { Toaster } from '@platform/ui';
 
 export function AppShell() {
@@ -22,6 +23,9 @@ export function AppShell() {
           </div>
         </main>
       </div>
+
+      {/* Global overlays */}
+      <CommandPalette />
       <Toaster />
     </div>
   );

@@ -127,7 +127,7 @@ interface HoverAnchor {
 function BookingNames({ slotId, hasBookings }: { slotId: string; hasBookings: boolean }) {
   const { data: bookingsData, isLoading } = useBookingsForSlot(hasBookings ? slotId : null);
   const bookings   = bookingsData?.data ?? [];
-  const studentIds = useMemo(() => bookings.map(b => b.student_id), [bookingsData]);
+  const studentIds = useMemo(() => (bookingsData?.data ?? []).map(b => b.student_id), [bookingsData]);
 
   const { data: studentsRaw = [], isLoading: studentsLoading } = useStudentsBatch(studentIds);
   const studentMap = useMemo(

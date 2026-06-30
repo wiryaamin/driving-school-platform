@@ -5,7 +5,7 @@ import {
   Button, ScrollArea, Skeleton, Separator,
   toast,
 } from '@platform/ui';
-import type { LessonSlot } from '@platform/types';
+import type { LessonSlot, Student } from '@platform/types';
 import { useSlotList } from '../hooks/useSlots.js';
 import { useRescheduleBooking } from '../hooks/useSchedulingMutations.js';
 import { formatSlotDate, formatSlotTime, formatCapacity, isSlotFull } from '../lib/calendarUtils.js';
@@ -18,7 +18,8 @@ interface RescheduleBookingDialogProps {
   bookingId:     string | null;
   currentSlotId: string;
   studentName:   string;
-  onSuccess?:    () => void;
+  student?:      Student | null | undefined;
+  onSuccess?:    (() => void) | undefined;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

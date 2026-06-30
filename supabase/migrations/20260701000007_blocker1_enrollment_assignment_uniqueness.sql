@@ -1,0 +1,114 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- MIGRATION: 20260701000007_blocker1_enrollment_assignment_uniqueness.sql
+-- Platform:  Trafikskolan SaaS — Swedish Driving School ERP
+-- Sprint:    PRR Blocker 1 — Enrollment Assignment Uniqueness
+--
+-- PRR FINDING (Blocker 1):
+--   student_package_assignments carries enrollment_id as a navigational FK
+--   but enforces no uniqueness on it. The absence of this constraint means
+--   that concurrent or duplicate calls to convert_enrollment_to_student()
+--   for the same enrollment can silently create two assignment rows, each
+--   generating an independent order and invoice for a single enrollment
+--   approval. This is a billing integrity defect and an entitlement
+--   integrity defect.
+--
+-- ROOT CAUSE:
+--   The uniqueness invariant "one enrollment → one package assignment"
+--   exists as a business rule but is not enforced at the database layer.
+--   Application-layer guards (enrollment status FOR UPDATE) protect the
+--   normal path but cannot protect against all races, retries, or
+--   concurrent staff actions.
+--
+-- REMEDIATION:
+--   Add a partial unique index on student_package_assignments(enrollment_id)
+--   scoped to WHERE enrollment_id IS NOT NULL.
+--
+--   Partial scope is mandatory:
+--     - enrollment_id IS NULL represents manual/admin assignments that are
+--       not created via the enrollment conversion path. Multiple NULL-
+--       enrollment assignments must be allowed on the same organization
+--       (NULL ≠ NULL in unique indexes — this is handled automatically).
+--     - Only the enrollment-path assignments (non-NULL enrollment_id) need
+--       the one-per-enrollment guarantee.
+--
+-- UNIQUENESS SEMANTICS:
+--   At most one non-soft-deleted assignment row per enrollment_id.
+--   Void + reinvoice creates a new invoice but does NOT create a new
+--   assignment row — the existing assignment row is retained and reused.
+--   This index does not interact with the void → reinvoice path at all.
+--
+-- PRE-DEPLOYMENT REQUIREMENT:
+--   Verify zero duplicate enrollment_id values before running this migration:
+--
+--     SELECT enrollment_id, COUNT(*) AS cnt
+--     FROM   public.student_package_assignments
+--     WHERE  enrollment_id IS NOT NULL
+--     GROUP  BY enrollment_id
+--     HAVING COUNT(*) > 1;
+--
+--   If this query returns rows, the duplicates must be cleaned up first.
+--   The migration will fail with an appropriate PostgreSQL error if
+--   duplicates are present — this is the correct protective behavior.
+--
+-- AFFECTED WORKFLOWS:
+--   - convert_enrollment_to_student() (sole writer of non-NULL enrollment_id
+--     assignments): a second call for the same enrollment_id will now raise
+--     a unique constraint violation instead of silently creating a duplicate.
+--   - All other assignment writers (manual assignment paths, future bulk
+--     import): unaffected — these pass enrollment_id = NULL.
+--   - All downstream readers (create_order, create_invoice_from_order,
+--     void_invoice): unaffected — no writes to this table.
+--   - All RLS policies, reporting views, accounting chains: unaffected.
+--
+-- EDGE FUNCTION COMPATIBILITY:
+--   The enrollments Edge Function's handleConvert() path will now receive
+--   a PostgreSQL unique constraint violation if duplicate conversion is
+--   attempted. The Edge Function must handle this as an idempotent success
+--   (enrollment already converted) or return a 409 Conflict. This is
+--   correct behavior — the second request carries no new work to do.
+--   Verify error handling in supabase/functions/enrollments/index.ts
+--   before production deployment.
+--
+-- WHAT IS UNCHANGED:
+--   - student_package_assignments schema (no column changes)
+--   - All SECURITY DEFINER functions
+--   - All RLS policies
+--   - All reporting views
+--   - All accounting/VAT/SIE4 chains
+--   - void_invoice() / create_invoice_from_order() behavior
+--   - Existing assignment rows (index creation validates them; no data moved)
+--
+-- ROLLBACK:
+--   DROP INDEX IF EXISTS public.spa_enrollment_id_unique;
+--
+-- DEPENDENCY:
+--   student_package_assignments table — exists since Phase 2A
+--   No dependency on other sprint migrations in this sequence.
+-- ════════════════════════════════════════════════════════════════════════════
+
+
+-- ── Blocker 1: Enrollment assignment uniqueness index ────────────────────────
+-- Enforces: one active package assignment per enrollment, at the database layer.
+--
+-- Partial predicate WHERE enrollment_id IS NOT NULL:
+--   • Protects the enrollment-conversion path exclusively.
+--   • NULL enrollment_id rows (manual assignments) are not covered and remain
+--     unrestricted — multiple NULL-enrollment assignments are valid and allowed.
+--   • PostgreSQL treats NULL as distinct from all values including other NULLs,
+--     so the WHERE predicate is strictly required to confine the constraint to
+--     the enrollment-path rows only.
+--
+-- Non-concurrent form: this migration runs inside Supabase's implicit
+-- transaction wrapper. CREATE UNIQUE INDEX CONCURRENTLY cannot execute inside
+-- a transaction block. At pre-production data volume the index build is
+-- instantaneous. The lock acquired is AccessShareLock on reads + RowExclusiveLock
+-- on the index itself — it does not block concurrent reads or writes during the
+-- build at this volume.
+
+CREATE UNIQUE INDEX spa_enrollment_id_unique
+  ON public.student_package_assignments (enrollment_id)
+  WHERE enrollment_id IS NOT NULL;
+
+COMMENT ON INDEX public.spa_enrollment_id_unique IS
+  'PRR Blocker 1: enforces one package assignment per enrollment. '
+  'Partial (enrollment_id IS NOT NULL) — manual assignments (null enrollment_id) are unrestricted.';

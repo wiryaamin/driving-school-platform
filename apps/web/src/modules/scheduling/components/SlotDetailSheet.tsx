@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink } from 'lucide-react';
+import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
@@ -13,9 +13,12 @@ import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
 import { useWaitlistForSlot } from '../hooks/useWaitlist.js';
-import { useUpdateBookingStatus } from '../hooks/useSchedulingMutations.js';
+import { useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes } from '../hooks/useSchedulingMutations.js';
+import { useVehicles } from '@modules/resources/index.js';
+import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 import { SlotStatusBadge } from './SlotStatusBadge.js';
 import { BookingStatusBadge, isTerminalBookingStatus } from './BookingStatusBadge.js';
+import { BookingMessageHistory } from './BookingMessageHistory.js';
 import { CancelBookingDialog } from './CancelBookingDialog.js';
 import { BookingDialog } from './BookingDialog.js';
 import { RescheduleBookingDialog } from './RescheduleBookingDialog.js';
@@ -27,9 +30,9 @@ function StudentName({
   id, student, isLoading, onNavigate,
 }: {
   id: string;
-  student?: Student;
+  student?: Student | undefined;
   isLoading: boolean;
-  onNavigate?: (path: string) => void;
+  onNavigate?: ((path: string) => void) | undefined;
 }) {
   if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
   if (!student) return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
@@ -71,17 +74,40 @@ function InstructorName({ id, onNavigate }: { id: string; onNavigate?: (path: st
 interface BookingRowProps {
   booking:         LessonBooking;
   slotId:          string;
-  onCancel:        (id: string) => void;
-  onReschedule:    (id: string, studentName: string) => void;
+  slotLabel:       string;
+  onCancel:        (id: string, studentId: string) => void;
+  onReschedule:    (id: string, studentName: string, student: Student | undefined) => void;
   onNavigate:      (path: string) => void;
-  student?:        Student;
+  student?:        Student | undefined;
   studentsLoading: boolean;
 }
 
-function BookingRow({ booking, slotId, onCancel, onReschedule, onNavigate, student, studentsLoading }: BookingRowProps) {
-  const updateStatus = useUpdateBookingStatus();
-  const terminal     = isTerminalBookingStatus(booking.status);
-  const studentName  = student ? `${student.first_name} ${student.last_name}` : '';
+function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavigate, student, studentsLoading }: BookingRowProps) {
+  const updateStatus  = useUpdateBookingStatus();
+  const sendMessage   = useSendMessage();
+  const [showMessages, setShowMessages] = useState(false);
+  const terminal      = isTerminalBookingStatus(booking.status);
+  const studentName   = student ? `${student.first_name} ${student.last_name}` : '';
+  const reminderBusy  = sendMessage.isPending;
+
+  function handleSendReminder() {
+    if (!student?.phone) return;
+    const body = `Hej ${student.first_name}, påminnelse om din körlektion ${slotLabel}. Vi ser fram emot att träffa dig!`;
+    sendMessage.mutate(
+      {
+        channel:           'sms',
+        recipient_type:    'student',
+        recipient_id:      student.id,
+        recipient_address: student.phone,
+        body,
+        metadata: { event: 'booking_reminder_manual', manual: true },
+      },
+      {
+        onSuccess: () => toast({ title: `Påminnelse skickad till ${student.first_name}` }),
+        onError:   () => toast({ title: 'Kunde inte skicka påminnelse', variant: 'destructive' }),
+      }
+    );
+  }
 
   function handleStatus(status: BookingStatus) {
     updateStatus.mutate(
@@ -171,7 +197,7 @@ function BookingRow({ booking, slotId, onCancel, onReschedule, onNavigate, stude
               variant="outline"
               className="h-7 text-xs gap-1"
               disabled={busy}
-              onClick={() => onReschedule(booking.id, studentName)}
+              onClick={() => onReschedule(booking.id, studentName, student)}
             >
               <ArrowLeftRight className="w-3 h-3" />
               Omboka
@@ -183,12 +209,189 @@ function BookingRow({ booking, slotId, onCancel, onReschedule, onNavigate, stude
               variant="outline"
               className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
               disabled={busy}
-              onClick={() => onCancel(booking.id)}
+              onClick={() => onCancel(booking.id, booking.student_id)}
             >
               <XCircle className="w-3 h-3" />
               Avboka
             </Button>
+
+            {/* Påminnelse SMS — only for confirmed bookings with a phone number */}
+            {booking.status === 'confirmed' && student?.phone && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 text-blue-600 border-blue-200 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-900/40 dark:hover:bg-blue-950/20"
+                disabled={reminderBusy}
+                onClick={handleSendReminder}
+              >
+                {reminderBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                Påminnelse
+              </Button>
+            )}
           </div>
+        </PermissionGate>
+      )}
+
+      {/* Notification history — lazy, toggle per booking */}
+      <div className="ml-9">
+        <button
+          type="button"
+          onClick={() => setShowMessages((v) => !v)}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+        >
+          <Bell className="w-2.5 h-2.5" />
+          <span>{showMessages ? 'Dölj notiser' : 'Notiser'}</span>
+          {showMessages ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+        </button>
+        {showMessages && (
+          <div className="mt-1.5 border-t border-border/50 pt-1.5">
+            <BookingMessageHistory studentId={booking.student_id} maxCount={3} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Vehicle row — display + inline change ────────────────────────────────────
+
+function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string | null }) {
+  const [editing, setEditing] = useState(false);
+  const { data: vehicles = [] } = useVehicles();
+  const updateVehicle = useUpdateSlotVehicle();
+
+  const current = vehicles.find(v => v.id === vehicleId) ?? null;
+  const available = vehicles.filter(v => v.operational_status === 'available' || v.id === vehicleId);
+
+  function handleChange(newId: string) {
+    updateVehicle.mutate(
+      { id: slotId, vehicle_id: newId || null },
+      {
+        onSuccess: () => { toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }); setEditing(false); },
+        onError:   () => { toast({ title: 'Kunde inte uppdatera fordon', variant: 'destructive' }); },
+      },
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Car className="w-3.5 h-3.5 shrink-0" />
+        <select
+          autoFocus
+          value={vehicleId ?? ''}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          disabled={updateVehicle.isPending}
+          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+        >
+          <option value="">— Inget fordon —</option>
+          {available.map(v => (
+            <option key={v.id} value={v.id}>
+              {v.registration_number} · {v.make} {v.model} ({v.transmission === 'automatic' ? 'A' : 'M'})
+            </option>
+          ))}
+        </select>
+        {updateVehicle.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Car className="w-3.5 h-3.5 shrink-0" />
+      {current ? (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="font-medium text-foreground hover:text-primary transition-colors"
+        >
+          {current.registration_number} · {current.make} {current.model}
+          <span className="ml-1 text-muted-foreground font-normal">
+            ({current.transmission === 'automatic' ? 'Automat' : 'Manuell'})
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="italic hover:text-foreground transition-colors"
+        >
+          Inget fordon tilldelat
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Session notes — add / edit instructor note on the slot ──────────────────
+
+function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | null }) {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState('');
+  const updateNotes = useUpdateSlotNotes();
+
+  function startEdit() { setDraft(notes ?? ''); setEditing(true); }
+  function cancel()    { setEditing(false); }
+  function save() {
+    updateNotes.mutate(
+      { id: slotId, notes: draft.trim() || null },
+      {
+        onSuccess: () => { toast({ title: 'Anteckning sparad' }); setEditing(false); },
+        onError:   () => { toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' }); },
+      },
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-1.5 text-xs">
+          <FileText className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+          <span className="font-medium text-foreground text-xs">Lektionsanteckning</span>
+        </div>
+        <textarea
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={3}
+          maxLength={2000}
+          placeholder="Skriv en anteckning om lektionen..."
+          className="w-full px-2.5 py-1.5 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+        />
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" className="h-7 text-xs" disabled={updateNotes.isPending} onClick={save}>
+            {updateNotes.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Spara'}
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={cancel} disabled={updateNotes.isPending}>
+            Avbryt
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+      <FileText className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+      {notes ? (
+        <div className="flex-1 min-w-0">
+          <p className="text-foreground whitespace-pre-line break-words leading-relaxed">{notes}</p>
+          <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
+            <button
+              type="button"
+              onClick={startEdit}
+              className="mt-1 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors"
+            >
+              Redigera
+            </button>
+          </PermissionGate>
+        </div>
+      ) : (
+        <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
+          <button type="button" onClick={startEdit} className="italic hover:text-foreground transition-colors">
+            Lägg till anteckning...
+          </button>
         </PermissionGate>
       )}
     </div>
@@ -218,9 +421,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const navigate = useNavigate();
   const [bookingDialogOpen,     setBookingDialogOpen]     = useState(false);
   const [cancelBookingId,       setCancelBookingId]       = useState<string | null>(null);
+  const [cancelStudentId,       setCancelStudentId]       = useState<string | null>(null);
   const [cancelDialogOpen,      setCancelDialogOpen]      = useState(false);
   const [rescheduleBookingId,   setRescheduleBookingId]   = useState<string | null>(null);
   const [rescheduleStudentName, setRescheduleStudentName] = useState('');
+  const [rescheduleStudent,     setRescheduleStudent]     = useState<Student | null>(null);
   const [rescheduleDialogOpen,  setRescheduleDialogOpen]  = useState(false);
   const [waitlistExpanded,      setWaitlistExpanded]      = useState(false);
 
@@ -235,9 +440,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     if (!open) {
       setBookingDialogOpen(false);
       setCancelBookingId(null);
+      setCancelStudentId(null);
       setCancelDialogOpen(false);
       setRescheduleBookingId(null);
       setRescheduleStudentName('');
+      setRescheduleStudent(null);
       setRescheduleDialogOpen(false);
       setWaitlistExpanded(false);
     }
@@ -246,9 +453,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   useEffect(() => {
     setBookingDialogOpen(false);
     setCancelBookingId(null);
+    setCancelStudentId(null);
     setCancelDialogOpen(false);
     setRescheduleBookingId(null);
     setRescheduleStudentName('');
+    setRescheduleStudent(null);
     setRescheduleDialogOpen(false);
     setWaitlistExpanded(false);
   }, [slot?.id]);
@@ -271,8 +480,8 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   // Collect all unique student IDs from bookings + waitlist, then batch-fetch in one request.
   const allStudentIds = useMemo(
     () => [...new Set([
-      ...bookings.map(b => b.student_id),
-      ...waitlistItems.map(e => e.student_id),
+      ...(bookingsData?.data ?? []).map(b => b.student_id),
+      ...(waitlistData ?? []).map(e => e.student_id),
     ])],
     [bookingsData, waitlistData],
   );
@@ -284,14 +493,16 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     return Object.fromEntries(studentsData.map(s => [s.id, s]));
   }, [studentsData]);
 
-  function openCancel(bookingId: string) {
+  function openCancel(bookingId: string, studentId: string) {
     setCancelBookingId(bookingId);
+    setCancelStudentId(studentId);
     setCancelDialogOpen(true);
   }
 
-  function openReschedule(bookingId: string, studentName: string) {
+  function openReschedule(bookingId: string, studentName: string, student?: Student) {
     setRescheduleBookingId(bookingId);
     setRescheduleStudentName(studentName);
+    setRescheduleStudent(student ?? null);
     setRescheduleDialogOpen(true);
   }
 
@@ -347,6 +558,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   <InstructorName id={slot.instructor_id} onNavigate={handleNavigate} />
                 </div>
 
+                {/* Vehicle */}
+                <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
+
+                {/* Session notes */}
+                <SessionNotesRow slotId={slot.id} notes={slot.notes} />
+
                 {/* Timing detail */}
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Clock className="w-3.5 h-3.5 shrink-0" />
@@ -379,6 +596,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                         key={booking.id}
                         booking={booking}
                         slotId={slot.id}
+                        slotLabel={`${dateLabel} kl. ${startLabel}`}
                         onCancel={openCancel}
                         onReschedule={openReschedule}
                         onNavigate={handleNavigate}
@@ -433,7 +651,6 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                               <Bell
                                 className="w-3 h-3 text-blue-400 shrink-0"
                                 aria-label="Notifierad"
-                                title="Eleven har notifierats om ledig plats"
                               />
                             )}
                           </div>
@@ -493,9 +710,13 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         onOpenChange={setCancelDialogOpen}
         bookingId={cancelBookingId}
         slotId={slot.id}
+        student={cancelStudentId ? (studentMap[cancelStudentId] ?? null) : null}
+        slotLabel={`${dateLabel} kl ${startLabel}`}
+        slotStartsAt={slot.starts_at}
         onSuccess={() => {
           setCancelDialogOpen(false);
           setCancelBookingId(null);
+          setCancelStudentId(null);
         }}
       />
 
@@ -506,10 +727,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         bookingId={rescheduleBookingId}
         currentSlotId={slot.id}
         studentName={rescheduleStudentName}
+        student={rescheduleStudent}
         onSuccess={() => {
           setRescheduleDialogOpen(false);
           setRescheduleBookingId(null);
           setRescheduleStudentName('');
+          setRescheduleStudent(null);
         }}
       />
     </>

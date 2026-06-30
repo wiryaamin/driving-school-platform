@@ -1,14 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, RefreshCw, Car, AlertTriangle } from 'lucide-react';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
   Button, Input, Textarea, Label, ScrollArea, Skeleton,
   cn, toast,
 } from '@platform/ui';
 import type { LessonCategory } from '@platform/types';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useInstructorList } from '@modules/instructors/index.js';
+import { useVehicles } from '@modules/resources/index.js';
+import { useSlotList } from '../hooks/useSlots.js';
 import { useCreateSlot, useCreateSlotsBatch } from '../hooks/useSchedulingMutations.js';
 import type { CreateSlotInput } from '../hooks/useSchedulingMutations.js';
 import { formatSlotDate } from '../lib/calendarUtils.js';
@@ -182,6 +184,7 @@ export function CreateSlotSheet({
   const [mode,         setMode]         = useState<'single' | 'recurring'>('single');
   const [lessonTypeId, setLessonTypeId] = useState('');
   const [instructorId, setInstructorId] = useState('');
+  const [vehicleId,    setVehicleId]    = useState('');
   const [date,         setDate]         = useState(todayStr);
   const [startTime,    setStartTime]    = useState('08:30');
   const [endTime,      setEndTime]      = useState('');
@@ -198,16 +201,44 @@ export function CreateSlotSheet({
     { per_page: 100 },
     { enabled: open },
   );
+  const { data: vehiclesRaw } = useVehicles();
 
   const lessonTypes = useMemo(() => lessonTypesRaw ?? [], [lessonTypesRaw]);
   const instructors = useMemo(
     () => (instructorsData?.data ?? []).filter(i => i.employment_type !== 'inactive'),
     [instructorsData],
   );
+  const vehicles = useMemo(
+    () => (vehiclesRaw ?? []).filter(v => v.operational_status === 'available'),
+    [vehiclesRaw],
+  );
 
   const createSlot       = useCreateSlot();
   const createSlotsBatch = useCreateSlotsBatch();
   const isPending        = createSlot.isPending || createSlotsBatch.isPending;
+
+  // ── Vehicle conflict detection ─────────────────────────────────────────────
+  // Only check when single mode has all fields needed to determine a time window.
+  const conflictCheckDate = mode === 'single' && vehicleId && date && startTime && endTime && endTime > startTime
+    ? date
+    : null;
+
+  const { data: vehicleConflictSlots } = useSlotList(
+    { vehicle_id: vehicleId, from: conflictCheckDate ?? undefined, to: conflictCheckDate ?? undefined, per_page: 50 },
+    { enabled: conflictCheckDate !== null },
+  );
+
+  const vehicleConflict = useMemo(() => {
+    if (!conflictCheckDate || !vehicleId || !startTime || !endTime || !vehicleConflictSlots) return null;
+    const wantStart = toIsoString(date, startTime);
+    const wantEnd   = toIsoString(date, endTime);
+    return (vehicleConflictSlots.data ?? []).find(s =>
+      s.vehicle_id === vehicleId &&
+      s.starts_at < wantEnd &&
+      s.ends_at   > wantStart &&
+      s.deleted_at === null,
+    ) ?? null;
+  }, [conflictCheckDate, vehicleId, startTime, endTime, vehicleConflictSlots, date]);
 
   const selectedLessonType = useMemo(
     () => lessonTypes.find(t => t.id === lessonTypeId) ?? null,
@@ -244,6 +275,7 @@ export function CreateSlotSheet({
       setMode('single');
       setLessonTypeId('');
       setInstructorId('');
+      setVehicleId('');
       setDate(todayStr);
       setStartTime('08:30');
       setEndTime('');
@@ -285,6 +317,7 @@ export function CreateSlotSheet({
       starts_at:      toIsoString(date, startTime),
       ends_at:        toIsoString(date, endTime),
       max_bookings:   maxBookings,
+      ...(vehicleId ? { vehicle_id: vehicleId } : {}),
       ...(notes.trim() ? { notes: notes.trim() } : {}),
     };
   }
@@ -296,6 +329,7 @@ export function CreateSlotSheet({
       starts_at:      toIsoString(d, startTime),
       ends_at:        toIsoString(d, endTime),
       max_bookings:   maxBookings,
+      ...(vehicleId ? { vehicle_id: vehicleId } : {}),
       ...(notes.trim() ? { notes: notes.trim() } : {}),
     }));
   }
@@ -310,9 +344,10 @@ export function CreateSlotSheet({
           onOpenChange(false);
         },
         onError: (err) => {
+          const msg = err instanceof Error ? err.message : '';
           toast({
-            title:       'Kunde inte skapa pass',
-            description: err instanceof Error ? err.message : 'Försök igen.',
+            title:       msg.startsWith('Fordonet') ? 'Fordon ej tillgängligt' : 'Kunde inte skapa pass',
+            description: msg || 'Försök igen.',
             variant:     'destructive',
           });
         },
@@ -363,9 +398,10 @@ export function CreateSlotSheet({
         }
       },
       onError: (err) => {
+        const msg = err instanceof Error ? err.message : '';
         toast({
-          title:       'Kunde inte skapa pass',
-          description: err instanceof Error ? err.message : 'Försök igen.',
+          title:       msg.startsWith('Fordonet') ? 'Fordon ej tillgängligt' : 'Kunde inte skapa pass',
+          description: msg || 'Försök igen.',
           variant:     'destructive',
         });
       },
@@ -377,13 +413,13 @@ export function CreateSlotSheet({
     : 'Schemalägg';
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!isPending) onOpenChange(o); }}>
-      <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col p-0 gap-0">
+    <Dialog open={open} onOpenChange={(o) => { if (!isPending) onOpenChange(o); }}>
+      <DialogContent className="max-w-xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
 
         {/* ── Header ──────────────────────────────────────────────────────── */}
-        <SheetHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <SheetTitle className="text-base">Schemalägg pass</SheetTitle>
-        </SheetHeader>
+        <DialogHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <DialogTitle className="text-base">Schemalägg pass</DialogTitle>
+        </DialogHeader>
 
         {/* ── Mode switch ─────────────────────────────────────────────────── */}
         <div className="px-6 py-3 border-b border-border shrink-0">
@@ -416,7 +452,7 @@ export function CreateSlotSheet({
           </div>
         </div>
 
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <div className="px-6 py-5 space-y-6">
 
             {/* ── Lektionsmall ─────────────────────────────────────────────── */}
@@ -510,6 +546,57 @@ export function CreateSlotSheet({
                 </div>
               )}
             </div>
+
+            {/* ── Fordon (valfritt) ────────────────────────────────────────── */}
+            {vehicles.length > 0 && (
+              <div>
+                <SectionHeader>Fordon <span className="normal-case font-normal opacity-60">(valfritt)</span></SectionHeader>
+                <div className="flex flex-wrap gap-1.5">
+                  {vehicles.map(v => {
+                    const isSelected = vehicleId === v.id;
+                    const label = `${v.registration_number} · ${v.make} ${v.model}`;
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => setVehicleId(isSelected ? '' : v.id)}
+                        title={label}
+                        className={cn(
+                          'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-all',
+                          isSelected
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
+                        )}
+                      >
+                        <Car className="w-3 h-3 shrink-0" />
+                        <span>{v.registration_number}</span>
+                        {isSelected && (
+                          <span className="text-primary-foreground/70">{v.transmission === 'automatic' ? 'A' : 'M'}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {vehicleId && (
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    {vehicles.find(v => v.id === vehicleId)?.transmission === 'automatic' ? 'Automat' : 'Manuell'} ·{' '}
+                    {vehicles.find(v => v.id === vehicleId)?.make}{' '}
+                    {vehicles.find(v => v.id === vehicleId)?.model}
+                  </p>
+                )}
+                {vehicleConflict && (
+                  <div className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-700 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 px-2.5 py-2 rounded-lg border border-amber-200 dark:border-amber-900/50">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                    <span>
+                      Fordonet är redan bokat{' '}
+                      {new Date(vehicleConflict.starts_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}
+                      –
+                      {new Date(vehicleConflict.ends_at).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ── Tid (single) ─────────────────────────────────────────────── */}
             {mode === 'single' && (
@@ -802,7 +889,7 @@ export function CreateSlotSheet({
           </div>
         </div>
 
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

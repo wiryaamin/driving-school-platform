@@ -62,7 +62,7 @@ export function useInsightsDemografi(licenceCategory = 'all') {
   return useQuery({
     queryKey: demografiKey(licenceCategory),
     queryFn: async (): Promise<DemografiData> => {
-      // eslint-disable-next-line prefer-const
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q = (supabase as unknown as any)
         .from('students')
         .select('id, date_of_birth, city, personnummer_last4, target_licence_category')

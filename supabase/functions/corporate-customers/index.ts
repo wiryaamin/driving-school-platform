@@ -3,6 +3,8 @@ import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { requireFeature } from '../_shared/subscription.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
@@ -11,19 +13,24 @@ const CORP_STATUSES = ['active', 'paused', 'archived'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CreateSchema = z.object({
-  company_name:       z.string().trim().min(1).max(200),
-  org_number:         z.string().trim().max(20).optional(),
-  address_line1:      z.string().trim().max(200).optional(),
-  address_line2:      z.string().trim().max(200).optional(),
-  postal_code:        z.string().trim().max(20).optional(),
-  city:               z.string().trim().max(100).optional(),
-  contact_first_name: z.string().trim().max(100).optional(),
-  contact_last_name:  z.string().trim().max(100).optional(),
-  contact_email:      z.string().email().max(200).optional(),
-  contact_phone:      z.string().trim().max(30).optional(),
-  invoice_text:       z.string().trim().max(2000).optional(),
-  notes:              z.string().trim().max(2000).optional(),
-  status:             z.enum(CORP_STATUSES).optional(),
+  company_name:         z.string().trim().min(1).max(200),
+  org_number:           z.string().trim().max(20).optional(),
+  address_line1:        z.string().trim().max(200).optional(),
+  address_line2:        z.string().trim().max(200).optional(),
+  postal_code:          z.string().trim().max(20).optional(),
+  city:                 z.string().trim().max(100).optional(),
+  contact_first_name:   z.string().trim().max(100).optional(),
+  contact_last_name:    z.string().trim().max(100).optional(),
+  contact_email:        z.string().email().max(200).optional(),
+  contact_phone:        z.string().trim().max(30).optional(),
+  invoice_text:         z.string().trim().max(2000).optional(),
+  notes:                z.string().trim().max(2000).optional(),
+  status:               z.enum(CORP_STATUSES).optional(),
+  alt_name:             z.string().trim().max(200).optional(),
+  default_discount_pct: z.coerce.number().min(0).max(100).optional(),
+  payment_terms_days:   z.coerce.number().int().min(0).optional(),
+  economy_notes:        z.string().trim().max(5000).optional(),
+  has_debt_collection:  z.boolean().optional(),
 });
 
 const UpdateSchema = CreateSchema.partial();
@@ -249,10 +256,12 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
     return errorResp(ctx, 404, 'NOT_FOUND', `Corporate customer '${id}' not found`);
   }
 
-  const { error } = await (client as any).rpc('soft_delete', {
-    p_table_name: 'corporate_customers',
-    p_record_id:  id,
-  });
+  const { error } = await (client as any)
+    .from('corporate_customers')
+    .update({ deleted_at: new Date().toISOString(), updated_by: ctx.actorId })
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null);
 
   if (error) {
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to archive corporate customer');
@@ -272,6 +281,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const ctxResult = await buildEdgeContext(req);
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
+
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const subGuard = requireFeature(ctx, 'corporate:customers:manage');
+  if (subGuard) return subGuard;
 
   logger.info('request.started', {
     method: req.method, path: new URL(req.url).pathname,

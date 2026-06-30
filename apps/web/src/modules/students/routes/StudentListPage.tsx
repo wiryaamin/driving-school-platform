@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bell, Copy, Car, ChevronRight, Search, Plus, SlidersHorizontal, RefreshCw,
 } from 'lucide-react';
+import { PhoneLink } from '@shared/components/PhoneLink.js';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button, Input, DataTable,
@@ -11,7 +12,8 @@ import {
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useStudentList } from '../hooks/useStudents.js';
-import type { Student, StudentStatus } from '../hooks/useStudents.js';
+import type { Student, StudentStatus, PermitStage } from '../hooks/useStudents.js';
+import { useInstructorList } from '@modules/instructors/index.js';
 import { StudentStatusBadge } from '../components/StudentStatusBadge.js';
 import { StudentForm } from '../components/StudentForm.js';
 import { cn } from '@/lib/utils.js';
@@ -24,7 +26,7 @@ const STATUS_TABS: { key: Exclude<KundTab, 'filter'>; label: string; status?: St
   { key: 'alla',       label: 'Alla'                          },
   { key: 'aktiva',     label: 'Aktiva',     status: 'active'  },
   { key: 'nya',        label: 'Nya',        status: 'lead'    },
-  { key: 'vilande',    label: 'Vilande',    status: 'paused'  },
+  { key: 'vilande',    label: 'Pausade',    status: 'paused'  },
   { key: 'arkiverade', label: 'Arkiverade', status: 'archived'},
 ];
 
@@ -43,6 +45,8 @@ interface FilterDraft {
   kundgrupp:              KundGrupp;
   licenceCategoryHar:     string;
   licenceCategoryHarInte: string;
+  permitStage:            string;
+  instructorId:           string;
   alderFran:              string;
   alderTill:              string;
   fritextSearch:          string;
@@ -53,6 +57,8 @@ const DEFAULT_FILTER: FilterDraft = {
   kundgrupp:              'alla',
   licenceCategoryHar:     '',
   licenceCategoryHarInte: '',
+  permitStage:            '',
+  instructorId:           '',
   alderFran:              '',
   alderTill:              '',
   fritextSearch:          '',
@@ -63,6 +69,8 @@ interface AppliedFilterQuery {
   status?:           StudentStatus;
   search?:           string;
   licence_category?: string;
+  permit_stage?:     PermitStage;
+  instructor_id?:    string;
 }
 
 function filterToQuery(f: FilterDraft): AppliedFilterQuery {
@@ -72,8 +80,24 @@ function filterToQuery(f: FilterDraft): AppliedFilterQuery {
   if (f.kundgrupp === 'skuldsatta') q.status = 'active';
   if (f.fritextSearch)              q.search  = f.fritextSearch;
   if (f.licenceCategoryHar)         q.licence_category = f.licenceCategoryHar;
+  if (f.permitStage)                q.permit_stage     = f.permitStage as PermitStage;
+  if (f.instructorId)               q.instructor_id    = f.instructorId;
   return q;
 }
+
+const PERMIT_STAGE_OPTIONS: { value: PermitStage; label: string }[] = [
+  { value: 'not_started',           label: 'Ej påbörjad'           },
+  { value: 'theory_study',          label: 'Teoristudier'           },
+  { value: 'risk1_booked',          label: 'Risk 1 bokad'           },
+  { value: 'risk1_completed',       label: 'Risk 1 genomförd'       },
+  { value: 'risk2_booked',          label: 'Risk 2 bokad'           },
+  { value: 'risk2_completed',       label: 'Risk 2 genomförd'       },
+  { value: 'theory_exam_booked',    label: 'Teoriprov bokat'        },
+  { value: 'theory_passed',         label: 'Teoriprov godkänt'      },
+  { value: 'practical_exam_booked', label: 'Uppkörning bokad'       },
+  { value: 'practical_passed',      label: 'Uppkörning godkänd'     },
+  { value: 'licence_issued',        label: 'Körkort utfärdat'       },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -211,15 +235,7 @@ function buildColumns(): ColumnDef<Student>[] {
       cell: ({ row }) => {
         const phone = row.original.phone;
         if (!phone) return <span className="text-sm text-muted-foreground/40">—</span>;
-        return (
-          <a
-            href={`tel:${phone}`}
-            onClick={(e) => e.stopPropagation()}
-            className="text-xs text-primary hover:underline whitespace-nowrap"
-          >
-            {phone}
-          </a>
-        );
+        return <PhoneLink phone={phone} />;
       },
     },
     {
@@ -269,11 +285,6 @@ const LICENCE_CATEGORIES = [
   'B', 'B (automat)', 'A', 'A2', 'A1', 'AM', 'C', 'CE', 'D', 'DE', 'BE',
 ];
 
-const BEHORIGHETSSTATUS = [
-  { value: 'aktuell',  label: 'Aktuell behörighet' },
-  { value: 'kommande', label: 'Kommande behörighet' },
-];
-
 interface FilterPanelProps {
   draft:    FilterDraft;
   onChange: (draft: FilterDraft) => void;
@@ -284,6 +295,9 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
   function set<K extends keyof FilterDraft>(key: K, value: FilterDraft[K]) {
     onChange({ ...draft, [key]: value });
   }
+
+  const { data: instructorsData } = useInstructorList({ per_page: 100 });
+  const allInstructors = instructorsData?.data ?? [];
 
   return (
     <div className="space-y-6 pb-6">
@@ -312,11 +326,8 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
 
       {/* ── 2. Filtrera efter behörighet ──────────────────────────────────── */}
       <section>
-        <h3 className="mb-3 text-sm font-semibold text-foreground flex items-center gap-2">
+        <h3 className="mb-3 text-sm font-semibold text-foreground">
           <span className="mr-1 text-muted-foreground">2.</span> Filtrera efter behörighet
-          <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-            Statusfilter kommer snart
-          </span>
         </h3>
         <div className="space-y-2">
           {/* Har */}
@@ -374,10 +385,48 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
         </div>
       </section>
 
+      {/* ── 3. Filtrera efter utbildningssteg och ansvarig lärare ───────────── */}
+      <section>
+        <h3 className="mb-3 text-sm font-semibold text-foreground">
+          <span className="mr-1 text-muted-foreground">3.</span> Filtrera efter utbildningssteg och lärare
+        </h3>
+        <div className="flex flex-wrap items-center gap-3">
+          <Select
+            value={draft.permitStage || 'ALL'}
+            onValueChange={(v) => set('permitStage', v === 'ALL' ? '' : v)}
+          >
+            <SelectTrigger className="w-[220px] text-sm">
+              <SelectValue placeholder="Alla utbildningssteg" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Alla utbildningssteg</SelectItem>
+              {PERMIT_STAGE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={draft.instructorId || 'ALL'}
+            onValueChange={(v) => set('instructorId', v === 'ALL' ? '' : v)}
+          >
+            <SelectTrigger className="w-[220px] text-sm">
+              <SelectValue placeholder="Alla lärare" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Alla lärare</SelectItem>
+              {allInstructors.map((i) => (
+                <SelectItem key={i.id} value={i.id}>{i.first_name} {i.last_name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </section>
+
       {/* ── 4. Filtrera efter födelsedatum ────────────────────────────────── */}
       <section>
         <h3 className="mb-3 text-sm font-semibold text-foreground">
-          <span className="mr-1 text-muted-foreground">3.</span> Filtrera efter födelsedatum
+          <span className="mr-1 text-muted-foreground">4.</span> Filtrera efter födelsedatum
         </h3>
         <div className="flex items-center gap-3">
           <Input
@@ -405,7 +454,7 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
       {/* ── 5. Sök på namn, e-postadress osv. ────────────────────────────── */}
       <section>
         <h3 className="mb-3 text-sm font-semibold text-foreground">
-          <span className="mr-1 text-muted-foreground">4.</span> Sök på namn, e-postadress, adress osv.
+          <span className="mr-1 text-muted-foreground">5.</span> Sök på namn, e-postadress, adress osv.
         </h3>
         <Input
           placeholder="Sök efter kunder genom personnummer, förnamn, efternamn, e-post eller telefonnummer"
@@ -419,7 +468,7 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
       {/* ── 6. Filtrera efter bokningar ───────────────────────────────────── */}
       <section>
         <h3 className="mb-3 text-sm font-semibold text-foreground">
-          <span className="mr-1 text-muted-foreground">5.</span> Filtrera efter bokningar
+          <span className="mr-1 text-muted-foreground">6.</span> Filtrera efter bokningar
         </h3>
         <Select
           value={draft.bokningFilter || 'ignorera'}

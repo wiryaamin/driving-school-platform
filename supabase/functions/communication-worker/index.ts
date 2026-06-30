@@ -293,8 +293,7 @@ async function runNotify(supabase: any, body: Record<string, string>): Promise<R
         error_message:       errorMsg,
         sent_at:             status === 'sent' ? new Date().toISOString() : null,
         metadata:            { trigger_event, rule_id: rule.id },
-        // Use service_role — created_by is a system dispatch, set to a sentinel
-        created_by:          '00000000-0000-0000-0000-000000000000',
+        created_by:          null,
       });
 
     if (insertErr) {

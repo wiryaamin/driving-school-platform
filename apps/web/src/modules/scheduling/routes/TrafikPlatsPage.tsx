@@ -1,11 +1,12 @@
-import { useState, useMemo } from 'react';
-import { CalendarIcon, X } from 'lucide-react';
+﻿import { useState, useMemo } from 'react';
+import { Calendar, X } from 'lucide-react';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, Skeleton } from '@platform/ui';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useLocations, formatLocationAddress } from '../hooks/useLocations.js';
 import { useSlotList } from '../hooks/useSlots.js';
 import { SlotDetailSheet } from '../components/SlotDetailSheet.js';
+import { BookingDialog } from '../components/BookingDialog.js';
 import { cn } from '@/lib/utils.js';
 import type { LessonSlot, LessonCategory, LessonType } from '@platform/types';
 
@@ -113,6 +114,7 @@ export function TrafikPlatsPage() {
   const [page,         setPage]          = useState(1);
   const [selectedSlot, setSelectedSlot]  = useState<LessonSlot | null>(null);
   const [sheetOpen,    setSheetOpen]     = useState(false);
+  const [reserveOpen,  setReserveOpen]   = useState(false);
 
   // ── Reference data ────────────────────────────────────────────────────────
   const { data: lessonTypes = [] } = useLessonTypes();
@@ -244,7 +246,7 @@ export function TrafikPlatsPage() {
 
           {/* Date picker */}
           <div className="relative flex items-center gap-1">
-            <CalendarIcon className="absolute left-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <Calendar className="absolute left-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
             <input
               type="date"
               value={selectedDate}
@@ -378,7 +380,8 @@ export function TrafikPlatsPage() {
                               variant="outline"
                               size="sm"
                               className="h-7 px-3 text-xs text-primary border-primary/40 hover:bg-primary/5"
-                              onClick={(e) => { e.stopPropagation(); }}
+                              disabled={full}
+                              onClick={(e) => { e.stopPropagation(); setSelectedSlot(slot); setReserveOpen(true); }}
                             >
                               Reservera
                             </Button>
@@ -387,7 +390,7 @@ export function TrafikPlatsPage() {
                               className="h-7 px-3 text-xs bg-green-500 hover:bg-green-600 text-white border-0"
                               onClick={(e) => { e.stopPropagation(); handleSlotClick(slot); }}
                             >
-                              Boka
+                              Visa
                             </Button>
                           </div>
                         </td>
@@ -446,6 +449,13 @@ export function TrafikPlatsPage() {
       </PageLayout>
 
       <SlotDetailSheet slot={selectedSlot} open={sheetOpen} onOpenChange={setSheetOpen} />
+
+      <BookingDialog
+        open={reserveOpen}
+        onOpenChange={(o) => { if (!o) { setReserveOpen(false); } }}
+        slot={selectedSlot}
+        onSuccess={() => { setReserveOpen(false); }}
+      />
     </>
   );
 }

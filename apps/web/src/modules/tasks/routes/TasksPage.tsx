@@ -122,7 +122,7 @@ function TaskRow({
       {/* Delete */}
       <button
         onClick={() => onDelete(task.id)}
-        className="shrink-0 mt-0.5 text-muted-foreground/30 hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+        className="shrink-0 mt-0.5 text-muted-foreground/30 hover:text-destructive transition-colors sm:opacity-0 sm:group-hover:opacity-100"
         aria-label="Ta bort uppgift"
       >
         <Trash2 className="w-4 h-4" />
@@ -132,7 +132,7 @@ function TaskRow({
       {!isActive && (
         <button
           onClick={() => onRestore(task.id)}
-          className="shrink-0 mt-0.5 text-muted-foreground/30 hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
+          className="shrink-0 mt-0.5 text-muted-foreground/30 hover:text-primary transition-colors sm:opacity-0 sm:group-hover:opacity-100"
           aria-label="Återaktivera"
         >
           <RotateCcw className="w-4 h-4" />
@@ -247,6 +247,12 @@ export function TasksPage() {
             <span className="text-destructive">, {overdueCount} har passerat deadline</span>
           )}
         </p>
+      </div>
+
+      {/* Local-state notice */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300">
+        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+        Uppgifter sparas bara i den här webbläsaren och försvinner vid radering av webbläsardata.
       </div>
 
       {/* Add task card */}
@@ -385,12 +391,14 @@ export function TasksPage() {
           <div className="min-w-[160px]">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs text-muted-foreground">Tilldelad till</span>
-              <button
-                onClick={() => setFilterAssignee(currentUserId)}
-                className="text-[10px] text-primary hover:underline"
-              >
-                Välj mig
-              </button>
+              {user?.id && (
+                <button
+                  onClick={() => setFilterAssignee(currentUserId)}
+                  className="text-[10px] text-primary hover:underline"
+                >
+                  Välj mig
+                </button>
+              )}
             </div>
             <Select value={filterAssignee} onValueChange={setFilterAssignee}>
               <SelectTrigger className="h-8 text-xs">

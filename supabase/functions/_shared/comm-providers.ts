@@ -220,6 +220,132 @@ async function dispatchOneSignal(to: string, subject: string | undefined, body: 
   } catch (e) { return caught(e); }
 }
 
+// ─── SMS: Twilio ─────────────────────────────────────────────────────────────
+// Docs: https://www.twilio.com/docs/sms/api/message-resource#create-a-message-resource
+// Secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
+
+async function dispatchTwilioSms(to: string, from: string, body: string): Promise<ProviderResult> {
+  const sid    = Deno.env.get('TWILIO_ACCOUNT_SID');
+  const token  = Deno.env.get('TWILIO_AUTH_TOKEN');
+  const number = Deno.env.get('TWILIO_PHONE_NUMBER') ?? from;
+  if (!sid || !token || !number) return missingCreds('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER');
+
+  const form = new URLSearchParams();
+  form.set('From', number);
+  form.set('To',   to);
+  form.set('Body', body);
+
+  try {
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+      method:  'POST',
+      headers: {
+        Authorization:  `Basic ${btoa(`${sid}:${token}`)}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+    });
+    if (!res.ok) return httpErr('twilio-sms', res.status, await res.text().catch(() => res.statusText));
+    const data = await res.json() as { sid?: string };
+    return { status: 'sent', providerId: data.sid ?? null, error: null };
+  } catch (e) { return caught(e); }
+}
+
+// ─── SMS: Vonage ──────────────────────────────────────────────────────────────
+// Docs: https://developer.vonage.com/en/messaging/sms/code-snippets/send-an-sms
+// Secrets: VONAGE_API_KEY, VONAGE_API_SECRET
+
+async function dispatchVonageSms(to: string, from: string, body: string): Promise<ProviderResult> {
+  const apiKey    = Deno.env.get('VONAGE_API_KEY');
+  const apiSecret = Deno.env.get('VONAGE_API_SECRET');
+  if (!apiKey || !apiSecret) return missingCreds('VONAGE_API_KEY', 'VONAGE_API_SECRET');
+
+  try {
+    const res = await fetch('https://rest.nexmo.com/sms/json', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key:    apiKey,
+        api_secret: apiSecret,
+        from:       from.trim() || 'Korskolan',
+        to,
+        text:       body,
+      }),
+    });
+    if (!res.ok) return httpErr('vonage-sms', res.status, await res.text().catch(() => res.statusText));
+    const data = await res.json() as { messages?: Array<{ 'message-id'?: string; status?: string; 'error-text'?: string }> };
+    const msg = data.messages?.[0];
+    if (msg?.status !== '0') {
+      return { status: 'failed', providerId: null, error: msg?.['error-text'] ?? `Vonage status ${msg?.status ?? 'unknown'}` };
+    }
+    return { status: 'sent', providerId: msg?.['message-id'] ?? null, error: null };
+  } catch (e) { return caught(e); }
+}
+
+// ─── Email: SendGrid ──────────────────────────────────────────────────────────
+// Docs: https://docs.sendgrid.com/api-reference/mail-send/mail-send
+// Secret: SENDGRID_API_KEY
+
+async function dispatchSendGrid(to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const apiKey = Deno.env.get('SENDGRID_API_KEY');
+  if (!apiKey) return missingCreds('SENDGRID_API_KEY');
+
+  const fromEmail = from.includes('@') ? from : 'noreply@korskolan.se';
+
+  try {
+    const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from:    { email: fromEmail },
+        subject: subject?.trim() || '(Inget ämne)',
+        content: [{ type: 'text/plain', value: body }],
+      }),
+    });
+    // SendGrid returns 202 Accepted with no body on success
+    if (res.status === 202) return { status: 'sent', providerId: res.headers.get('x-message-id'), error: null };
+    return httpErr('sendgrid', res.status, await res.text().catch(() => res.statusText));
+  } catch (e) { return caught(e); }
+}
+
+// ─── Email: Mailjet ───────────────────────────────────────────────────────────
+// Docs: https://dev.mailjet.com/email/guides/send-api-v31/
+// Secrets: MAILJET_API_KEY, MAILJET_SECRET_KEY
+
+async function dispatchMailjet(to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const apiKey    = Deno.env.get('MAILJET_API_KEY');
+  const secretKey = Deno.env.get('MAILJET_SECRET_KEY');
+  if (!apiKey || !secretKey) return missingCreds('MAILJET_API_KEY', 'MAILJET_SECRET_KEY');
+
+  const fromEmail = from.includes('@') ? from : 'noreply@korskolan.se';
+
+  try {
+    const res = await fetch('https://api.mailjet.com/v3.1/send', {
+      method:  'POST',
+      headers: {
+        Authorization:  `Basic ${btoa(`${apiKey}:${secretKey}`)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        Messages: [{
+          From:     { Email: fromEmail },
+          To:       [{ Email: to }],
+          Subject:  subject?.trim() || '(Inget ämne)',
+          TextPart: body,
+        }],
+      }),
+    });
+    if (!res.ok) return httpErr('mailjet', res.status, await res.text().catch(() => res.statusText));
+    const data = await res.json() as { Messages?: Array<{ Status: string; To?: Array<{ MessageID?: number }> }> };
+    const sent = data.Messages?.[0];
+    if (sent?.Status && sent.Status !== 'success') {
+      return { status: 'failed', providerId: null, error: `Mailjet status: ${sent.Status}` };
+    }
+    const msgId = sent?.To?.[0]?.MessageID;
+    return { status: 'sent', providerId: msgId != null ? String(msgId) : null, error: null };
+  } catch (e) { return caught(e); }
+}
+
 // ─── Voice: 46elks ────────────────────────────────────────────────────────────
 // Docs: https://46elks.se/docs/voice-calls
 // Secrets: ELKS_API_USERNAME, ELKS_API_PASSWORD (same as SMS)
@@ -303,9 +429,13 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
   switch (channel) {
     case 'sms':
       if (provider === '46elks') return dispatch46elksSms(to, fromAddr, body);
+      if (provider === 'twilio') return dispatchTwilioSms(to, fromAddr, body);
+      if (provider === 'vonage') return dispatchVonageSms(to, fromAddr, body);
       break;
     case 'email':
-      if (provider === 'resend') return dispatchResend(to, fromAddr, subject, body);
+      if (provider === 'resend')    return dispatchResend(to, fromAddr, subject, body);
+      if (provider === 'sendgrid')  return dispatchSendGrid(to, fromAddr, subject, body);
+      if (provider === 'mailjet')   return dispatchMailjet(to, fromAddr, subject, body);
       break;
     case 'whatsapp':
       if (provider === 'twilio') return dispatchTwilioWhatsapp(to, fromAddr, body);

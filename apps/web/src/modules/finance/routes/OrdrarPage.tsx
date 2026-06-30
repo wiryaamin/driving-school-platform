@@ -6,7 +6,7 @@ import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/Pag
 import { Skeleton } from '@platform/ui';
 import { InvoiceStatusBadge } from '../components/InvoiceStatusBadge.js';
 import { cn } from '@/lib/utils.js';
-import type { Invoice, InvoiceStatus } from '../hooks/useFinance.js';
+import type { Invoice } from '../hooks/useFinance.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

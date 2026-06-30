@@ -35,8 +35,9 @@ export function useOverviewSummary() {
       const d60         = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const in7days     = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-      const [newNow, newPrev, slots] = await Promise.all([
+      const [newNow, newPrev, slots, invResult] = await Promise.all([
         // New students in last 30 days
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as unknown as any)
           .from('students')
           .select('id', { count: 'exact', head: true })
@@ -44,6 +45,7 @@ export function useOverviewSummary() {
           .is('deleted_at', null),
 
         // New students 30–60 days ago
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as unknown as any)
           .from('students')
           .select('id', { count: 'exact', head: true })
@@ -52,6 +54,7 @@ export function useOverviewSummary() {
           .is('deleted_at', null),
 
         // Open lesson slots next 7 days
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as unknown as any)
           .from('lesson_slots')
           .select('max_bookings, current_bookings')
@@ -59,6 +62,13 @@ export function useOverviewSummary() {
           .gte('starts_at', now.toISOString())
           .lte('starts_at', in7days)
           .gt('max_bookings', 0),
+
+        // Overdue invoices — runs in parallel with the above
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as unknown as any)
+          .from('invoices')
+          .select('outstanding_amount')
+          .in('status', ['overdue']),
       ]);
 
       const newLast30 = newNow.count ?? 0;
@@ -67,21 +77,13 @@ export function useOverviewSummary() {
       const openPlaces = ((slots.data ?? []) as { max_bookings: number; current_bookings: number }[])
         .reduce((acc, s) => acc + Math.max(0, s.max_bookings - s.current_bookings), 0);
 
-      // Try to fetch overdue invoices (graceful fallback)
       let debtCount = 0;
       let debtSek   = 0;
-      try {
-        const { data: inv } = await (supabase as unknown as any)
-          .from('invoices')
-          .select('outstanding_amount')
-          .in('status', ['overdue'])
-          .is('deleted_at', null);
-        if (inv) {
-          const invoices = inv as { outstanding_amount: number }[];
-          debtCount = invoices.length;
-          debtSek   = invoices.reduce((s: number, i: { outstanding_amount: number }) => s + (i.outstanding_amount ?? 0), 0);
-        }
-      } catch { /* table may not be accessible */ }
+      if (invResult.data) {
+        const invoices = invResult.data as { outstanding_amount: number }[];
+        debtCount = invoices.length;
+        debtSek   = invoices.reduce((s: number, i: { outstanding_amount: number }) => s + (i.outstanding_amount ?? 0), 0);
+      }
 
       return {
         newLast30,
@@ -114,6 +116,7 @@ export function useUpcomingSlots() {
       const now     = new Date().toISOString();
       const in30d   = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as unknown as any)
         .from('lesson_slots')
         .select('id, starts_at, ends_at, max_bookings, current_bookings, lesson_types ( name )')
@@ -157,6 +160,7 @@ export function useUpcomingBirthdays() {
   return useQuery({
     queryKey: insightsOverviewKeys.birthdays(),
     queryFn: async (): Promise<UpcomingBirthday[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as unknown as any)
         .from('students')
         .select('id, first_name, last_name, date_of_birth')

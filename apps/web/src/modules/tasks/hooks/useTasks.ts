@@ -48,16 +48,16 @@ export function useTaskAssignees() {
   return useQuery<TaskAssignee[]>({
     queryKey: ['task-assignees'],
     queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (supabase as unknown as any)
         .from('instructors')
         .select('id, first_name, last_name')
         .is('deleted_at', null)
-        .in('status', ['active', 'on_leave'])
         .order('first_name', { ascending: true });
 
-      return ((data ?? []) as any[]).map((r: any): TaskAssignee => ({
-        id:   String(r.id),
-        name: `${String(r.first_name ?? '')} ${String(r.last_name ?? '')}`.trim(),
+      return ((data ?? []) as { id: string; first_name: string; last_name: string }[]).map((r): TaskAssignee => ({
+        id:   r.id,
+        name: `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim(),
       }));
     },
     staleTime: 5 * 60 * 1000,

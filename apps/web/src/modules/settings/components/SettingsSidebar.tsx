@@ -65,6 +65,7 @@ const SETTINGS_NAV: NavSection[] = [
       { key: 'taggar',     label: 'Taggar',            segment: 'customers/tags'     },
       { key: 'segment',    label: 'Segment',           segment: 'customers/segments' },
       { key: 'varva',      label: 'Värva en vän',      segment: 'customers/referral' },
+      { key: 'leads',      label: 'Leads',             segment: 'customers/leads'    },
     ],
   },
   {
@@ -84,14 +85,16 @@ const SETTINGS_NAV: NavSection[] = [
     children: [
       { key: 'utb-behorighet',   label: 'Utbildningsbehörigheter', segment: 'education/licenses'    },
       { key: 'undervisningsplan', label: 'Undervisningsplan',       segment: 'education/curriculum'  },
+      { key: 'material',         label: 'Material',                 segment: 'education/materials'   },
     ],
   },
   {
     key: 'kommunikation', label: 'Kommunikation', icon: MessageSquare,
     children: [
-      { key: 'komm-config',    label: 'Kommunikation',          segment: 'communication/config'    },
-      { key: 'gemensamma',     label: 'Gemensamma fraser',      segment: 'communication/phrases'   },
-      { key: 'meddmallar',     label: 'Mallar för meddelanden', segment: 'communication/templates' },
+      { key: 'komm-config',     label: 'Kommunikation',          segment: 'communication/config'     },
+      { key: 'gemensamma',      label: 'Gemensamma fraser',      segment: 'communication/phrases'    },
+      { key: 'meddmallar',      label: 'Mallar för meddelanden', segment: 'communication/templates'  },
+      { key: 'automationsreg',  label: 'Automationsregler',      segment: 'communication/automation' },
     ],
   },
   {

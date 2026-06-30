@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, Save, Info } from 'lucide-react';
+import { Save, Info, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import {
   useChannelConfigs,
   useUpdateChannelConfig,
+  useSendMessage,
   type CommChannel,
   type ChannelConfig,
 } from '../hooks/useCommunication.js';
@@ -34,6 +35,13 @@ const ENV_HINTS: Record<string, string[]> = {
   'meta':      ['META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID'],
 };
 
+// Channel+provider overrides for cases where secrets differ (e.g. Twilio SMS vs WhatsApp)
+const CHANNEL_PROVIDER_HINTS: Partial<Record<CommChannel, Record<string, string[]>>> = {
+  whatsapp: {
+    twilio: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_NUMBER'],
+  },
+};
+
 const CHANNEL_ORDER: CommChannel[] = ['sms', 'email', 'whatsapp', 'push', 'voice'];
 
 // ─── ChannelForm ──────────────────────────────────────────────────────────────
@@ -54,6 +62,9 @@ function ChannelForm({
   const [fromAddress, setFromAddress] = useState(config?.from_address ?? '');
   const [displayName, setDisplayName] = useState(config?.display_name ?? '');
   const [dailyLimit,  setDailyLimit]  = useState(String(config?.daily_limit ?? 500));
+  const [testAddr,    setTestAddr]    = useState('');
+  const [testResult,  setTestResult]  = useState<'idle' | 'ok' | 'error'>('idle');
+  const sendMsg = useSendMessage();
 
   // Sync when config loads
   useEffect(() => {
@@ -67,13 +78,30 @@ function ChannelForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.id]);
 
-  const hints = provider ? (ENV_HINTS[provider] ?? []) : [];
+  const hints = provider ? (CHANNEL_PROVIDER_HINTS[channel]?.[provider] ?? ENV_HINTS[provider] ?? []) : [];
   const isDirty = !config
     || config.enabled       !== enabled
     || (config.provider     ?? '') !== provider
     || (config.from_address ?? '') !== fromAddress
     || (config.display_name ?? '') !== displayName
     || String(config.daily_limit)  !== dailyLimit;
+
+  function handleTest() {
+    if (!testAddr.trim() || !enabled) return;
+    setTestResult('idle');
+    sendMsg.mutate(
+      {
+        channel,
+        recipient_address: testAddr.trim(),
+        body:              `Testmeddelande från ${displayName || 'Trafikskola'} — ${CHANNEL_META[channel].label} fungerar korrekt.`,
+        metadata:          { event: 'channel_test', manual: true },
+      },
+      {
+        onSuccess: () => { setTestResult('ok'); toast({ title: 'Testmeddelande skickat' }); },
+        onError:   () => { setTestResult('error'); toast({ title: 'Testmeddelande misslyckades', variant: 'destructive' }); },
+      },
+    );
+  }
 
   function handleSave() {
     update.mutate(
@@ -190,6 +218,36 @@ function ChannelForm({
           </div>
         </div>
       )}
+
+      {/* Test section */}
+      <div className="border-t border-border pt-4 space-y-2">
+        <p className="text-xs font-medium text-foreground">Testa kanal</p>
+        <div className="flex items-center gap-2">
+          <input
+            type={channel === 'email' ? 'email' : 'text'}
+            value={testAddr}
+            onChange={(e) => { setTestAddr(e.target.value); setTestResult('idle'); }}
+            placeholder={channel === 'email' ? 'test@example.com' : '+46 70 000 00 00'}
+            className="flex-1 h-8 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={sendMsg.isPending || !testAddr.trim() || !enabled}
+            onClick={handleTest}
+          >
+            {sendMsg.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Testa'}
+          </Button>
+          {testResult === 'ok'    && <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
+          {testResult === 'error' && <XCircle      className="w-4 h-4 text-destructive shrink-0" />}
+        </div>
+        {!enabled && (
+          <p className="text-[10px] text-muted-foreground">Aktivera kanalen och spara för att kunna skicka test.</p>
+        )}
+        {!provider && enabled && (
+          <p className="text-[10px] text-amber-600 dark:text-amber-400">Välj leverantör och spara innan test.</p>
+        )}
+      </div>
 
       {/* Save */}
       <div className="flex justify-end pt-1">

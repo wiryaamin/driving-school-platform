@@ -15,6 +15,7 @@ import {
 import { useCreateStudent, useUpdateStudent } from '../hooks/useStudents.js';
 import type { Student, CreateStudentFormValues } from '../hooks/useStudents.js';
 import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js';
+import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -147,7 +148,7 @@ function studentToFormValues(s: Student): StudentFormValues {
     communication_opt_in_sms: s.communication_opt_in_sms,
     has_debt_collection:      false,
     prevent_cancellation:     false,
-    company_connection: '', company_reference: '', credit_limit: '', economy_notes: '',
+    company_connection: s.corporate_customer_id ?? '', company_reference: '', credit_limit: '', economy_notes: '',
     status:                   s.status,
     data_processing_consent:  s.data_processing_consent,
   };
@@ -214,6 +215,8 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
 
   const { data: instructorsData } = useInstructorList({ per_page: 100 }, { enabled: open });
   const instructors = instructorsData?.data ?? [];
+  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: open });
+  const companies = corporateData?.data ?? [];
 
   useEffect(() => {
     if (open) {
@@ -242,10 +245,12 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
 
     const pnrParts = parsePersonnummer(values.personnummer);
     if (pnrParts.date_of_birth) {
-      (clean as Record<string, unknown>).date_of_birth       = pnrParts.date_of_birth;
-      (clean as Record<string, unknown>).personnummer_last4  = pnrParts.personnummer_last4;
-      (clean as Record<string, unknown>).identity_type       = 'personnummer';
+      (clean as unknown as Record<string, unknown>).date_of_birth       = pnrParts.date_of_birth;
+      (clean as unknown as Record<string, unknown>).personnummer_last4  = pnrParts.personnummer_last4;
+      (clean as unknown as Record<string, unknown>).identity_type       = 'personnummer';
     }
+
+    clean.corporate_customer_id = values.company_connection || null;
 
     if (isEdit) {
       updateMutation.mutate(
@@ -438,9 +443,21 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Anslut till företag</FormLabel>
-                            <FormControl>
-                              <Input placeholder="- Anslut till företag -" {...field} />
-                            </FormControl>
+                            <Select onValueChange={field.onChange} value={field.value ?? ''}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="- Inget företag -" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="">- Inget företag -</SelectItem>
+                                {companies.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.company_name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             <FormMessage />
                           </FormItem>
                         )}

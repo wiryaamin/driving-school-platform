@@ -33,9 +33,10 @@ async function importGiftCard(input: ImportInput): Promise<void> {
     .single();
 
   if (orgError || !orgData) throw new Error('Kunde inte hitta organisation');
+  const typedOrg = orgData as unknown as { organization_id: string };
 
   const { error } = await supabase.from('gift_cards').insert({
-    organization_id:     orgData.organization_id,
+    organization_id:     typedOrg.organization_id,
     code:                input.code,
     original_value_sek:  input.original_value,
     remaining_value_sek: input.original_value,
@@ -43,7 +44,7 @@ async function importGiftCard(input: ImportInput): Promise<void> {
     status:              'active',
     is_legacy_import:    true,
     legacy_reference:    input.legacy_reference || null,
-  });
+  } as never);
   if (error) throw new Error(error.message);
 }
 

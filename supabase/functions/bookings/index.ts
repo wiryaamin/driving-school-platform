@@ -3,6 +3,7 @@ import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline schemas (Deno cannot import workspace packages) ──────────────────
@@ -43,9 +44,19 @@ const RescheduleBookingSchema = z.object({
   new_slot_id: z.string().uuid(),
 });
 
+const AddNoteSchema = z.object({
+  content:     z.string().min(1).max(2000),
+  is_internal: z.boolean().optional(),
+});
+
+const FeedbackSchema = z.object({
+  performance_rating: z.number().int().min(1).max(5).optional(),
+  instructor_notes:   z.string().max(2000).optional(),
+});
+
 const ListQuerySchema = z.object({
   page:          z.coerce.number().int().positive().max(1000).default(1),
-  per_page:      z.coerce.number().int().positive().max(100).default(25),
+  per_page:      z.coerce.number().int().positive().max(500).default(25),
   sort_by:       z.string().optional(),
   sort_dir:      z.enum(['asc', 'desc']).optional(),
   student_id:    z.string().uuid().optional(),
@@ -123,6 +134,11 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
 
   const { page, per_page, sort_by = 'starts_at', sort_dir = 'desc', student_id, instructor_id, slot_id, status, from, to } = parsed.data;
 
+  const ALLOWED_SORT_COLUMNS = new Set([
+    'starts_at', 'ends_at', 'created_at', 'updated_at', 'status',
+  ]);
+  const safeSortBy = ALLOWED_SORT_COLUMNS.has(sort_by) ? sort_by : 'starts_at';
+
   const client = createSupabaseClient(req);
   const fromIdx = (page - 1) * per_page;
   const toIdx   = fromIdx + per_page - 1;
@@ -133,7 +149,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     .select('*', { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
-    .order(sort_by, { ascending: sort_dir === 'asc' })
+    .order(safeSortBy, { ascending: sort_dir === 'asc' })
     .range(fromIdx, toIdx);
 
   if (student_id    !== undefined) q = q.eq('student_id',    student_id);
@@ -167,7 +183,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   // Verify slot exists and has capacity
   const { data: slot } = await (client as any)
     .from('lesson_slots')
-    .select('id, status, starts_at, ends_at, current_bookings, max_bookings')
+    .select('id, status, starts_at, ends_at, current_bookings, max_bookings, lesson_type_id')
     .eq('id', dto.slot_id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -189,6 +205,51 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   });
   if (availErr) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check student availability');
   if (!avail) return errorResp(ctx, 409, 'CONFLICT', 'Student already has a booking overlapping this time window');
+
+  // ── C1: Package credit validation ─────────────────────────────────────────────
+  // Finds the student's oldest non-expired active package for the slot category.
+  // If active packages exist but none have remaining credits → reject booking.
+  // Students with no active packages are allowed (billed separately, no package).
+  let creditAssignmentId: string | null = null;
+  let creditCategory:     string | null = null;
+
+  if (slot.lesson_type_id) {
+    const { data: lt } = await (client as any)
+      .from('lesson_types')
+      .select('category')
+      .eq('id', slot.lesson_type_id)
+      .maybeSingle();
+
+    if (lt?.category) {
+      const { data: asgnRows } = await (client as any)
+        .from('student_package_assignments')
+        .select('id, package_quantity, lessons_used, expires_at')
+        .eq('student_id',      dto.student_id)
+        .eq('organization_id', ctx.organizationId)
+        .eq('lesson_category', lt.category as string)
+        .eq('status',          'active')
+        .order('assigned_at',  { ascending: true });
+
+      const now = new Date().toISOString();
+      const activeValid: Array<{ id: string; package_quantity: number; lessons_used: number; expires_at: string | null }> =
+        (asgnRows ?? []).filter(
+          (r: any) => r.expires_at === null || (r.expires_at as string) > now
+        );
+
+      if (activeValid.length > 0) {
+        // Student has active packages — credits are required for this booking
+        const firstWithCredits = activeValid.find(r => r.lessons_used < r.package_quantity);
+        if (!firstWithCredits) {
+          return errorResp(ctx, 409, 'INSUFFICIENT_CREDITS',
+            'Eleven saknar lektionstillgodokvitton för det här passet',
+            { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
+          );
+        }
+        creditAssignmentId = firstWithCredits.id;
+        creditCategory     = lt.category as string;
+      }
+    }
+  }
 
   const insertPayload: Record<string, unknown> = {
     slot_id:          dto.slot_id,
@@ -212,6 +273,55 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     if (error.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Booking conflict: the time window is already occupied');
     if (error.code === '23505') return errorResp(ctx, 409, 'CONFLICT', 'Student already has a booking for this slot');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create booking');
+  }
+
+  // ── C1: Consume package credit (post-insert) ──────────────────────────────────
+  // consume_lesson_credit() uses FOR UPDATE — safe under concurrent load.
+  // Race edge case: pre-flight passed but concurrent booking exhausted the last
+  // credit between our check and this insert. Compensate by cancelling the new booking.
+  if (creditAssignmentId !== null) {
+    const { error: consumeErr } = await (client as any).rpc('consume_lesson_credit', {
+      p_assignment_id:   creditAssignmentId,
+      p_organization_id: ctx.organizationId,
+      p_booking_id:      booking.id,
+      p_lesson_category: creditCategory,
+      p_actor_id:        ctx.actorId,
+      p_actor_email:     null,
+    });
+
+    if (consumeErr) {
+      logger.warn('bookings.credit_consume_failed', {
+        correlation_id: ctx.correlationId,
+        booking_id:     booking.id,
+        student_id:     dto.student_id,
+        assignment_id:  creditAssignmentId,
+        error:          consumeErr.message,
+      });
+      await (client as any)
+        .from('lesson_bookings')
+        .update({
+          status:            'cancelled',
+          status_changed_at: new Date().toISOString(),
+          cancelled_at:      new Date().toISOString(),
+          cancelled_by:      ctx.actorId,
+          updated_by:        ctx.actorId,
+        })
+        .eq('id', booking.id)
+        .eq('organization_id', ctx.organizationId);
+      return errorResp(ctx, 409, 'INSUFFICIENT_CREDITS',
+        'Eleven saknar lektionstillgodokvitton för det här passet',
+        { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
+      );
+    }
+
+    logger.info('bookings.credit_consumed', {
+      correlation_id:  ctx.correlationId,
+      org_id:          ctx.organizationId,
+      booking_id:      booking.id,
+      student_id:      dto.student_id,
+      assignment_id:   creditAssignmentId,
+      lesson_category: creditCategory,
+    });
   }
 
   logger.info('Lesson.Created', {
@@ -287,6 +397,23 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   logger.info('Lesson.Updated', { correlation_id: ctx.correlationId, booking_id: id, status: newStatus });
+
+  // H-2: emit lesson_completed event on the student's package timeline (non-critical)
+  if (newStatus === 'completed') {
+    await (client as any).rpc('record_lesson_completed_event', {
+      p_booking_id:      id,
+      p_organization_id: ctx.organizationId,
+      p_actor_id:        ctx.actorId ?? null,
+      p_actor_email:     null,
+    }).catch((e: unknown) => {
+      logger.warn('booking.record_lesson_completed_failed', {
+        correlation_id: ctx.correlationId,
+        booking_id:     id,
+        error:          String(e),
+      });
+    });
+  }
+
   return successResp(ctx, booking);
 }
 
@@ -344,6 +471,62 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
     booking_id:     id,
     actor_id:       ctx.actorId,
   });
+
+  // ── C2: Restore package credit on cancellation ──────────────────────────────
+  // Queries package_consumption_events for a credit_consumed event on this booking.
+  // If found, not yet reversed, and the assignment policy allows restoration
+  // (cancellation_consumes_credit = false), calls reverse_lesson_credit().
+  // Silent on failure — the cancellation has already succeeded.
+  {
+    const { data: creditEvents } = await (client as any)
+      .from('package_consumption_events')
+      .select('assignment_id, event_type')
+      .eq('booking_id',      id)
+      .eq('organization_id', ctx.organizationId)
+      .in('event_type', ['credit_consumed', 'credit_reversed']);
+
+    const consumed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_consumed');
+    const reversed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_reversed');
+
+    if (consumed && !reversed) {
+      const { data: asgn } = await (client as any)
+        .from('student_package_assignments')
+        .select('cancellation_consumes_credit')
+        .eq('id',              consumed.assignment_id)
+        .eq('organization_id', ctx.organizationId)
+        .maybeSingle();
+
+      if (asgn && !asgn.cancellation_consumes_credit) {
+        const { error: reverseErr } = await (client as any).rpc('reverse_lesson_credit', {
+          p_assignment_id:   consumed.assignment_id,
+          p_organization_id: ctx.organizationId,
+          p_reversal_type:   'manual',
+          p_reason:          'Lektion avbokad — kredit återställd automatiskt',
+          p_booking_id:      id,
+          p_actor_id:        ctx.actorId,
+          p_actor_email:     null,
+        });
+
+        if (reverseErr) {
+          logger.warn('bookings.credit_reverse_failed', {
+            correlation_id: ctx.correlationId,
+            org_id:         ctx.organizationId,
+            booking_id:     id,
+            assignment_id:  consumed.assignment_id,
+            error:          reverseErr.message,
+          });
+        } else {
+          logger.info('bookings.credit_reversed', {
+            correlation_id: ctx.correlationId,
+            org_id:         ctx.organizationId,
+            booking_id:     id,
+            assignment_id:  consumed.assignment_id,
+            actor_id:       ctx.actorId,
+          });
+        }
+      }
+    }
+  }
 
   return successResp(ctx, booking);
 }
@@ -433,6 +616,12 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
 
   if (insertErr) {
     logger.error('bookings.reschedule_failed', { correlation_id: ctx.correlationId, error: insertErr.message });
+    // Compensating rollback: restore old booking status so it is not silently lost.
+    await (client as any)
+      .from('lesson_bookings')
+      .update({ status: oldBooking.status, status_changed_at: null, updated_by: ctx.actorId })
+      .eq('id', id)
+      .eq('organization_id', ctx.organizationId);
     if (insertErr.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Booking conflict at target slot');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create rescheduled booking');
   }
@@ -448,6 +637,97 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   });
 
   return successResp(ctx, newBooking, 201);
+}
+
+async function handleAddNote(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const guard = requirePerm(ctx, 'scheduling:booking:update');
+  if (guard) return guard;
+
+  let body: unknown;
+  try { body = await req.json(); } catch { return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+
+  const parsed = AddNoteSchema.safeParse(body);
+  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
+
+  const client = createSupabaseClient(req);
+
+  const { data: existing } = await (client as any)
+    .from('lesson_bookings')
+    .select('id')
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const { data: note, error } = await (client as any)
+    .from('booking_notes')
+    .insert({
+      organization_id: ctx.organizationId,
+      booking_id:      id,
+      author_id:       ctx.actorId,
+      content:         parsed.data.content,
+      is_internal:     parsed.data.is_internal ?? true,
+    })
+    .select('id, content, is_internal, created_at')
+    .single();
+
+  if (error) {
+    logger.error('bookings.add_note_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to add note');
+  }
+
+  return successResp(ctx, note, 201);
+}
+
+async function handleFeedback(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const guard = requirePerm(ctx, 'scheduling:booking:update');
+  if (guard) return guard;
+
+  let body: unknown;
+  try { body = await req.json(); } catch { return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+
+  const parsed = FeedbackSchema.safeParse(body);
+  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
+
+  if (parsed.data.performance_rating === undefined && parsed.data.instructor_notes === undefined) {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'At least one of performance_rating or instructor_notes is required');
+  }
+
+  const client = createSupabaseClient(req);
+
+  const { data: existing } = await (client as any)
+    .from('lesson_bookings')
+    .select('id, status')
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+  if (!['completed', 'no_show'].includes(existing.status)) {
+    return errorResp(ctx, 409, 'CONFLICT', `Feedback can only be set on completed or no_show bookings (current: ${existing.status})`);
+  }
+
+  const updatePayload: Record<string, unknown> = { updated_by: ctx.actorId };
+  if (parsed.data.performance_rating !== undefined) updatePayload['performance_rating'] = parsed.data.performance_rating;
+  if (parsed.data.instructor_notes   !== undefined) updatePayload['instructor_notes']   = parsed.data.instructor_notes;
+
+  const { data: booking, error } = await (client as any)
+    .from('lesson_bookings')
+    .update(updatePayload)
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId)
+    .select('id, performance_rating, instructor_notes')
+    .single();
+
+  if (error) {
+    logger.error('bookings.feedback_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to update booking feedback');
+  }
+
+  return successResp(ctx, booking);
 }
 
 async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
@@ -486,6 +766,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   logger.info('request.started', {
     method:         req.method,
     path:           new URL(req.url).pathname,
@@ -501,11 +788,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     const { id, action } = parsePath(req);
 
     if (id !== null && action !== null) {
-      // Sub-resource action routes: PATCH /bookings/:id/cancel|reschedule
+      // Sub-resource action routes
       if (req.method === 'PATCH' && action === 'cancel') {
         response = await handleCancel(req, ctx, id);
       } else if (req.method === 'PATCH' && action === 'reschedule') {
         response = await handleReschedule(req, ctx, id);
+      } else if (req.method === 'POST' && action === 'notes') {
+        response = await handleAddNote(req, ctx, id);
+      } else if (req.method === 'PATCH' && action === 'feedback') {
+        response = await handleFeedback(req, ctx, id);
       } else {
         response = new Response(
           JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),

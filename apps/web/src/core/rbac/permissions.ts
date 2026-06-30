@@ -72,6 +72,7 @@ export const Permissions = {
   CORPORATE_READ: 'corporate:contract:read',
   CORPORATE_CREATE: 'corporate:contract:create',
   CORPORATE_UPDATE: 'corporate:contract:update',
+  CORPORATE_DELETE: 'corporate:contract:delete',
 
   // ─── Corporate Customers (Företagskunder) ──────────────────────────────────
   CORPORATE_CUSTOMERS_READ: 'corporate:customer:read',
@@ -99,6 +100,7 @@ export const Permissions = {
   FINANCE_COUPON_READ: 'finance:coupon:read',
   FINANCE_DUNNING_MANAGE: 'finance:dunning:manage',
   FINANCE_EXPORT_RUN: 'finance:export:run',
+  FINANCE_REPORT_READ: 'finance:report:read',
 
   // ─── Finance — Swedish compliance (Phase 4C) ─────────────────────────────
   FINANCE_BAS_READ: 'finance:bas:read',
@@ -143,15 +145,44 @@ export const Permissions = {
   FINANCE_INTEGRITY_READ: 'finance:integrity:read',
   FINANCE_INTEGRITY_MANAGE: 'finance:integrity:manage',
 
+  // ─── Finance — SIE4 Export ────────────────────────────────────────────────
+  FINANCE_SIE4_READ: 'finance:sie4:read',
+  FINANCE_SIE4_RUN: 'finance:sie4:run',
+
   // ─── Finance — Ledger Replay & Governance (Phase 4H) ─────────────────────
   FINANCE_REPLAY_READ: 'finance:replay:read',
   FINANCE_REPLAY_MANAGE: 'finance:replay:manage',
   FINANCE_GOVERNANCE_MANAGE: 'finance:governance:manage',
 
   // ─── Notifications ─────────────────────────────────────────────────────────
-  NOTIFICATIONS_READ:                 'notifications:read',
-  NOTIFICATIONS_WRITE:                'notifications:write',
-  NOTIFICATIONS_PREFERENCES_MANAGE:   'notifications:preferences:manage',
+  NOTIFICATIONS_READ:                  'notifications:read',
+  NOTIFICATIONS_WRITE:                 'notifications:write',
+  NOTIFICATIONS_PREFERENCES_MANAGE:    'notifications:preferences:manage',
+  NOTIFICATIONS_NOTIFICATION_READ:     'notifications:notification:read',
+  NOTIFICATIONS_NOTIFICATION_CREATE:   'notifications:notification:create',
+
+  // ─── Finance — Campaigns (Campaign Management Sprint 1) ──────────────────
+  FINANCE_CAMPAIGN_CREATE:  'finance:campaign:create',
+  FINANCE_CAMPAIGN_READ:    'finance:campaign:read',
+  FINANCE_CAMPAIGN_UPDATE:  'finance:campaign:update',
+  FINANCE_CAMPAIGN_ARCHIVE: 'finance:campaign:archive',
+
+  // ─── Enrollment Requests (Online Checkout Sprint 1) ──────────────────────
+  ENROLLMENT_REQUEST_READ:    'enrollment:request:read',
+  ENROLLMENT_REQUEST_UPDATE:  'enrollment:request:update',
+  ENROLLMENT_REQUEST_CONVERT: 'enrollment:request:convert',
+  ENROLLMENT_PACKAGE_ASSIGN:  'enrollment:package:assign',
+
+  // ─── Package Consumption (Sprint 4) ──────────────────────────────────────
+  PACKAGES_CONSUMPTION_READ:    'packages:consumption:read',
+  PACKAGES_CONSUMPTION_RECORD:  'packages:consumption:record',
+  PACKAGES_CONSUMPTION_REVERSE: 'packages:consumption:reverse',
+
+  // ─── Order Management (Sprint 1) ─────────────────────────────────────────
+  ORDERS_READ:   'orders:order:read',
+  ORDERS_CREATE: 'orders:order:create',
+  ORDERS_UPDATE: 'orders:order:update',
+  ORDERS_CANCEL: 'orders:order:cancel',
 
   // ─── Scheduling — Generation & Operations (Phases 2C–2E) ─────────────────
   SCHEDULING_GENERATION_READ: 'scheduling:generation:read',

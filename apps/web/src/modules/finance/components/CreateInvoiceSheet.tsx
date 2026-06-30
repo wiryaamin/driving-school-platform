@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Plus, Trash2, Search, UserCheck } from 'lucide-react';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -183,12 +183,12 @@ export function CreateInvoiceSheet({ open, onOpenChange }: CreateInvoiceSheetPro
   const students = studentsData?.data ?? [];
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!isSubmitting) onOpenChange(o); }}>
-      <SheetContent className="sm:max-w-xl w-full flex flex-col gap-0 p-0 overflow-hidden">
-        <SheetHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0">
-          <SheetTitle>Ny faktura</SheetTitle>
-          <SheetDescription>Skapa ett fakturautkast. Välj elev och lägg till rader.</SheetDescription>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={(o) => { if (!isSubmitting) onOpenChange(o); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0">
+          <DialogTitle>Ny faktura</DialogTitle>
+          <DialogDescription>Skapa ett fakturautkast. Välj elev och lägg till rader.</DialogDescription>
+        </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(handleSubmit)} className="flex flex-col flex-1 min-h-0">
@@ -507,7 +507,7 @@ export function CreateInvoiceSheet({ open, onOpenChange }: CreateInvoiceSheetPro
             </div>
           </form>
         </Form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

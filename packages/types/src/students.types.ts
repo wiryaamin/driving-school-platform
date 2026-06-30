@@ -75,6 +75,9 @@ export interface Student {
   licence_issued_at: Timestamp | null;
   licence_number: string | null;
 
+  notes: string | null;
+  corporate_customer_id: UUID | null;
+
   user_id: UUID | null;
 
   created_by: UUID | null;
@@ -113,6 +116,8 @@ export interface CreateStudentInput {
   assigned_instructor_id?: string | null;
   target_licence_category?: string;
   permit_stage?: PermitStage;
+  notes?: string | null;
+  corporate_customer_id?: string | null;
 }
 
 export type UpdateStudentInput = Partial<CreateStudentInput>;
@@ -127,13 +132,14 @@ export interface StudentInsert extends CreateStudentInput {
 export type StudentUpdate = Partial<StudentInsert>;
 
 export interface StudentListQueryInput {
-  page?: number;
-  per_page?: number;
-  sort_by?: string;
-  sort_dir?: 'asc' | 'desc';
-  search?: string;
-  status?: StudentStatus;
-  instructor_id?: string;
-  permit_stage?: PermitStage;
-  licence_category?: string;
+  page?: number | undefined;
+  per_page?: number | undefined;
+  sort_by?: string | undefined;
+  sort_dir?: 'asc' | 'desc' | undefined;
+  search?: string | undefined;
+  status?: StudentStatus | undefined;
+  instructor_id?: string | undefined;
+  permit_stage?: PermitStage | undefined;
+  licence_category?: string | undefined;
+  corporate_customer_id?: string | undefined;
 }

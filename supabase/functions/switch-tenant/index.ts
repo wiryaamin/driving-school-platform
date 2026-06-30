@@ -70,17 +70,29 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     const custom = claims as CustomClaims | null;
 
+    // isPlatformAdmin is re-derived from the DB function result (not the incoming JWT)
+    // so it reflects the authoritative platform_admins table state at call time.
+    const isPlatformAdmin = custom?.is_platform_admin === true;
+
+    // Validation gate for both regular users and platform admins:
+    //   Regular users: get_user_jwt_claims validates active membership ownership.
+    //     organization_id equals target_org_id iff membership exists.
+    //   Platform admins (H-6): get_user_jwt_claims validates org existence and
+    //     activity (active + not deleted). organization_id equals target_org_id
+    //     iff the org is valid; organization_id = null iff org not found or inactive.
+    // In both cases, the returned organization_id must match the requested target.
     if (!custom || custom.organization_id !== target_org_id) {
       logger.warn('switch-tenant: access denied', {
-        correlation_id:   correlationId,
-        user_id:          user.id,
+        correlation_id:    correlationId,
+        user_id:           user.id,
         target_org_id,
-        returned_org_id:  custom?.organization_id ?? null,
+        returned_org_id:   custom?.organization_id ?? null,
+        is_platform_admin: isPlatformAdmin,
       });
-      return json<EdgeFunctionError>(
-        { error: 'No active membership in the requested organization' },
-        403,
-      );
+      const denialReason = isPlatformAdmin
+        ? 'Organization not found or inactive'
+        : 'No active membership in the requested organization';
+      return json<EdgeFunctionError>({ error: denialReason }, 403);
     }
 
     // ── 4. Persist preferred_org_id in app_metadata ───────────────────────────

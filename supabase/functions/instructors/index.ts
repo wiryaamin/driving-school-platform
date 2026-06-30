@@ -45,7 +45,7 @@ const UpdateInstructorSchema = CreateInstructorSchema.partial().extend({
 
 const InstructorListQuerySchema = z.object({
   page:             z.coerce.number().int().positive().max(1000).default(1),
-  per_page:         z.coerce.number().int().positive().max(100).default(25),
+  per_page:         z.coerce.number().int().positive().max(500).default(25),
   sort_by:          z.string().optional(),
   sort_dir:         z.enum(['asc', 'desc']).optional(),
   search:           z.string().min(1).max(200).optional(),

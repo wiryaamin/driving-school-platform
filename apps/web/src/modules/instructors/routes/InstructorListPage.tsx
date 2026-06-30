@@ -77,7 +77,7 @@ function InstructorOverviewBar({
       <Chip icon={Users}       label={`${activeCount} aktiva lärare`}          variant="positive" />
       <Chip icon={AlertCircle} label={`${onLeaveCount} tjänstlediga`}           variant={onLeaveCount    > 0 ? 'warning' : 'neutral'} />
       <Chip icon={BookOpen}    label={`${missingAdiCount} saknar ADI`}          variant={missingAdiCount > 0 ? 'caution' : 'neutral'} />
-      <Chip icon={Award}       label={`${expiredAdiCount} utgångna behörighet`} variant={expiredAdiCount > 0 ? 'caution' : 'neutral'} />
+      <Chip icon={Award}       label={`${expiredAdiCount} ${expiredAdiCount === 1 ? 'utgången behörighet' : 'utgångna behörigheter'}`} variant={expiredAdiCount > 0 ? 'caution' : 'neutral'} />
     </div>
   );
 }

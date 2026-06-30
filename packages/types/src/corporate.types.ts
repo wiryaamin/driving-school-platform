@@ -22,6 +22,12 @@ export interface CorporateCustomer {
   invoice_text: string | null;
   notes: string | null;
 
+  alt_name: string | null;
+  default_discount_pct: number | null;
+  payment_terms_days: number | null;
+  economy_notes: string | null;
+  has_debt_collection: boolean;
+
   status: CorporateCustomerStatus;
 
   created_at: Timestamp;
@@ -33,18 +39,23 @@ export interface CorporateCustomer {
 
 export interface CreateCorporateCustomerInput {
   company_name: string;
-  org_number?: string;
-  address_line1?: string;
-  address_line2?: string;
-  postal_code?: string;
-  city?: string;
-  contact_first_name?: string;
-  contact_last_name?: string;
-  contact_email?: string;
-  contact_phone?: string;
-  invoice_text?: string;
-  notes?: string;
-  status?: CorporateCustomerStatus;
+  org_number?: string | undefined;
+  address_line1?: string | undefined;
+  address_line2?: string | undefined;
+  postal_code?: string | undefined;
+  city?: string | undefined;
+  contact_first_name?: string | undefined;
+  contact_last_name?: string | undefined;
+  contact_email?: string | undefined;
+  contact_phone?: string | undefined;
+  invoice_text?: string | undefined;
+  notes?: string | undefined;
+  status?: CorporateCustomerStatus | undefined;
+  alt_name?: string | undefined;
+  default_discount_pct?: number | undefined;
+  payment_terms_days?: number | undefined;
+  economy_notes?: string | undefined;
+  has_debt_collection?: boolean | undefined;
 }
 
 export type UpdateCorporateCustomerInput = Partial<CreateCorporateCustomerInput>;
@@ -57,3 +68,44 @@ export interface CorporateCustomerListQueryInput {
   search?: string;
   status?: CorporateCustomerStatus;
 }
+
+// ─── Corporate Contract ───────────────────────────────────────────────────────
+
+export interface CorporateContract {
+  id:                    UUID;
+  organization_id:       UUID;
+  corporate_customer_id: UUID;
+
+  name:               string;
+  er_ref:             string | null;
+  payment_terms_days: number | null;
+  credit_limit_sek:   number | null;
+  discount_pct:       number | null;
+  is_active:          boolean;
+  comment:            string | null;
+  contact_email:      string | null;
+  contact_name:       string | null;
+  contact_phone:      string | null;
+
+  deleted_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  created_by: UUID | null;
+  updated_by: UUID | null;
+}
+
+export interface CreateCorporateContractInput {
+  corporate_customer_id: string;
+  name:               string;
+  er_ref?:            string | undefined;
+  payment_terms_days?: number | undefined;
+  credit_limit_sek?:  number | undefined;
+  discount_pct?:      number | undefined;
+  is_active?:         boolean | undefined;
+  comment?:           string | undefined;
+  contact_email?:     string | undefined;
+  contact_name?:      string | undefined;
+  contact_phone?:     string | undefined;
+}
+
+export type UpdateCorporateContractInput = Partial<Omit<CreateCorporateContractInput, 'corporate_customer_id'>>;

@@ -1,31 +1,52 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Home, ChevronRight, Copy, Check, Bell, AlertTriangle,
-  Plus, Mail, MessageSquare, Car, Bus, Truck,
-  Calendar, BookOpen, ClipboardList,
-  ExternalLink, Settings, ChevronDown, Pencil,
+  Plus, Mail, MessageSquare, Car, Bus, Truck, X,
+  Calendar, BookOpen, ClipboardList, FileText,
+  ExternalLink, Settings, ChevronDown, Pencil, Link2, Loader2,
+  Upload, Trash2, Download, ShieldCheck,
 } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
-import { StudentFinancePanel } from '@modules/finance/index.js';
+import { StudentFinancePanel } from '@modules/finance/components/StudentFinancePanel.js';
+import { StudentPackagePanel } from '@modules/packages/index.js';
 import { useInstructor } from '@modules/instructors/index.js';
-import { useStudentUpcomingBookings, useBookingList, BookingStatusBadge, StudentBookingDialog } from '@modules/scheduling/index.js';
-import { Button, Badge, Skeleton } from '@platform/ui';
+import { useStudentUpcomingBookings, useBookingList, BookingStatusBadge, StudentBookingDialog, CancelBookingDialog, RescheduleBookingDialog } from '@modules/scheduling/index.js';
+import { Button, Skeleton } from '@platform/ui';
+import { toast } from '@platform/ui';
+import { useSendMessage, useStudentMessages, type CommChannel } from '@modules/communication/hooks/useCommunication.js';
+import { StatusBadge, ChannelBadge } from '@modules/communication/index.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { formatTime } from '@platform/utils';
 import type { LessonBooking } from '@platform/types';
-import { useStudent, useUpdateStudent, useArchiveStudent } from '../hooks/useStudents.js';
+import {
+  useStudent, useUpdateStudent, useArchiveStudent, studentKeys,
+  useOrgStudentTags, useStudentTagAssignments, useAssignStudentTag, useRemoveStudentTag,
+  useStudentAssessments,
+  useStudentMilestones, useRecordMilestone,
+  type StudentAssessment,
+  type PermitMilestoneKey,
+} from '../hooks/useStudents.js';
+import { ContractSheet } from '../components/ContractSheet.js';
 import { StudentStatusBadge, PermitStageBadge } from '../components/StudentStatusBadge.js';
+import { StudentTrainingPlanPanel } from '@modules/curriculum/index.js';
 import { StudentForm } from '../components/StudentForm.js';
+import { useGeneratePortalToken } from '@modules/student-portal/index.js';
+import { useInstructorList } from '@modules/instructors/index.js';
+import {
+  useStudentGuardians, useCreateGuardian, useDeleteGuardian, useGenerateGuardianToken,
+  type Guardian,
+} from '@modules/guardian-portal/index.js';
 import { cn } from '@/lib/utils.js';
+import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type DetailTab = 'meddelande' | 'sms' | 'epost' | 'elevkort' | 'utbildning' | 'historik' | 'konto' | 'ovrigt';
+type DetailTab = 'meddelande' | 'sms' | 'epost' | 'elevkort' | 'utbildning' | 'historik' | 'konto' | 'ovrigt' | 'avtal';
 type LogSubTab = 'bokningsloggar' | 'kommunikationsloggar' | 'aktivitetsloggar';
-type UtbildningSubTab = 'behorigheteter' | 'korprovsprotokoll';
+type UtbildningSubTab = 'behorigheteter' | 'korprovsprotokoll' | 'lektionslogg' | 'korjournal' | 'utbildningskort' | 'utbildningsplan' | 'provresultat';
 type TeorimaterialSubTab = 'teorimaterial' | 'digital_teoribok' | 'ovriga_bocker' | 'fragestatistik' | 'provstatistik' | 'checklista';
 type HistorikSubTab = 'kvitto' | 'rutt';
 
@@ -98,7 +119,7 @@ function TabBar<T extends string>({
   size?: 'md' | 'sm';
 }) {
   return (
-    <div className={cn('flex border-b border-border', size === 'sm' && 'gap-0')}>
+    <div className={cn('flex overflow-x-auto border-b border-border', size === 'sm' && 'gap-0')}>
       {tabs.map((t) => (
         <button
           key={t.key}
@@ -269,6 +290,7 @@ export function StudentDetailPage() {
     address_line1: '',
     postal_code:   '',
     city:          '',
+    notes:         '',
   });
   const formLoadedRef = useRef(false);
 
@@ -283,6 +305,7 @@ export function StudentDetailPage() {
         address_line1: student.address_line1 ?? '',
         postal_code:   student.postal_code ?? '',
         city:          student.city ?? '',
+        notes:         student.notes ?? '',
       });
     }
   }, [student]);
@@ -336,6 +359,7 @@ export function StudentDetailPage() {
     { key: 'utbildning', label: 'Utbildning' },
     { key: 'historik',   label: 'Historik' },
     { key: 'konto',      label: 'Konto' },
+    { key: 'avtal',      label: 'Avtal' },
     { key: 'ovrigt',     label: 'Övrigt' },
   ];
 
@@ -377,13 +401,14 @@ export function StudentDetailPage() {
 
         {activeTab === 'sms' && (
           <SmsTab
+            studentId={student.id}
             studentName={fullName}
             studentPhone={student.phone ?? null}
           />
         )}
 
         {activeTab === 'epost' && (
-          <EpostTab studentEmail={student.email ?? null} />
+          <EpostTab studentId={student.id} studentEmail={student.email ?? null} />
         )}
 
         {activeTab === 'elevkort' && (
@@ -405,6 +430,7 @@ export function StudentDetailPage() {
                 ? `${instructor.data.first_name} ${instructor.data.last_name}`
                 : null
             }
+            upcomingBookings={upcomingBookings}
           />
         )}
 
@@ -418,6 +444,10 @@ export function StudentDetailPage() {
 
         {activeTab === 'konto' && (
           <EkonomiTab studentId={student.id} />
+        )}
+
+        {activeTab === 'avtal' && (
+          <AvtalTab student={student} />
         )}
 
         {activeTab === 'ovrigt' && (
@@ -444,17 +474,611 @@ export function StudentDetailPage() {
   );
 }
 
+// ─── Tags card ────────────────────────────────────────────────────────────────
+
+function TagsCard({ studentId }: { studentId: string }) {
+  const orgTags   = useOrgStudentTags();
+  const assigned  = useStudentTagAssignments(studentId);
+  const assignMut = useAssignStudentTag(studentId);
+  const removeMut = useRemoveStudentTag(studentId);
+
+  const assignedIds = new Set((assigned.data ?? []).map((t) => t.id));
+  const available   = (orgTags.data ?? []).filter((t) => !assignedIds.has(t.id));
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <SectionHeading title="Taggar" />
+
+      {assigned.isLoading ? (
+        <div className="h-5 w-24 bg-muted rounded animate-pulse mb-2" />
+      ) : (assigned.data ?? []).length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {(assigned.data ?? []).map((tag) => (
+            <span
+              key={tag.id}
+              className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800/50"
+            >
+              {tag.color && (
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
+              )}
+              {tag.name}
+              <button
+                onClick={() => removeMut.mutate(tag.id, {
+                  onError: (e) => toast({ title: 'Kunde inte ta bort tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+                })}
+                disabled={removeMut.isPending}
+                className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
+                title="Ta bort tagg"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground mb-2">Inga taggar tillagda.</p>
+      )}
+
+      {available.length > 0 && (
+        <select
+          value=""
+          onChange={(e) => {
+            const tagId = e.target.value;
+            if (!tagId) return;
+            assignMut.mutate(tagId, {
+              onError: (e) => toast({ title: 'Kunde inte lägga till tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+            });
+          }}
+          disabled={assignMut.isPending}
+          className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+        >
+          <option value="">Lägg till tagg…</option>
+          {available.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+      )}
+
+      {!orgTags.isLoading && orgTags.data?.length === 0 && (
+        <p className="text-[10px] text-muted-foreground mt-1">Inga taggar skapade för organisationen.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Password reset card ──────────────────────────────────────────────────────
+
+function PasswordResetCard({
+  studentId, studentName, email, phone,
+}: {
+  studentId:   string;
+  studentName: string;
+  email:       string | null;
+  phone:       string | null;
+}) {
+  const generateToken = useGeneratePortalToken();
+  const sendMessage   = useSendMessage();
+  const [sending, setSending] = useState<'email' | 'sms' | null>(null);
+  const firstName = studentName.split(' ')[0];
+
+  async function handleSend(channel: 'email' | 'sms') {
+    const address = channel === 'email' ? email : phone;
+    if (!address) return;
+    setSending(channel);
+    try {
+      const result = await generateToken.mutateAsync(studentId);
+      const body = channel === 'email'
+        ? `Hej ${firstName},\n\nHär är din nya inloggningslänk till elevportalen:\n${result.url}\n\nLänken är giltig i 72 timmar.`
+        : `Hej ${firstName}! Din nya elevportallänk: ${result.url}`;
+      await sendMessage.mutateAsync({
+        channel,
+        recipient_type:    'student',
+        recipient_id:      studentId,
+        recipient_address: address,
+        body,
+        ...(channel === 'email' ? { subject: 'Din inloggningslänk till elevportalen' } : {}),
+        metadata: { type: 'portal_reset' },
+      });
+      toast({ title: channel === 'email' ? 'Inloggningslänk skickad via e-post' : 'Inloggningslänk skickad via SMS' });
+    } catch (e) {
+      toast({ title: 'Kunde inte skicka', description: e instanceof Error ? e.message : undefined, variant: 'destructive' });
+    } finally {
+      setSending(null);
+    }
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <SectionHeading title="Generera ny inloggningslänk" />
+      <p className="text-xs text-muted-foreground mb-3">
+        Systemet genererar en ny elevportallänk och skickar den till eleven via e-post eller SMS.
+      </p>
+      <div className="flex gap-2">
+        <button
+          onClick={() => void handleSend('sms')}
+          disabled={!phone || sending !== null}
+          title={!phone ? 'Inget mobilnummer registrerat' : undefined}
+          className="flex-1 py-2 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+        >
+          {sending === 'sms' ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
+          {sending === 'sms' ? 'Skickar…' : 'Skicka SMS'}
+        </button>
+        <button
+          onClick={() => void handleSend('email')}
+          disabled={!email || sending !== null}
+          title={!email ? 'Ingen e-postadress registrerad' : undefined}
+          className="flex-1 py-2 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+        >
+          {sending === 'email' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+          {sending === 'email' ? 'Skickar…' : 'Skicka e-post'}
+        </button>
+      </div>
+      {!phone && (
+        <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Inget mobilnummer — SMS kan inte levereras.</p>
+      )}
+      {!email && (
+        <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Ingen e-postadress — e-post kan inte levereras.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Portal invite card ───────────────────────────────────────────────────────
+
+function PortalInviteCard({ studentId, studentName }: { studentId: string; studentName: string }) {
+  const generate = useGeneratePortalToken();
+  const [portalUrl, setPortalUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  function handleGenerate() {
+    generate.mutate(studentId, {
+      onSuccess: (result) => setPortalUrl(result.url),
+    });
+  }
+
+  function handleCopy() {
+    if (!portalUrl) return;
+    void navigator.clipboard.writeText(portalUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Link2 className="w-3.5 h-3.5 text-blue-500" />
+        <SectionHeading title="Elevportal" />
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Generera en inloggningslänk som {studentName.split(' ')[0]} kan använda för att boka lektioner och se sin framsteg.
+      </p>
+
+      {portalUrl ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 p-2 bg-muted/40 rounded border border-border">
+            <p className="text-[10px] text-muted-foreground font-mono truncate flex-1">{portalUrl}</p>
+          </div>
+          <button
+            onClick={handleCopy}
+            className="w-full py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center justify-center gap-1.5"
+          >
+            {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+            {copied ? 'Kopierat!' : 'Kopiera länk'}
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={generate.isPending}
+            className="w-full py-1.5 text-xs font-medium rounded border border-border text-muted-foreground hover:bg-accent transition-colors"
+          >
+            Generera ny länk
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={handleGenerate}
+          disabled={generate.isPending}
+          className="w-full py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+        >
+          {generate.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Link2 className="w-3 h-3" />}
+          {generate.isPending ? 'Genererar...' : 'Skicka portal-länk'}
+        </button>
+      )}
+      {generate.isError && (
+        <p className="text-[10px] text-red-500 mt-1">Kunde inte generera länk. Försök igen.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Guardian notification dialog ────────────────────────────────────────────
+
+function GuardianNotifyDialog({
+  guardian, onClose,
+}: {
+  guardian: Guardian;
+  onClose:  () => void;
+}) {
+  const [channel, setChannel]   = useState<CommChannel>('email');
+  const [body,    setBody]      = useState('');
+  const [subject, setSubject]   = useState('');
+  const sendMsg = useSendMessage();
+
+  const recipientAddress = channel === 'email' ? guardian.email : (guardian.phone ?? '');
+  const canSend = body.trim().length > 0 && recipientAddress.trim().length > 0;
+
+  function handleSend() {
+    if (!canSend) return;
+    sendMsg.mutate(
+      {
+        channel,
+        recipient_type:    'manual',
+        recipient_address: recipientAddress,
+        body:              body.trim(),
+        ...(channel === 'email' && subject.trim() ? { subject: subject.trim() } : {}),
+        metadata: { guardian_id: guardian.id, source: 'admin-guardian-notify' },
+      },
+      {
+        onSuccess: () => {
+          toast({ title: `Meddelande skickat till ${guardian.first_name}` });
+          onClose();
+        },
+        onError: (e) => toast({
+          title:       'Kunde inte skicka',
+          description: e instanceof Error ? e.message : undefined,
+          variant:     'destructive',
+        }),
+      },
+    );
+  }
+
+  return (
+    <div className="mt-2 border border-primary/20 bg-primary/5 rounded-lg p-3 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-foreground">
+          Skicka till {guardian.first_name} {guardian.last_name}
+        </p>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Channel selector */}
+      <div className="flex gap-1.5">
+        {(['email', 'sms'] as const).map(ch => (
+          <button
+            key={ch}
+            onClick={() => setChannel(ch)}
+            disabled={ch === 'sms' && !guardian.phone}
+            className={cn(
+              'px-2.5 py-1 text-[10px] font-semibold rounded-full border transition-colors',
+              channel === ch
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-background text-muted-foreground border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed',
+            )}
+          >
+            {ch === 'email' ? 'E-post' : 'SMS'}
+          </button>
+        ))}
+      </div>
+
+      {/* Subject (email only) */}
+      {channel === 'email' && (
+        <input
+          placeholder="Ämne (valfritt)"
+          value={subject}
+          onChange={e => setSubject(e.target.value)}
+          className="w-full h-7 px-2.5 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
+        />
+      )}
+
+      {/* Recipient preview */}
+      <p className="text-[10px] text-muted-foreground truncate">
+        Till: {recipientAddress || <span className="text-red-500">Saknas</span>}
+      </p>
+
+      {/* Body */}
+      <textarea
+        placeholder="Meddelande..."
+        value={body}
+        onChange={e => setBody(e.target.value)}
+        rows={3}
+        className="w-full px-2.5 py-2 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none placeholder:text-muted-foreground"
+      />
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleSend}
+          disabled={!canSend || sendMsg.isPending}
+          className="flex-1 py-1.5 text-xs font-semibold rounded bg-primary text-primary-foreground disabled:opacity-50 transition-opacity"
+        >
+          {sendMsg.isPending ? 'Skickar...' : 'Skicka'}
+        </button>
+        <button
+          onClick={onClose}
+          className="px-3 py-1.5 text-xs text-muted-foreground border border-border rounded hover:bg-accent transition-colors"
+        >
+          Avbryt
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Vårdnadshavare card ──────────────────────────────────────────────────────
+
+function VardnadshavareCard({ studentId, studentName }: { studentId: string; studentName: string }) {
+  const guardians   = useStudentGuardians(studentId);
+  const createMut   = useCreateGuardian();
+  const deleteMut   = useDeleteGuardian();
+  const tokenMut    = useGenerateGuardianToken();
+  const sendMessage = useSendMessage();
+  const queryClient = useQueryClient();
+
+  const [showForm,    setShowForm]    = useState(false);
+  const [notifyId,    setNotifyId]    = useState<string | null>(null);
+  const [firstName,   setFirstName]   = useState('');
+  const [lastName,    setLastName]    = useState('');
+  const [email,       setEmail]       = useState('');
+  const [phone,       setPhone]       = useState('');
+  const [relation,    setRelation]    = useState('');
+  const [canPay,    setCanPay]    = useState(false);
+  const [generatedUrls, setGeneratedUrls] = useState<Record<string, string>>({});
+  const [copiedId,  setCopiedId]  = useState<string | null>(null);
+  const [invitedId, setInvitedId] = useState<string | null>(null);
+
+  function resetForm() {
+    setFirstName(''); setLastName(''); setEmail('');
+    setPhone(''); setRelation(''); setCanPay(false);
+    setShowForm(false);
+  }
+
+  function handleCreate() {
+    if (!firstName.trim() || !lastName.trim() || !email.trim()) return;
+    createMut.mutate(
+      { student_id: studentId, first_name: firstName.trim(), last_name: lastName.trim(),
+        email: email.trim(), phone: phone.trim() || undefined,
+        relation: relation.trim() || undefined, can_pay: canPay },
+      {
+        onSuccess: () => {
+          resetForm();
+          void queryClient.invalidateQueries({ queryKey: ['guardians', studentId] });
+          toast({ title: 'Vårdnadshavare tillagd' });
+        },
+        onError: (e) => toast({ title: 'Kunde inte lägga till', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function handleDelete(g: Guardian) {
+    if (!window.confirm(`Ta bort ${g.first_name} ${g.last_name}?`)) return;
+    deleteMut.mutate(
+      { guardianId: g.id, studentId },
+      {
+        onSuccess: () => toast({ title: 'Vårdnadshavare borttagen' }),
+        onError: (e) => toast({ title: 'Kunde inte ta bort', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function handleGenerateToken(g: Guardian) {
+    tokenMut.mutate(g.id, {
+      onSuccess: (res) => {
+        setGeneratedUrls((prev) => ({ ...prev, [g.id]: res.url }));
+      },
+      onError: (e) => toast({ title: 'Kunde inte generera länk', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+    });
+  }
+
+  function handleCopy(guardianId: string, url: string) {
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(guardianId);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  }
+
+  function handleInviteAndNotify(g: Guardian) {
+    tokenMut.mutate(g.id, {
+      onSuccess: (res) => {
+        setGeneratedUrls((prev) => ({ ...prev, [g.id]: res.url }));
+        sendMessage.mutate(
+          {
+            channel:           'email',
+            recipient_type:    'manual',
+            recipient_address: g.email,
+            subject:           `Föräldraskollen – följ ${studentName}s körkortsutbildning`,
+            body:              `Hej ${g.first_name}!\n\nDu har fått tillgång till Föräldraskollen för ${studentName}. Här kan du följa framsteg, se kommande lektioner och hålla koll på utbildningens gång.\n\nKlicka på länken nedan för att logga in:\n${res.url}\n\nLänken är giltig i 30 dagar och är personlig — dela den inte med andra.\n\nMed vänliga hälsningar\nTrafikskolan`,
+          },
+          {
+            onSuccess: () => {
+              setInvitedId(g.id);
+              setTimeout(() => setInvitedId(null), 4000);
+              toast({ title: `Inbjudan skickad till ${g.email}` });
+            },
+            onError: () => {
+              toast({ title: 'Länk genererad – men e-post misslyckades. Kopiera länken manuellt.', variant: 'destructive' });
+            },
+          },
+        );
+      },
+      onError: (e) => toast({
+        title:       'Kunde inte generera inbjudan',
+        description: e instanceof Error ? e.message : undefined,
+        variant:     'destructive',
+      }),
+    });
+  }
+
+  const list = guardians.data ?? [];
+
+  return (
+    <div>
+      <SectionHeading title="Föräldraskollen – insyn i elevens utveckling" />
+      <p className="text-xs text-muted-foreground mb-3">
+        Ge en förälder eller annan nära person möjligheten att följa elevens framsteg, bokningar och resultat i realtid via en säker portal.
+      </p>
+
+      {/* Existing guardians */}
+      {guardians.isLoading ? (
+        <div className="h-8 w-32 bg-muted rounded animate-pulse mb-3" />
+      ) : list.length > 0 ? (
+        <div className="space-y-2 mb-3">
+          {list.map((g) => {
+            const url = generatedUrls[g.id];
+            return (
+              <div key={g.id} className="border border-border rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">{g.first_name} {g.last_name}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {g.email}{g.phone ? ` · ${g.phone}` : ''}{g.relation ? ` · ${g.relation}` : ''}
+                      {g.can_pay && <span className="ml-1 text-green-600 font-semibold">· Betalning</span>}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {invitedId === g.id ? (
+                      <span className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-50 text-green-700 border border-green-200 flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        Skickad!
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleInviteAndNotify(g)}
+                        disabled={tokenMut.isPending || sendMessage.isPending}
+                        className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                        title="Generera länk och skicka e-postinbjudan"
+                      >
+                        <Mail className="w-3 h-3" />
+                        Bjud in
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
+                      className={cn(
+                        'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
+                        notifyId === g.id
+                          ? 'bg-primary/10 text-primary border border-primary/30'
+                          : 'bg-muted text-muted-foreground hover:bg-accent',
+                      )}
+                      title="Skicka meddelande"
+                    >
+                      <Mail className="w-3 h-3" />
+                      Notifiera
+                    </button>
+                    <button
+                      onClick={() => handleGenerateToken(g)}
+                      disabled={tokenMut.isPending}
+                      className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                      title="Generera portallänk (manuell kopiering)"
+                    >
+                      <Link2 className="w-3 h-3" />
+                      Länk
+                    </button>
+                    <button
+                      onClick={() => handleDelete(g)}
+                      disabled={deleteMut.isPending}
+                      className="w-6 h-6 flex items-center justify-center rounded text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40 transition-colors"
+                      title="Ta bort"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {notifyId === g.id && (
+                  <GuardianNotifyDialog
+                    guardian={g}
+                    onClose={() => setNotifyId(null)}
+                  />
+                )}
+                {url && (
+                  <div className="flex items-center gap-2 bg-muted/40 rounded px-2 py-1.5">
+                    <p className="text-[10px] font-mono text-muted-foreground truncate flex-1">{url}</p>
+                    <button
+                      onClick={() => handleCopy(g.id, url)}
+                      className="shrink-0 text-[10px] font-medium text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      {copiedId === g.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                      {copiedId === g.id ? 'Kopierat' : 'Kopiera'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground mb-3">Inga vårdnadshavare tillagda.</p>
+      )}
+
+      {/* Add form */}
+      {showForm ? (
+        <div className="border border-border rounded-lg p-3 space-y-2.5">
+          <p className="text-xs font-semibold text-foreground">Ny vårdnadshavare</p>
+          <div className="grid grid-cols-2 gap-2">
+            <FieldInput label="Förnamn *" value={firstName} onChange={setFirstName} placeholder="Förnamn" />
+            <FieldInput label="Efternamn *" value={lastName} onChange={setLastName} placeholder="Efternamn" />
+            <FieldInput label="E-post *" value={email} onChange={setEmail} type="email" placeholder="email@example.com" fullWidth />
+            <FieldInput label="Telefon" value={phone} onChange={setPhone} type="tel" placeholder="+46 70 000 00 00" />
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Relation</label>
+              <select
+                value={relation}
+                onChange={(e) => setRelation(e.target.value)}
+                className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">Välj relation</option>
+                <option value="Förälder">Förälder</option>
+                <option value="Vårdnadshavare">Vårdnadshavare</option>
+                <option value="Syskon">Syskon</option>
+                <option value="Annan">Annan</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="guardian-canpay" checked={canPay} onChange={(e) => setCanPay(e.target.checked)} className="rounded" />
+            <label htmlFor="guardian-canpay" className="text-xs text-muted-foreground cursor-pointer">Kan se ekonomiinformation</label>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <GreenBtn
+              onClick={handleCreate}
+              disabled={!firstName.trim() || !lastName.trim() || !email.trim() || createMut.isPending}
+            >
+              {createMut.isPending ? 'Lägger till...' : 'Lägg till'}
+            </GreenBtn>
+            <button
+              onClick={resetForm}
+              className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded transition-colors"
+            >
+              Avbryt
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowForm(true)}
+          className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Lägg till vårdnadshavare
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Kundkort tab ─────────────────────────────────────────────────────────────
 
 type FormState = {
   first_name: string; last_name: string;
   email: string; phone: string;
   address_line1: string; postal_code: string; city: string;
+  notes: string;
 };
 
 function KundkortTab({
   student, form, setField, pnr, age, fullName,
-  onSave, saving, onActivate, activating, onArchive, archiving, instructorName,
+  onSave, saving, onActivate, activating, onArchive, archiving, instructorName: _instructorName,
+  upcomingBookings,
 }: {
   student: ReturnType<typeof useStudent>['data'] & object;
   form: FormState;
@@ -469,9 +1093,114 @@ function KundkortTab({
   onArchive: () => void;
   archiving: boolean;
   instructorName: string | null;
+  upcomingBookings: ReturnType<typeof useStudentUpcomingBookings>;
 }) {
-  const [internalNotes, setInternalNotes] = useState(false);
-  const [korkortsGrupp, setKorkortsGrupp] = useState('');
+  const [internalNotes,       setInternalNotes]       = useState(false);
+  const [korkortsGrupp,       setKorkortsGrupp]       = useState('');
+  const [favInstructorId,     setFavInstructorId]     = useState(student.assigned_instructor_id ?? '');
+  const [cancelTarget,        setCancelTarget]        = useState<{ bookingId: string; slotId: string; slotLabel: string } | null>(null);
+  const [rescheduleTarget,    setRescheduleTarget]    = useState<{ bookingId: string; slotId: string } | null>(null);
+
+  type MilestoneKey = 'risk1_completed_at' | 'risk2_completed_at' | 'theory_passed_at' | 'practical_passed_at';
+  const [editingMilestone,  setEditingMilestone]  = useState<MilestoneKey | null>(null);
+  const [milestoneDate,     setMilestoneDate]     = useState('');
+  const [savingMilestone,   setSavingMilestone]   = useState(false);
+  const queryClient = useQueryClient();
+
+  async function saveMilestone() {
+    if (!editingMilestone) return;
+    setSavingMilestone(true);
+    const { error } = await supabase
+      .from('students')
+      .update({ [editingMilestone]: milestoneDate || null } as never)
+      .eq('id', student.id);
+    setSavingMilestone(false);
+    if (error) {
+      toast({ title: 'Kunde inte spara', description: error.message, variant: 'destructive' });
+    } else {
+      void queryClient.invalidateQueries({ queryKey: studentKeys.detail(student.id) });
+      toast({ title: 'Datum sparat' });
+      setEditingMilestone(null);
+    }
+  }
+
+  function startEditMilestone(key: MilestoneKey, currentValue: string | null) {
+    setEditingMilestone(key);
+    setMilestoneDate(currentValue?.slice(0, 10) ?? '');
+  }
+
+  const updateOptIn        = useUpdateStudent();
+  const updateInstructor   = useUpdateStudent();
+  const updateNotes        = useUpdateStudent();
+  const updateCompany      = useUpdateStudent();
+  const [linkedCompanyId, setLinkedCompanyId] = useState(student.corporate_customer_id ?? '');
+  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' });
+  const allCompanies = corporateData?.data ?? [];
+  const { data: instructorsData } = useInstructorList({ per_page: 100 });
+
+  // ── Emergency contacts ──────────────────────────────────────────────────────
+  type EmgContact = { id: string; full_name: string; phone: string; email: string | null; is_primary: boolean };
+  const [emgName,    setEmgName]    = useState('');
+  const [emgPhone,   setEmgPhone]   = useState('');
+  const [emgEmail,   setEmgEmail]   = useState('');
+  const [emgPrimary, setEmgPrimary] = useState(false);
+
+  const emgQKey = ['student-emergency-contacts', student.id] as const;
+  const emgContacts = useQuery<EmgContact[]>({
+    queryKey: emgQKey,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .select('id, full_name, phone, email, is_primary')
+        .eq('student_id', student.id)
+        .order('created_at');
+      if (error) throw new Error(error.message);
+      return (data ?? []) as EmgContact[];
+    },
+  });
+
+  const addEmg = useMutation({
+    mutationFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .insert({
+          student_id:      student.id,
+          organization_id: student.organization_id,
+          full_name:       emgName.trim(),
+          phone:           emgPhone.trim(),
+          email:           emgEmail.trim() || null,
+          relationship:    'other',
+          is_primary:      emgPrimary,
+        });
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: emgQKey });
+      setEmgName(''); setEmgPhone(''); setEmgEmail(''); setEmgPrimary(false);
+      toast({ title: 'Anhörig tillagd' });
+    },
+    onError: (e: Error) => toast({ title: 'Kunde inte lägga till', description: e.message, variant: 'destructive' }),
+  });
+
+  const deleteEmg = useMutation({
+    mutationFn: async (id: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .delete()
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: emgQKey }),
+    onError: (e: Error) => toast({ title: 'Kunde inte ta bort', description: e.message, variant: 'destructive' }),
+  });
+  const allInstructors = instructorsData?.data ?? [];
+  const nextLesson   = upcomingBookings.data?.data?.[0];
+  const nextDateStr  = nextLesson ? new Date(nextLesson.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : '';
+  const nextTimeStr  = nextLesson ? `${formatTime(nextLesson.starts_at)} – ${formatTime(nextLesson.ends_at)}` : '';
+  const nextTerminal = !nextLesson || nextLesson.status === 'completed' || nextLesson.status === 'no_show' || nextLesson.status === 'cancelled';
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
@@ -628,14 +1357,41 @@ function KundkortTab({
           {/* Företagskopplingar */}
           <div>
             <SectionHeading title="Företagskopplingar" />
+            {student.corporate_customer_id && (
+              <p className="text-xs text-muted-foreground mb-2">
+                Kopplad: <span className="font-medium text-foreground">
+                  {allCompanies.find(c => c.id === student.corporate_customer_id)?.company_name ?? '…'}
+                </span>
+              </p>
+            )}
             <div className="flex items-end gap-2">
               <div className="flex-1 space-y-1">
                 <label className="text-xs text-muted-foreground">Välj företag att koppla</label>
-                <select className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary">
-                  <option value="">Välj företag</option>
+                <select
+                  value={linkedCompanyId}
+                  onChange={(e) => setLinkedCompanyId(e.target.value)}
+                  className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">- Inget företag -</option>
+                  {allCompanies.map((c) => (
+                    <option key={c.id} value={c.id}>{c.company_name}</option>
+                  ))}
                 </select>
               </div>
-              <GreenBtn disabled>Spara</GreenBtn>
+              <GreenBtn
+                disabled={updateCompany.isPending}
+                onClick={() => {
+                  updateCompany.mutate(
+                    { id: student.id, input: { corporate_customer_id: linkedCompanyId || null } },
+                    {
+                      onSuccess: () => toast({ title: linkedCompanyId ? 'Företag kopplat' : 'Företagskoppling borttagen' }),
+                      onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
+                    }
+                  );
+                }}
+              >
+                {updateCompany.isPending ? 'Sparar...' : 'Spara'}
+              </GreenBtn>
             </div>
           </div>
 
@@ -650,50 +1406,63 @@ function KundkortTab({
                   <tr className="border-b border-border">
                     <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Moment</th>
                     <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Datum</th>
-                    <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Lärare</th>
                     <th className="text-left py-2 text-xs font-medium text-muted-foreground">Åtgärder</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {student.risk1_completed_at && (
-                    <tr className="border-b border-border/50">
-                      <td className="py-2 pr-4 text-xs">Risk 1</td>
-                      <td className="py-2 pr-4 text-xs">{formatDate(student.risk1_completed_at)}</td>
-                      <td className="py-2 pr-4 text-xs">—</td>
-                      <td className="py-2 text-xs"><button className="text-blue-500 hover:underline">Redigera</button></td>
-                    </tr>
-                  )}
-                  {student.risk2_completed_at && (
-                    <tr className="border-b border-border/50">
-                      <td className="py-2 pr-4 text-xs">Risk 2</td>
-                      <td className="py-2 pr-4 text-xs">{formatDate(student.risk2_completed_at)}</td>
-                      <td className="py-2 pr-4 text-xs">—</td>
-                      <td className="py-2 text-xs"><button className="text-blue-500 hover:underline">Redigera</button></td>
-                    </tr>
-                  )}
-                  {student.theory_passed_at && (
-                    <tr className="border-b border-border/50">
-                      <td className="py-2 pr-4 text-xs">Teoriprov</td>
-                      <td className="py-2 pr-4 text-xs">{formatDate(student.theory_passed_at)}</td>
-                      <td className="py-2 pr-4 text-xs">—</td>
-                      <td className="py-2 text-xs"><button className="text-blue-500 hover:underline">Redigera</button></td>
-                    </tr>
-                  )}
-                  {student.practical_passed_at && (
-                    <tr className="border-b border-border/50">
-                      <td className="py-2 pr-4 text-xs">Uppkörning</td>
-                      <td className="py-2 pr-4 text-xs">{formatDate(student.practical_passed_at)}</td>
-                      <td className="py-2 pr-4 text-xs">—</td>
-                      <td className="py-2 text-xs"><button className="text-blue-500 hover:underline">Redigera</button></td>
-                    </tr>
-                  )}
-                  {!student.risk1_completed_at && !student.risk2_completed_at && !student.theory_passed_at && !student.practical_passed_at && (
-                    <tr>
-                      <td colSpan={4} className="py-4 text-xs text-muted-foreground text-center">
-                        Inga examinationsmoment registrerade
+                  {(
+                    [
+                      { key: 'risk1_completed_at'    as MilestoneKey, label: 'Risk 1',     value: student.risk1_completed_at },
+                      { key: 'risk2_completed_at'    as MilestoneKey, label: 'Risk 2',     value: student.risk2_completed_at },
+                      { key: 'theory_passed_at'      as MilestoneKey, label: 'Teoriprov',  value: student.theory_passed_at },
+                      { key: 'practical_passed_at'   as MilestoneKey, label: 'Uppkörning', value: student.practical_passed_at },
+                    ] as { key: MilestoneKey; label: string; value: string | null }[]
+                  ).map(({ key, label, value }) => (
+                    <tr key={key} className="border-b border-border/50 last:border-0">
+                      <td className="py-2.5 pr-4 text-xs font-medium">{label}</td>
+                      <td className="py-2.5 pr-4 text-xs">
+                        {value ? (
+                          <span className="text-foreground font-medium">{formatDate(value)}</span>
+                        ) : (
+                          <span className="text-muted-foreground/50 italic">Ej genomfört</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 text-xs">
+                        {editingMilestone === key ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <input
+                              type="date"
+                              value={milestoneDate}
+                              onChange={(e) => setMilestoneDate(e.target.value)}
+                              className="h-6 px-1.5 text-xs border border-input rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                            <button
+                              onClick={() => void saveMilestone()}
+                              disabled={savingMilestone}
+                              className="h-6 px-2 text-[10px] font-medium text-white bg-green-600 hover:bg-green-700 rounded disabled:opacity-50 transition-colors"
+                            >
+                              {savingMilestone ? '...' : 'Spara'}
+                            </button>
+                            <button
+                              onClick={() => setEditingMilestone(null)}
+                              className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              Avbryt
+                            </button>
+                          </div>
+                        ) : (
+                          <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                            <button
+                              onClick={() => startEditMilestone(key, value)}
+                              className="text-blue-500 hover:underline"
+                            >
+                              {value ? 'Redigera' : 'Registrera'}
+                            </button>
+                          </PermissionGate>
+                        )}
                       </td>
                     </tr>
-                  )}
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -705,54 +1474,79 @@ function KundkortTab({
           <div>
             <SectionHeading title="Anhöriga personer" />
             <p className="text-xs text-muted-foreground mb-3">
-              Skicka meddelande till anhöriga under utbildning. De första funktionerna är denna inställning är bokningsbekräftelser.
+              Registrera anhöriga som ska kontaktas i nödsituationer eller ta emot bokningsbekräftelser.
             </p>
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Personnummer</label>
-                <div className="flex items-center gap-1">
-                  <input
-                    type="text"
-                    placeholder="YYYYMMDDXXXX"
-                    className="flex-1 h-8 px-2.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button className="h-8 px-3 text-xs rounded border border-input bg-background hover:bg-accent text-muted-foreground transition-colors">
-                    Sök
-                  </button>
-                </div>
+
+            {/* Existing contacts list */}
+            {(emgContacts.data ?? []).length > 0 && (
+              <div className="space-y-2 mb-4">
+                {(emgContacts.data ?? []).map((c) => (
+                  <div key={c.id} className="flex items-center justify-between bg-muted/40 rounded px-3 py-2 text-xs gap-2">
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">{c.full_name}</span>
+                      {c.is_primary && <span className="ml-2 text-[10px] text-primary font-semibold">Primär</span>}
+                      <div className="text-muted-foreground truncate">{c.phone}{c.email ? ` · ${c.email}` : ''}</div>
+                    </div>
+                    <button
+                      onClick={() => deleteEmg.mutate(c.id)}
+                      disabled={deleteEmg.isPending}
+                      className="shrink-0 p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/30 text-red-500 disabled:opacity-40 transition-colors"
+                      title="Ta bort"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
               </div>
-              <FieldInput label="Namn" value="" placeholder="—" />
-              <FieldInput label="E-postadress" value="" placeholder="—" />
-              <FieldInput label="Telefonnummer" value="" placeholder="—" />
-              <FieldInput label="Adress" value="" placeholder="—" />
-              <FieldInput label="Postnummer" value="" placeholder="—" />
-              <FieldInput label="Stad" value="" placeholder="—" />
+            )}
+
+            {/* Add form */}
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <FieldInput
+                label="Namn *"
+                value={emgName}
+                onChange={setEmgName}
+                placeholder="För- och efternamn"
+                fullWidth
+              />
+              <FieldInput
+                label="Telefonnummer *"
+                value={emgPhone}
+                onChange={setEmgPhone}
+                placeholder="+46 70 000 00 00"
+                type="tel"
+              />
+              <FieldInput
+                label="E-postadress"
+                value={emgEmail}
+                onChange={setEmgEmail}
+                placeholder="valfritt"
+                type="email"
+                fullWidth
+              />
             </div>
-            <div className="flex items-center gap-2 mb-2">
-              <input type="checkbox" id="anhoriganotis" className="rounded" />
-              <label htmlFor="anhoriganotis" className="text-xs text-muted-foreground">Skicka notiser</label>
+            <div className="flex items-center gap-2 mb-3">
+              <input
+                type="checkbox"
+                id="emgprimary"
+                checked={emgPrimary}
+                onChange={(e) => setEmgPrimary(e.target.checked)}
+                className="rounded"
+              />
+              <label htmlFor="emgprimary" className="text-xs text-muted-foreground cursor-pointer">Primärkontakt</label>
             </div>
-            <GreenBtn disabled>Lägg till</GreenBtn>
+            <GreenBtn
+              onClick={() => addEmg.mutate()}
+              disabled={!emgName.trim() || !emgPhone.trim() || addEmg.isPending}
+            >
+              {addEmg.isPending ? 'Lägger till...' : 'Lägg till'}
+            </GreenBtn>
           </div>
 
           <SectionDivider />
 
           {/* Föräldraskollen */}
-          <div>
-            <SectionHeading title="Föräldraskollen – insyn i elevens utveckling" />
-            <p className="text-xs text-muted-foreground mb-3">
-              Detta är en experimentell funktion som just nu är kostnadsfri under en begränsad period. Ge en förälder eller annan nära person möjligheten att följa elevens framsteg, bokningar och resultat i realtid.
-            </p>
-            <div className="flex items-end gap-2">
-              <div className="flex-1 space-y-1">
-                <label className="text-xs text-muted-foreground">Sök efter kund...</label>
-                <select className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary">
-                  <option value="">Välj person</option>
-                </select>
-              </div>
-              <GreenBtn disabled>Lägg till</GreenBtn>
-            </div>
-          </div>
+          <VardnadshavareCard studentId={student.id} studentName={`${student.first_name} ${student.last_name}`} />
 
           <SectionDivider />
 
@@ -765,16 +1559,30 @@ function KundkortTab({
             <div className="flex items-end gap-2">
               <div className="flex-1 space-y-1">
                 <label className="text-xs text-muted-foreground">Välj favoritlärare</label>
-                <select className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary">
+                <select
+                  value={favInstructorId}
+                  onChange={(e) => setFavInstructorId(e.target.value)}
+                  className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                >
                   <option value="">Ingen favoritlärare</option>
-                  {instructorName && (
-                    <option value={student.assigned_instructor_id ?? ''}>
-                      {instructorName} (tilldelad)
+                  {allInstructors.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.first_name} {i.last_name}
                     </option>
-                  )}
+                  ))}
                 </select>
               </div>
-              <GreenBtn disabled>Spara</GreenBtn>
+              <GreenBtn
+                onClick={() => {
+                  updateInstructor.mutate(
+                    { id: student.id, input: { assigned_instructor_id: favInstructorId || null } },
+                    { onSuccess: () => toast({ title: 'Favoritlärare sparad' }) },
+                  );
+                }}
+                disabled={updateInstructor.isPending}
+              >
+                {updateInstructor.isPending ? 'Sparar…' : 'Spara'}
+              </GreenBtn>
             </div>
           </div>
 
@@ -796,6 +1604,52 @@ function KundkortTab({
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
+
+        {/* Nästa lektion */}
+        {nextLesson && (
+          <div className="bg-card border border-primary/20 rounded-lg p-4">
+            <SectionHeading title="Nästa lektion" />
+            <div className="space-y-2">
+              <div>
+                <p className="text-xs font-medium text-foreground capitalize">{nextDateStr}</p>
+                <p className="text-[11px] text-muted-foreground">{nextTimeStr}</p>
+              </div>
+              <BookingStatusBadge status={nextLesson.status} />
+              {!nextTerminal && (
+                <div className="flex gap-3 pt-1">
+                  <button
+                    onClick={() => setRescheduleTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id })}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    Boka om
+                  </button>
+                  <button
+                    onClick={() => setCancelTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id, slotLabel: `${nextDateStr} ${nextTimeStr}` })}
+                    className="text-xs text-red-500 hover:underline"
+                  >
+                    Avboka
+                  </button>
+                </div>
+              )}
+              <Link
+                to={`/scheduling?date=${nextLesson.starts_at.slice(0, 10)}`}
+                className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+              >
+                <Calendar className="w-3 h-3" />
+                Visa i schema
+              </Link>
+            </div>
+          </div>
+        )}
+        {!nextLesson && !upcomingBookings.isLoading && (
+          <div className="bg-card border border-border rounded-lg p-4">
+            <SectionHeading title="Nästa lektion" />
+            <p className="text-xs text-muted-foreground">Inga kommande bokningar.</p>
+          </div>
+        )}
+
+        {/* Training status */}
+        <TrainingStatusCard student={student} />
 
         {/* Anteckningar */}
         <div className="bg-card border border-border rounded-lg p-4">
@@ -819,50 +1673,73 @@ function KundkortTab({
           </div>
           <textarea
             rows={4}
+            value={form.notes}
+            onChange={(e) => setField('notes', e.target.value)}
             placeholder="Skriv en anteckning..."
             className="w-full px-2.5 py-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
           <div className="mt-2 flex justify-end">
-            <GreenBtn disabled>Spara</GreenBtn>
+            <GreenBtn
+              onClick={() => updateNotes.mutate(
+                { id: student.id, input: { notes: form.notes || null } },
+                { onSuccess: () => toast({ title: 'Anteckning sparad' }) },
+              )}
+              disabled={updateNotes.isPending}
+            >
+              {updateNotes.isPending ? 'Sparar...' : 'Spara'}
+            </GreenBtn>
           </div>
         </div>
 
         {/* Taggar */}
-        <div className="bg-card border border-border rounded-lg p-4">
-          <SectionHeading title="Taggar" />
-          <div className="flex items-center gap-2">
-            <select className="flex-1 h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary">
-              <option value="">Välj taggar</option>
-            </select>
-            <GreenBtn disabled>Spara</GreenBtn>
-          </div>
-        </div>
+        <TagsCard studentId={student.id} />
 
         {/* Generera nytt lösenord */}
+        <PasswordResetCard
+          studentId={student.id}
+          studentName={fullName}
+          email={student.email ?? null}
+          phone={student.phone ?? null}
+        />
+
+        {/* Student portal invite */}
+        <PortalInviteCard studentId={student.id} studentName={fullName} />
+
+        {/* Notiser & kommunikation */}
         <div className="bg-card border border-border rounded-lg p-4">
-          <SectionHeading title="Generera nytt lösenord" />
-          <p className="text-xs text-muted-foreground mb-3">
-            Systemet genererar ett nytt lösenord och skickas till användaren via e-post eller SMS.
-          </p>
-          <div className="flex gap-2">
+          <SectionHeading title="Notiser & kommunikation" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-foreground">SMS-påminnelser</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Lektionspåminnelser och bokningsbekräftelser
+              </p>
+            </div>
             <button
-              disabled
-              title="Lösenordsgenerering via SMS under implementation"
-              className="flex-1 py-2 text-xs font-medium rounded bg-green-600/40 text-white cursor-not-allowed flex items-center justify-center gap-1.5"
+              type="button"
+              onClick={() => updateOptIn.mutate(
+                { id: student.id, input: { communication_opt_in_sms: !student.communication_opt_in_sms } },
+                { onSuccess: () => toast({ title: student.communication_opt_in_sms ? 'SMS-notiser inaktiverade' : 'SMS-notiser aktiverade' }) },
+              )}
+              disabled={updateOptIn.isPending}
+              className={cn(
+                'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-50',
+                student.communication_opt_in_sms ? 'bg-primary' : 'bg-muted',
+              )}
+              role="switch"
+              aria-checked={student.communication_opt_in_sms}
             >
-              <MessageSquare className="w-3 h-3" />
-              Skicka SMS
-            </button>
-            <button
-              disabled
-              title="Lösenordsgenerering via e-post under implementation"
-              className="flex-1 py-2 text-xs font-medium rounded bg-green-600/40 text-white cursor-not-allowed flex items-center justify-center gap-1.5"
-            >
-              <Mail className="w-3 h-3" />
-              Skicka e-post
+              <span className={cn(
+                'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
+                student.communication_opt_in_sms ? 'translate-x-4' : 'translate-x-0',
+              )} />
             </button>
           </div>
-          <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Lösenordsgenerering under implementation</p>
+          {!student.phone && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-2">
+              Inget mobilnummer — SMS kan inte levereras.
+            </p>
+          )}
         </div>
 
         {/* Aktivera kund — shown for students not yet active */}
@@ -910,6 +1787,763 @@ function KundkortTab({
         </div>
 
       </div>
+
+      <CancelBookingDialog
+        open={cancelTarget !== null}
+        onOpenChange={(o) => { if (!o) setCancelTarget(null); }}
+        bookingId={cancelTarget?.bookingId ?? null}
+        slotId={cancelTarget?.slotId ?? ''}
+        student={student}
+        slotLabel={cancelTarget?.slotLabel}
+        onSuccess={() => setCancelTarget(null)}
+      />
+      <RescheduleBookingDialog
+        open={rescheduleTarget !== null}
+        onOpenChange={(o) => { if (!o) setRescheduleTarget(null); }}
+        bookingId={rescheduleTarget?.bookingId ?? null}
+        currentSlotId={rescheduleTarget?.slotId ?? ''}
+        studentName={fullName}
+        student={student}
+        onSuccess={() => setRescheduleTarget(null)}
+      />
+    </div>
+  );
+}
+
+// ─── Lesson progress panel ────────────────────────────────────────────────────
+
+// Stable date range for lesson history queries — computed once at module load
+const PROGRESS_RANGE = {
+  from: new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString(),
+  to:   new Date().toISOString(),
+};
+
+function LessonProgressPanel({ studentId }: { studentId: string }) {
+  const { data: historyData, isLoading } = useBookingList({
+    student_id: studentId,
+    from:       PROGRESS_RANGE.from,
+    to:         PROGRESS_RANGE.to,
+    per_page:   200,
+    sort_by:    'starts_at',
+    sort_dir:   'desc',
+  });
+  const upcoming = useStudentUpcomingBookings(studentId);
+
+  const bookings      = historyData?.data ?? [];
+  const completed     = useMemo(() => bookings.filter((b) => b.status === 'completed'), [bookings]);
+  const noShows       = useMemo(() => bookings.filter((b) => b.status === 'no_show'),   [bookings]);
+  const upcomingCount = upcoming.data?.data?.length ?? 0;
+
+  const totalMin = useMemo(() =>
+    completed.reduce((acc, b) => {
+      const ms = new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime();
+      return acc + Math.round(ms / 60_000);
+    }, 0),
+    [completed],
+  );
+  const hours = Math.floor(totalMin / 60);
+  const mins  = totalMin % 60;
+  const timeLabel = totalMin === 0 ? '—'
+    : hours > 0 ? `${hours} t${mins > 0 ? ` ${mins} min` : ''}` : `${totalMin} min`;
+
+  const monthlyData = useMemo(() => {
+    const months: { month: string; count: number; label: string }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const key   = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString('sv-SE', { month: 'short' });
+      const count = completed.filter((b) => b.starts_at.startsWith(key)).length;
+      months.push({ month: key, count, label });
+    }
+    return months;
+  }, [completed]);
+  const maxMonthCount = Math.max(...monthlyData.map((m) => m.count), 1);
+  const hasActivity   = monthlyData.some((m) => m.count > 0);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3 mb-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-20 rounded-lg" />)}
+        </div>
+        <Skeleton className="h-20 rounded-lg" />
+      </div>
+    );
+  }
+
+  const stats: { label: string; value: string; color: string }[] = [
+    { label: 'Genomförda lektioner', value: `${completed.length}`, color: 'text-green-600 dark:text-green-400' },
+    { label: 'Total körtid',         value: timeLabel,             color: 'text-blue-600 dark:text-blue-400' },
+    { label: 'Uteblivna',            value: `${noShows.length}`,   color: 'text-amber-600 dark:text-amber-400' },
+    { label: 'Kommande bokningar',   value: `${upcomingCount}`,    color: 'text-primary' },
+  ];
+
+  return (
+    <div className="mb-5 space-y-3">
+      <SectionHeading title="Lektionsframsteg" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {stats.map((s) => (
+          <div key={s.label} className="bg-card border border-border rounded-lg p-3 text-center space-y-1">
+            <p className={cn('text-xl font-bold tabular-nums', s.color)}>{s.value}</p>
+            <p className="text-[10px] text-muted-foreground leading-tight">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {hasActivity && (
+        <div className="bg-card border border-border rounded-lg p-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium mb-2">Lektioner per månad</p>
+          <div className="flex items-end gap-1.5" style={{ height: 52 }}>
+            {monthlyData.map(({ month, count, label }) => (
+              <div key={month} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex items-end justify-center" style={{ height: 40 }}>
+                  <div
+                    className="w-full rounded-sm bg-blue-500/70 hover:bg-blue-500 transition-colors"
+                    style={{ height: count === 0 ? 2 : Math.max(4, Math.round((count / maxMonthCount) * 40)) }}
+                    title={`${count} lektion${count !== 1 ? 'er' : ''}`}
+                  />
+                </div>
+                <span className="text-[9px] text-muted-foreground capitalize leading-none">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Training status card (right sidebar of Elevkort) ────────────────────────
+
+function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
+  const milestones: { label: string; completedAt: string | null }[] = [
+    { label: 'Risk 1',     completedAt: student.risk1_completed_at },
+    { label: 'Risk 2',     completedAt: student.risk2_completed_at },
+    { label: 'Teoriprov',  completedAt: student.theory_passed_at },
+    { label: 'Uppkörning', completedAt: student.practical_passed_at },
+  ];
+  const completedCount = milestones.filter((m) => m.completedAt).length;
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <SectionHeading title="Utbildningsstatus" />
+
+      {/* Progress bar */}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+          <div
+            className="h-full bg-green-500 rounded-full transition-all"
+            style={{ width: `${(completedCount / milestones.length) * 100}%` }}
+          />
+        </div>
+        <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+          {completedCount}/{milestones.length} moment
+        </span>
+      </div>
+
+      {/* Permit stage */}
+      <div className="mb-3">
+        <PermitStageBadge stage={student.permit_stage} />
+      </div>
+
+      {/* Milestone rows */}
+      <div className="space-y-2">
+        {milestones.map(({ label, completedAt }) => (
+          <div key={label} className="flex items-center gap-2">
+            {completedAt ? (
+              <div className="w-4 h-4 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
+                <Check className="w-2.5 h-2.5 text-green-600 dark:text-green-400" />
+              </div>
+            ) : (
+              <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center shrink-0">
+                <span className="text-[8px] text-muted-foreground font-bold leading-none">—</span>
+              </div>
+            )}
+            <span className={cn('text-xs flex-1', completedAt ? 'text-foreground font-medium' : 'text-muted-foreground')}>
+              {label}
+            </span>
+            {completedAt && (
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {formatDate(completedAt)}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Lektionslogg tab ─────────────────────────────────────────────────────────
+
+type LessonLogEntry = {
+  id: string;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  lesson_slots: { notes: string | null } | null;
+};
+
+function LektionsloggTab({ studentId }: { studentId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['student-lesson-log', studentId],
+    queryFn: async () => {
+      const { data: rows } = await supabase
+        .from('lesson_bookings')
+        .select('id, starts_at, ends_at, status, lesson_slots(notes)')
+        .eq('student_id', studentId)
+        .in('status', ['completed', 'no_show'])
+        .is('deleted_at', null)
+        .order('starts_at', { ascending: false })
+        .limit(100);
+      return (rows ?? []) as LessonLogEntry[];
+    },
+    staleTime: 2 * 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}
+      </div>
+    );
+  }
+
+  const entries = data ?? [];
+
+  if (entries.length === 0) {
+    return (
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        Inga genomförda eller uteblivna lektioner.
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="divide-y divide-border">
+        {entries.map((entry) => {
+          const dateStr = new Date(entry.starts_at).toLocaleDateString('sv-SE', {
+            weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+          });
+          const timeStr = `${formatTime(entry.starts_at)} – ${formatTime(entry.ends_at)}`;
+          const mins    = Math.round(
+            (new Date(entry.ends_at).getTime() - new Date(entry.starts_at).getTime()) / 60_000,
+          );
+          const note    = (entry.lesson_slots as { notes: string | null } | null)?.notes ?? null;
+          const noShow  = entry.status === 'no_show';
+
+          return (
+            <div key={entry.id} className="px-4 py-3 hover:bg-muted/20 transition-colors">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-0.5 min-w-0">
+                  <p className="text-xs font-medium capitalize text-foreground">{dateStr}</p>
+                  <p className="text-[10px] text-muted-foreground">{timeStr} · {mins} min</p>
+                </div>
+                <span className={cn(
+                  'shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded border',
+                  noShow
+                    ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800/50'
+                    : 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800/50',
+                )}>
+                  {noShow ? 'Uteblev' : 'Genomförd'}
+                </span>
+              </div>
+              {note ? (
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed border-l-2 border-border pl-2">
+                  {note}
+                </p>
+              ) : (
+                <p className="mt-1 text-[10px] text-muted-foreground/40 italic">Ingen anteckning</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Körjournal tab ───────────────────────────────────────────────────────────
+
+type KorjournalEntry = {
+  id:              string;
+  starts_at:       string;
+  ends_at:         string;
+  lesson_type_id:  string;
+  lesson_types:    { name: string; category: string } | null;
+};
+
+type CategoryStat = {
+  category:     string;
+  label:        string;
+  count:        number;
+  totalMinutes: number;
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  driving:      'Körlektion',
+  theory:       'Teorilektion',
+  risk1:        'Risk 1',
+  risk2:        'Risk 2',
+  simulator:    'Simulator',
+  assessment:   'Bedömning',
+  intensive:    'Intensivkurs',
+  group_theory: 'Gruppteorillektion',
+  other:        'Övrigt',
+};
+
+function fmtDuration(minutes: number): string {
+  if (minutes === 0) return '—';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} h`;
+  return `${h} h ${m} min`;
+}
+
+function KorjournalTab({ studentId }: { studentId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['student-korjournal', studentId],
+    queryFn: async () => {
+      const { data: rows } = await supabase
+        .from('lesson_bookings')
+        .select('id, starts_at, ends_at, lesson_type_id, lesson_types(name, category)')
+        .eq('student_id', studentId)
+        .eq('status', 'completed')
+        .is('deleted_at', null)
+        .order('starts_at', { ascending: false });
+      return (rows ?? []) as KorjournalEntry[];
+    },
+    staleTime: 2 * 60_000,
+  });
+
+  const stats = useMemo((): CategoryStat[] => {
+    if (!data) return [];
+    const map = new Map<string, CategoryStat>();
+    for (const entry of data) {
+      const cat  = (entry.lesson_types as { name: string; category: string } | null)?.category ?? 'other';
+      const mins = Math.round(
+        (new Date(entry.ends_at).getTime() - new Date(entry.starts_at).getTime()) / 60_000,
+      );
+      const existing = map.get(cat);
+      if (existing) {
+        existing.count++;
+        existing.totalMinutes += mins;
+      } else {
+        map.set(cat, { category: cat, label: CATEGORY_LABELS[cat] ?? cat, count: 1, totalMinutes: mins });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalMinutes - a.totalMinutes);
+  }, [data]);
+
+  const totalSessions = stats.reduce((acc, s) => acc + s.count, 0);
+  const totalMinutes  = stats.reduce((acc, s) => acc + s.totalMinutes, 0);
+  const drivingStats  = stats.find((s) => s.category === 'driving');
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-3">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 rounded-lg" />)}
+        </div>
+        <Skeleton className="h-40 rounded-lg" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Top stats ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          { label: 'Genomförda lektioner', value: totalSessions.toString(),       color: 'text-blue-600 dark:text-blue-400' },
+          { label: 'Total körtid',         value: fmtDuration(totalMinutes),       color: 'text-green-600 dark:text-green-400' },
+          { label: 'Körlektion',           value: fmtDuration(drivingStats?.totalMinutes ?? 0), color: 'text-primary' },
+        ].map((s) => (
+          <div key={s.label} className="bg-card border border-border rounded-lg p-3 text-center space-y-1">
+            <p className={cn('text-xl font-bold tabular-nums', s.color)}>{s.value}</p>
+            <p className="text-[10px] text-muted-foreground leading-tight">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Per-category breakdown ────────────────────────────────────────── */}
+      {stats.length === 0 ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">
+          Inga genomförda lektioner registrerade.
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-border bg-muted/20">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Uppdelning per lektionstyp</p>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">Typ</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-muted-foreground">Lektioner</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-muted-foreground">Total tid</th>
+                <th className="px-4 py-2 text-right text-xs font-medium text-muted-foreground">Andel</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map((s) => {
+                const pct = totalMinutes > 0 ? Math.round((s.totalMinutes / totalMinutes) * 100) : 0;
+                return (
+                  <tr key={s.category} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
+                    <td className="px-4 py-2.5">
+                      <span className="text-xs font-medium text-foreground">{s.label}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-xs tabular-nums text-muted-foreground">
+                      {s.count} st
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-xs tabular-nums font-medium text-foreground">
+                      {fmtDuration(s.totalMinutes)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-muted-foreground tabular-nums w-7 text-right">{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-border bg-muted/10">
+                <td className="px-4 py-2 text-xs font-semibold text-foreground">Totalt</td>
+                <td className="px-4 py-2 text-right text-xs font-semibold tabular-nums">{totalSessions} st</td>
+                <td className="px-4 py-2 text-right text-xs font-semibold tabular-nums">{fmtDuration(totalMinutes)}</td>
+                <td className="px-4 py-2" />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ─── Admin Utbildningskort panel ──────────────────────────────────────────────
+
+const COMP_DEFS = [
+  { key: 'stadskorning',  label: 'Stadskörning',      icon: '🏙️' },
+  { key: 'landsvag',      label: 'Landsväg',          icon: '🛣️' },
+  { key: 'motorvag',      label: 'Motorväg',          icon: '🚀' },
+  { key: 'parkering',     label: 'Parkering',         icon: '🅿️' },
+  { key: 'backning',      label: 'Backning',          icon: '⬅️' },
+  { key: 'cirkulation',   label: 'Cirkulationsplats', icon: '🔄' },
+  { key: 'morker',        label: 'Körning i mörker',  icon: '🌙' },
+  { key: 'halka',         label: 'Halkkörning',       icon: '❄️' },
+] as const;
+
+const READINESS_DEFS = [
+  { key: 'risk1',     label: 'Redo för Riskettan'    },
+  { key: 'risk2',     label: 'Redo för Risktvåan'    },
+  { key: 'theory',    label: 'Redo för Kunskapsprov' },
+  { key: 'practical', label: 'Redo för Körprov'      },
+] as const;
+
+const STATUS_CFG: Record<string, { label: string; cls: string }> = {
+  not_started: { label: 'Ej påbörjad',        cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'    },
+  in_progress: { label: 'Pågående',            cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+  mastered:    { label: 'Behärskas',           cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+  needs_more:  { label: 'Kräver mer träning',  cls: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'     },
+};
+
+function CompStatus({ status }: { status: string | undefined }) {
+  const cfg = STATUS_CFG[status ?? 'not_started'] ?? STATUS_CFG['not_started']!;
+  return <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', cfg.cls)}>{cfg.label}</span>;
+}
+
+function AdminUtbildningskortPanel({ studentId }: { studentId: string }) {
+  const { data: assessments = [], isLoading, isError } = useStudentAssessments(studentId);
+
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Aggregate: for each competency, pick the latest (most recent) status across all instructors
+  const aggregated = useMemo((): Record<string, string> => {
+    const result: Record<string, string> = {};
+    for (const a of assessments) {
+      for (const [k, v] of Object.entries(a.competencies)) {
+        if (!result[k] || v === 'mastered') result[k] = v;
+      }
+    }
+    return result;
+  }, [assessments]);
+
+  const aggregatedReadiness = useMemo((): Record<string, boolean> => {
+    const result: Record<string, boolean> = {};
+    for (const a of assessments) {
+      for (const [k, v] of Object.entries(a.readiness)) {
+        if (v) result[k] = true;
+      }
+    }
+    return result;
+  }, [assessments]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 pt-2">
+        {[1, 2, 3].map(i => <div key={i} className="h-10 rounded-lg bg-muted animate-pulse" />)}
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex items-center gap-2 mt-2 p-3 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/30 rounded-lg text-sm text-red-600">
+        Kunde inte hämta utbildningskort.
+      </div>
+    );
+  }
+
+  if (assessments.length === 0) {
+    return (
+      <div className="mt-2 p-6 text-center border border-dashed border-border rounded-lg">
+        <BookOpen className="w-8 h-8 mx-auto text-muted-foreground/30 mb-2" />
+        <p className="text-sm text-muted-foreground">Ingen instruktör har bedömt eleven ännu.</p>
+        <p className="text-xs text-muted-foreground mt-1">Utbildningskortet fylls i av instruktören via instruktörsportalen.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-5">
+      {/* Aggregated summary */}
+      <div>
+        <SectionHeading title="Kompetensöversikt (sammantagen)" />
+        <div className="rounded-lg border border-border overflow-hidden divide-y divide-border/50">
+          {COMP_DEFS.map(comp => (
+            <div key={comp.key} className="flex items-center gap-3 px-3 py-2.5">
+              <span className="text-base shrink-0">{comp.icon}</span>
+              <span className="flex-1 text-sm text-foreground">{comp.label}</span>
+              <CompStatus status={aggregated[comp.key]} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Readiness checkmarks */}
+      <div>
+        <SectionHeading title="Bedömning – redo för" />
+        <div className="rounded-lg border border-border overflow-hidden divide-y divide-border/50">
+          {READINESS_DEFS.map(item => (
+            <div key={item.key} className="flex items-center gap-3 px-3 py-2.5">
+              <ShieldCheck className={cn('w-4 h-4 shrink-0', aggregatedReadiness[item.key] ? 'text-green-500' : 'text-muted-foreground/30')} />
+              <span className={cn('flex-1 text-sm', aggregatedReadiness[item.key] ? 'text-foreground font-medium' : 'text-muted-foreground')}>
+                {item.label}
+              </span>
+              {aggregatedReadiness[item.key] && (
+                <span className="text-[10px] font-bold text-green-600 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">Redo</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-instructor breakdown */}
+      <div>
+        <SectionHeading title={`Bedömningar per instruktör (${assessments.length})`} />
+        <div className="space-y-2">
+          {assessments.map((a: StudentAssessment) => {
+            const isExpanded = expandedId === a.id;
+            return (
+              <div key={a.id} className="rounded-lg border border-border bg-card overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setExpandedId(isExpanded ? null : a.id)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-accent/40 transition-colors text-left"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{a.instructor_name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Uppdaterad {new Date(a.updated_at).toLocaleDateString('sv-SE')}
+                    </p>
+                  </div>
+                  <ChevronDown className={cn('w-4 h-4 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
+                </button>
+                {isExpanded && (
+                  <div className="border-t border-border/50 px-3 py-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {COMP_DEFS.map(comp => (
+                        <div key={comp.key} className="flex items-center gap-1.5">
+                          <span className="text-sm">{comp.icon}</span>
+                          <span className="text-xs text-muted-foreground truncate">{comp.label}</span>
+                          <CompStatus status={a.competencies[comp.key]} />
+                        </div>
+                      ))}
+                    </div>
+                    {a.notes && (
+                      <div className="bg-muted/40 rounded px-2.5 py-2">
+                        <p className="text-xs text-muted-foreground italic">"{a.notes}"</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Exam Results Panel ───────────────────────────────────────────────────────
+
+const EXAM_MILESTONES: { key: PermitMilestoneKey; label: string; isPass: boolean }[] = [
+  { key: 'risk1_booked',         label: 'Riskettan bokad',          isPass: false },
+  { key: 'risk1_completed',      label: 'Riskettan klar',           isPass: true  },
+  { key: 'risk2_booked',         label: 'Risktvåan bokad',          isPass: false },
+  { key: 'risk2_completed',      label: 'Risktvåan klar',           isPass: true  },
+  { key: 'theory_exam_booked',   label: 'Kunskapsprov bokat',       isPass: false },
+  { key: 'theory_passed',        label: 'Kunskapsprov godkänt',     isPass: true  },
+  { key: 'practical_exam_booked',label: 'Körprov bokat',            isPass: false },
+  { key: 'practical_passed',     label: 'Körprov godkänt',          isPass: true  },
+  { key: 'licence_issued',       label: 'Körkort utfärdat',         isPass: true  },
+];
+
+function ExamResultsPanel({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
+  const [adding, setAdding] = useState<PermitMilestoneKey | null>(null);
+  const [dateVal, setDateVal] = useState('');
+  const { data: milestones = [], isLoading } = useStudentMilestones(student.id);
+  const record = useRecordMilestone();
+
+  const achieved = new Set(milestones.map(m => m.milestone));
+  const licCat = student.target_licence_category ?? 'B';
+
+  const TRANSPORTSTYRELSEN_URL = 'https://www.transportstyrelsen.se/';
+
+  return (
+    <div className="space-y-4 pt-2">
+      {/* Readiness summary */}
+      <div className="rounded-xl border border-border bg-card p-4">
+        <p className="text-sm font-semibold text-foreground mb-3">Körkortsresa — {licCat}</p>
+        <div className="space-y-2">
+          {EXAM_MILESTONES.map(m => {
+            const done = achieved.has(m.key);
+            const ms   = milestones.find(x => x.milestone === m.key);
+            return (
+              <div key={m.key} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className={cn(
+                    'w-4 h-4 rounded-full flex items-center justify-center shrink-0',
+                    done
+                      ? m.isPass ? 'bg-green-100 dark:bg-green-900/30' : 'bg-blue-100 dark:bg-blue-900/30'
+                      : 'bg-muted',
+                  )}>
+                    {done ? (
+                      <Check className={cn('w-2.5 h-2.5', m.isPass ? 'text-green-600 dark:text-green-400' : 'text-blue-600 dark:text-blue-400')} />
+                    ) : (
+                      <span className="text-[8px] text-muted-foreground font-bold leading-none">—</span>
+                    )}
+                  </div>
+                  <span className={cn('text-sm', done ? 'text-foreground' : 'text-muted-foreground')}>
+                    {m.label}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {ms && (
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(ms.achieved_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </span>
+                  )}
+                  {!done && adding !== m.key && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                      onClick={() => { setAdding(m.key); setDateVal(new Date().toISOString().slice(0, 10)); }}
+                    >
+                      Registrera
+                    </button>
+                  )}
+                  {adding === m.key && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="date"
+                        className="h-7 rounded border border-input bg-background px-2 text-xs"
+                        value={dateVal}
+                        onChange={e => setDateVal(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="text-[11px] font-semibold text-green-600 hover:underline disabled:opacity-50"
+                        disabled={!dateVal || record.isPending}
+                        onClick={() => {
+                          record.mutate(
+                            { student_id: student.id, licence_category: licCat, milestone: m.key, achieved_at: new Date(dateVal).toISOString() },
+                            {
+                              onSuccess: () => { setAdding(null); toast({ title: `${m.label} registrerat` }); },
+                              onError:   (e) => toast({ title: 'Fel', description: e.message, variant: 'destructive' }),
+                            },
+                          );
+                        }}
+                      >
+                        {record.isPending ? '…' : 'Spara'}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-[11px] text-muted-foreground hover:underline"
+                        onClick={() => setAdding(null)}
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Transportstyrelsen link */}
+      <a
+        href={TRANSPORTSTYRELSEN_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 hover:bg-accent/50 transition-colors"
+      >
+        <ExternalLink className="w-4 h-4 text-blue-600 shrink-0" />
+        <span className="text-sm text-blue-600 dark:text-blue-400">
+          Boka prov hos Transportstyrelsen
+        </span>
+      </a>
+
+      {/* Milestone history */}
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map(n => <div key={n} className="h-8 bg-muted rounded-lg animate-pulse" />)}
+        </div>
+      ) : milestones.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Historik</p>
+          <div className="space-y-1.5">
+            {milestones.map(m => {
+              const meta = EXAM_MILESTONES.find(x => x.key === m.milestone);
+              return (
+                <div key={m.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
+                  <span className="text-foreground">{meta?.label ?? m.milestone}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(m.achieved_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -928,12 +2562,20 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
   ];
 
   const SUB_TABS: { key: UtbildningSubTab; label: string }[] = [
-    { key: 'behorigheteter',  label: 'Behörigheter' },
+    { key: 'behorigheteter',    label: 'Behörigheter'     },
+    { key: 'utbildningskort',   label: 'Utbildningskort'  },
+    { key: 'utbildningsplan',   label: 'Utbildningsplan'  },
+    { key: 'provresultat',      label: 'Provresultat'     },
     { key: 'korprovsprotokoll', label: 'Körprovsprotokoll' },
+    { key: 'lektionslogg',      label: 'Lektionslogg'      },
+    { key: 'korjournal',        label: 'Körjournal'        },
   ];
 
   return (
     <div className="space-y-0">
+      {/* Progress stats */}
+      <LessonProgressPanel studentId={student.id} />
+
       {/* Top action */}
       <div className="flex justify-end mb-4">
         <BlueBtn>Exportera körprocent</BlueBtn>
@@ -942,6 +2584,21 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
       <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
 
       <div className="pt-4 space-y-6">
+
+        {subTab === 'utbildningskort' && (
+          <AdminUtbildningskortPanel studentId={student.id} />
+        )}
+
+        {subTab === 'utbildningsplan' && (
+          <StudentTrainingPlanPanel
+            studentId={student.id}
+            licenceCategory={student.target_licence_category ?? 'B'}
+          />
+        )}
+
+        {subTab === 'provresultat' && (
+          <ExamResultsPanel student={student} />
+        )}
 
         {subTab === 'behorigheteter' && (
           <>
@@ -996,6 +2653,14 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
           </div>
         )}
 
+        {subTab === 'lektionslogg' && (
+          <LektionsloggTab studentId={student.id} />
+        )}
+
+        {subTab === 'korjournal' && (
+          <KorjournalTab studentId={student.id} />
+        )}
+
       </div>
     </div>
   );
@@ -1003,7 +2668,7 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
 
 // ─── Teorimaterial tab ────────────────────────────────────────────────────────
 
-function TeorimaterialTab({ licenceCat }: { licenceCat: string }) {
+function TeorimaterialTab({ licenceCat: _licenceCat }: { licenceCat: string }) {
   const [subTab, setSubTab] = useState<TeorimaterialSubTab>('teorimaterial');
 
   const SUB_TABS: { key: TeorimaterialSubTab; label: string }[] = [
@@ -1103,6 +2768,20 @@ function TeorimaterialTab({ licenceCat }: { licenceCat: string }) {
 
 // ─── Bokningar tab ────────────────────────────────────────────────────────────
 
+function buildScheduleText(bookings: LessonBooking[], firstName: string): string {
+  const tz = 'Europe/Stockholm';
+  const lines = bookings.slice(0, 10).map((b) => {
+    const s = new Date(b.starts_at);
+    const e = new Date(b.ends_at);
+    const day = s.toLocaleDateString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz });
+    const st  = s.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+    const et  = e.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+    return `• ${day} ${st}–${et}`;
+  });
+  const greeting = firstName ? `Hej ${firstName}! ` : 'Hej! ';
+  return `${greeting}Dina kommande lektioner:\n${lines.join('\n')}`;
+}
+
 function BokningarTab({
   student, fullName, upcomingBookings, onNewBooking,
 }: {
@@ -1116,18 +2795,55 @@ function BokningarTab({
   const [includePast,     setIncludePast]     = useState(false);
   const [allowBook,       setAllowBook]       = useState(true);
   const [allowCancel,     setAllowCancel]     = useState(true);
+  const [sending,         setSending]         = useState<'sms' | 'email' | null>(null);
+
+  const sendMessage = useSendMessage();
 
   const bookings: LessonBooking[] = upcomingBookings.data?.data ?? [];
+
+  // Auto-populate schedule text when bookings load
+  useEffect(() => {
+    if (bookings.length > 0 && !smsText) {
+      setSmsText(buildScheduleText(bookings, student.first_name));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings.length]);
+
+  async function handleSend(channel: 'sms' | 'email') {
+    const address = channel === 'sms' ? student.phone : student.email;
+    if (!address || !smsText.trim()) return;
+    setSending(channel);
+    try {
+      await sendMessage.mutateAsync({
+        channel,
+        recipient_type:    'student',
+        recipient_id:      student.id,
+        recipient_address: address,
+        body:              smsText,
+        ...(channel === 'email' ? { subject: 'Dina kommande lektioner' } : {}),
+        metadata: { type: 'booking_schedule' },
+      });
+      toast({ title: channel === 'sms' ? 'Schema skickat via SMS' : 'Schema skickat via e-post' });
+    } catch (e) {
+      toast({ title: 'Kunde inte skicka', description: e instanceof Error ? e.message : undefined, variant: 'destructive' });
+    } finally {
+      setSending(null);
+    }
+  }
 
   // Past bookings — all completed/cancelled/no-show before today
   const pastBookingsQuery = useBookingList({
     student_id: student.id,
-    to:         new Date().toISOString(),
+    from:       PROGRESS_RANGE.from,
+    to:         PROGRESS_RANGE.to,
     sort_by:    'starts_at',
     sort_dir:   'desc',
     per_page:   20,
   });
   const pastBookings: LessonBooking[] = pastBookingsQuery.data?.data ?? [];
+
+  const [cancelTarget,     setCancelTarget]     = useState<{ bookingId: string; slotId: string; slotLabel: string } | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<{ bookingId: string; slotId: string } | null>(null);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6 items-start">
@@ -1161,7 +2877,8 @@ function BokningarTab({
             ) : bookings.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">Denna elev har inga kommande bokningar.</p>
             ) : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[480px]">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Bokning</th>
@@ -1173,10 +2890,16 @@ function BokningarTab({
                 </thead>
                 <tbody>
                   {bookings.map((b) => (
-                    <BokningRow key={b.id} booking={b} />
+                    <BokningRow
+                      key={b.id}
+                      booking={b}
+                      onCancel={(id, slotId, slotLabel) => setCancelTarget({ bookingId: id, slotId, slotLabel })}
+                      onReschedule={(id, slotId) => setRescheduleTarget({ bookingId: id, slotId })}
+                    />
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
           <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
@@ -1203,7 +2926,8 @@ function BokningarTab({
             ) : pastBookings.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">Denna elev har inga tidigare bokningar.</p>
             ) : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[360px]">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Bokning</th>
@@ -1218,6 +2942,7 @@ function BokningarTab({
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         </div>
@@ -1245,6 +2970,14 @@ function BokningarTab({
                   <td className="py-1">Lektion</td>
                   <td className="py-1 text-right">{bookings.length} st</td>
                 </tr>
+                {bookings[0] && (
+                  <tr>
+                    <td className="py-1 text-muted-foreground">Nästa</td>
+                    <td className="py-1 text-right">
+                      {new Date(bookings[0].starts_at).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' })}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           )}
@@ -1302,21 +3035,33 @@ function BokningarTab({
           <p className="text-[10px] text-muted-foreground mb-2">Antal tecken: {smsText.length}</p>
           <div className="flex gap-2">
             <button
-              disabled
-              title="Sändning av SMS under implementation"
-              className="flex-1 py-2 text-xs font-medium rounded bg-green-600/40 text-white cursor-not-allowed"
+              disabled={!student.phone || !!sending}
+              onClick={() => void handleSend('sms')}
+              title={!student.phone ? 'Eleven saknar telefonnummer' : undefined}
+              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
             >
+              {sending === 'sms' && <Loader2 className="w-3 h-3 animate-spin" />}
               Skicka SMS
             </button>
             <button
-              disabled
-              title="Sändning av e-post under implementation"
-              className="flex-1 py-2 text-xs font-medium rounded bg-green-600/40 text-white cursor-not-allowed"
+              disabled={!student.email || !!sending}
+              onClick={() => void handleSend('email')}
+              title={!student.email ? 'Eleven saknar e-postadress' : undefined}
+              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
             >
+              {sending === 'email' && <Loader2 className="w-3 h-3 animate-spin" />}
               Skicka e-post
             </button>
           </div>
-          <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Utskick under implementation</p>
+          {(!student.phone || !student.email) && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {!student.phone && !student.email
+                ? 'Eleven saknar telefon och e-post'
+                : !student.phone
+                  ? 'Eleven saknar telefonnummer — SMS ej tillgängligt'
+                  : 'Eleven saknar e-postadress — e-post ej tillgängligt'}
+            </p>
+          )}
         </div>
 
         {/* Exportera PDF */}
@@ -1378,11 +3123,38 @@ function BokningarTab({
         </div>
 
       </div>
+
+      <CancelBookingDialog
+        open={cancelTarget !== null}
+        onOpenChange={(o) => { if (!o) setCancelTarget(null); }}
+        bookingId={cancelTarget?.bookingId ?? null}
+        slotId={cancelTarget?.slotId ?? ''}
+        student={student}
+        slotLabel={cancelTarget?.slotLabel}
+        onSuccess={() => setCancelTarget(null)}
+      />
+      <RescheduleBookingDialog
+        open={rescheduleTarget !== null}
+        onOpenChange={(o) => { if (!o) setRescheduleTarget(null); }}
+        bookingId={rescheduleTarget?.bookingId ?? null}
+        currentSlotId={rescheduleTarget?.slotId ?? ''}
+        studentName={fullName}
+        student={student}
+        onSuccess={() => setRescheduleTarget(null)}
+      />
     </div>
   );
 }
 
-function BokningRow({ booking }: { booking: LessonBooking }) {
+function BokningRow({
+  booking,
+  onCancel,
+  onReschedule,
+}: {
+  booking:       LessonBooking;
+  onCancel?:     (bookingId: string, slotId: string, slotLabel: string) => void;
+  onReschedule?: (bookingId: string, slotId: string) => void;
+}) {
   const dateStr = new Date(booking.starts_at).toLocaleDateString('sv-SE', {
     weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
   });
@@ -1403,10 +3175,23 @@ function BokningRow({ booking }: { booking: LessonBooking }) {
         {booking.price_sek != null ? `${booking.price_sek} kr` : '—'}
       </td>
       <td className="px-3 py-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <BookingStatusBadge status={booking.status} />
-          {!terminal && (
-            <button className="text-[10px] text-red-500 hover:underline">Avboka</button>
+          {!terminal && onReschedule && (
+            <button
+              onClick={() => onReschedule(booking.id, booking.slot_id)}
+              className="text-[10px] text-blue-600 hover:underline"
+            >
+              Boka om
+            </button>
+          )}
+          {!terminal && onCancel && (
+            <button
+              onClick={() => onCancel(booking.id, booking.slot_id, `${dateStr} ${timeStr}`)}
+              className="text-[10px] text-red-500 hover:underline"
+            >
+              Avboka
+            </button>
           )}
           <Link
             to={`/scheduling?date=${dateOnly}`}
@@ -1425,22 +3210,217 @@ function BokningRow({ booking }: { booking: LessonBooking }) {
 
 function EkonomiTab({ studentId }: { studentId: string }) {
   return (
-    <div>
-      <h2 className="text-sm font-semibold text-blue-600 mb-4">Ekonomi</h2>
-      <StudentFinancePanel studentId={studentId} />
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-sm font-semibold text-blue-600 mb-4">Paket &amp; krediter</h2>
+        <StudentPackagePanel studentId={studentId} />
+      </div>
+      <div>
+        <h2 className="text-sm font-semibold text-blue-600 mb-4">Ekonomi</h2>
+        <StudentFinancePanel studentId={studentId} />
+      </div>
     </div>
   );
 }
 
 // ─── Loggar tab ───────────────────────────────────────────────────────────────
 
-const LOG_COMING_SOON: Record<LogSubTab, { title: string; desc: string }> = {
-  bokningsloggar:       { title: 'Bokningsloggar',       desc: 'Alla boknings- och statusändringar för denna elev loggas här. Under implementation.' },
-  kommunikationsloggar: { title: 'Kommunikationsloggar', desc: 'SMS, e-post och systemmeddelandehistorik för denna elev visas här. Under implementation.' },
-  aktivitetsloggar:     { title: 'Aktivitetsloggar',     desc: 'Administratörsåtgärder, profiländringar och systemhändelser visas här. Under implementation.' },
+type BookingLogRow = {
+  id:         string;
+  starts_at:  string;
+  ends_at:    string;
+  status:     string;
+  created_at: string;
 };
 
-function LoggarTab() {
+const BOOKING_STATUS_SV: Record<string, { label: string; color: string }> = {
+  pending:    { label: 'Väntande',   color: 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-400 dark:border-yellow-800/50' },
+  confirmed:  { label: 'Bekräftad', color: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800/50' },
+  completed:  { label: 'Genomförd', color: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800/50' },
+  no_show:    { label: 'Uteblev',   color: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800/50' },
+  cancelled:  { label: 'Avbokad',   color: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/50' },
+  waitlisted: { label: 'Väntelista', color: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-800/50' },
+};
+
+function LogEmptyState({ icon: Icon, text }: { icon: React.ComponentType<{ className?: string }>; text: string }) {
+  return (
+    <div className="bg-card border border-border rounded-lg py-12 text-center space-y-3">
+      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto">
+        <Icon className="w-5 h-5 text-muted-foreground" />
+      </div>
+      <p className="text-sm text-muted-foreground">{text}</p>
+    </div>
+  );
+}
+
+function BokningsloggarPanel({ studentId }: { studentId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['student-all-bookings', studentId],
+    queryFn: async () => {
+      const { data: rows } = await supabase
+        .from('lesson_bookings')
+        .select('id, starts_at, ends_at, status, created_at')
+        .eq('student_id', studentId)
+        .is('deleted_at', null)
+        .order('starts_at', { ascending: false })
+        .limit(100);
+      return (rows ?? []) as BookingLogRow[];
+    },
+    staleTime: 2 * 60_000,
+  });
+
+  if (isLoading) {
+    return <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}</div>;
+  }
+  if (!data?.length) {
+    return <LogEmptyState icon={Calendar} text="Inga bokningar registrerade för denna elev." />;
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-muted/20">
+        <p className="text-xs font-semibold text-muted-foreground">{data.length} bokningar totalt</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[480px]">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Datum</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Tid</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Längd</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Status</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Bokad</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((b) => {
+              const dateStr   = new Date(b.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+              const timeStr   = `${formatTime(b.starts_at)} – ${formatTime(b.ends_at)}`;
+              const mins      = Math.round((new Date(b.ends_at).getTime() - new Date(b.starts_at).getTime()) / 60_000);
+              const si        = BOOKING_STATUS_SV[b.status] ?? { label: b.status, color: 'bg-muted text-muted-foreground border-border' };
+              const bookedStr = new Date(b.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
+              return (
+                <tr key={b.id} className="border-b border-border/50 last:border-0 hover:bg-muted/10 transition-colors">
+                  <td className="px-4 py-2.5 text-xs capitalize text-foreground">{dateStr}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{timeStr}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{mins} min</td>
+                  <td className="px-4 py-2.5">
+                    <span className={cn('text-[10px] font-medium px-1.5 py-0.5 rounded border', si.color)}>{si.label}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-[10px] text-muted-foreground">{bookedStr}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function KommunikationsloggarPanel({ studentId }: { studentId: string }) {
+  const { data: msgData, isLoading } = useStudentMessages(studentId);
+  const messages = msgData?.data ?? [];
+
+  if (isLoading) {
+    return <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>;
+  }
+  if (!messages.length) {
+    return <LogEmptyState icon={MessageSquare} text="Inga meddelanden skickade till denna elev." />;
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-muted/20">
+        <p className="text-xs font-semibold text-muted-foreground">{messages.length} meddelanden totalt</p>
+      </div>
+      <div className="divide-y divide-border">
+        {messages.map((msg) => (
+          <div key={msg.id} className="px-4 py-3 flex items-start gap-3 hover:bg-muted/10 transition-colors">
+            <ChannelBadge channel={msg.channel} />
+            <div className="flex-1 min-w-0">
+              {msg.subject && <p className="text-xs font-medium text-foreground truncate">{msg.subject}</p>}
+              <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{msg.body}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {new Date(msg.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+            <StatusBadge status={msg.status} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AktivitetsloggarPanel({ studentId }: { studentId: string }) {
+  const { data: bookingData } = useQuery<BookingLogRow[]>({
+    queryKey: ['student-all-bookings', studentId],
+    queryFn: async () => {
+      const { data: rows } = await supabase
+        .from('lesson_bookings')
+        .select('id, starts_at, ends_at, status, created_at')
+        .eq('student_id', studentId)
+        .is('deleted_at', null)
+        .order('starts_at', { ascending: false })
+        .limit(50);
+      return (rows ?? []) as BookingLogRow[];
+    },
+    staleTime: 2 * 60_000,
+  });
+  const { data: msgData } = useStudentMessages(studentId);
+
+  const events = useMemo(() => {
+    type ActivityEvent = {
+      id: string; at: string; type: 'booking' | 'message';
+      label: string; sub: string; status: string;
+    };
+    const items: ActivityEvent[] = [];
+
+    for (const b of bookingData ?? []) {
+      const dateStr  = new Date(b.starts_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
+      const statusSv = BOOKING_STATUS_SV[b.status]?.label ?? b.status;
+      items.push({ id: b.id, at: b.created_at, type: 'booking', label: `Lektion ${dateStr}`, sub: statusSv, status: b.status });
+    }
+    for (const m of msgData?.data ?? []) {
+      const chanLabel = m.channel === 'email' ? 'E-post' : m.channel === 'sms' ? 'SMS' : m.channel;
+      const preview   = m.body.length > 60 ? m.body.slice(0, 60) + '…' : m.body;
+      items.push({ id: m.id, at: m.created_at, type: 'message', label: `${chanLabel} skickat`, sub: preview, status: m.status });
+    }
+    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 60);
+  }, [bookingData, msgData]);
+
+  if (!events.length) {
+    return <LogEmptyState icon={ClipboardList} text="Ingen aktivitetshistorik registrerad." />;
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border bg-muted/20">
+        <p className="text-xs font-semibold text-muted-foreground">{events.length} händelser</p>
+      </div>
+      <div className="divide-y divide-border">
+        {events.map((ev, idx) => (
+          <div key={`${ev.id}-${idx}`} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/10 transition-colors">
+            <div className={cn(
+              'mt-1.5 w-2 h-2 rounded-full shrink-0',
+              ev.type === 'booking' ? 'bg-blue-500' : 'bg-emerald-500',
+            )} />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-foreground">{ev.label}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{ev.sub}</p>
+            </div>
+            <p className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
+              {new Date(ev.at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoggarTab({ studentId }: { studentId: string }) {
   const [subTab, setSubTab] = useState<LogSubTab>('bokningsloggar');
 
   const SUB_TABS: { key: LogSubTab; label: string }[] = [
@@ -1449,24 +3429,13 @@ function LoggarTab() {
     { key: 'aktivitetsloggar',      label: 'Aktivitetsloggar' },
   ];
 
-  const info = LOG_COMING_SOON[subTab];
-
   return (
     <div>
       <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
       <div className="pt-4">
-        <div className="bg-card border border-border rounded-lg p-8 text-center space-y-3">
-          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto">
-            <ClipboardList className="w-5 h-5 text-muted-foreground" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-foreground">{info.title}</p>
-            <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">{info.desc}</p>
-          </div>
-          <span className="inline-block text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-            Kommer snart
-          </span>
-        </div>
+        {subTab === 'bokningsloggar'       && <BokningsloggarPanel studentId={studentId} />}
+        {subTab === 'kommunikationsloggar' && <KommunikationsloggarPanel studentId={studentId} />}
+        {subTab === 'aktivitetsloggar'     && <AktivitetsloggarPanel studentId={studentId} />}
       </div>
     </div>
   );
@@ -1494,25 +3463,49 @@ const SMS_TEMPLATES = [
 
 const SMS_MAX = 1300;
 
-function SmsTab({ studentName, studentPhone }: { studentName: string; studentPhone: string | null }) {
+function SmsTab({ studentId, studentName, studentPhone }: {
+  studentId:    string;
+  studentName:  string;
+  studentPhone: string | null;
+}) {
   const [selected,  setSelected]  = useState(true);
   const [template,  setTemplate]  = useState('');
   const [message,   setMessage]   = useState('');
-  const [, setSending] = useState(false);
 
-  const sender    = 'E-Trafikskol';
+  const sender    = 'Trafikskolan';
   const signature = 'Detta SMS kan inte besvaras.';
   const remaining = SMS_MAX - message.length;
   const smsCount  = Math.ceil(Math.max(1, message.length) / 160);
 
+  const sendMessage  = useSendMessage();
+  const { data: messagesData, isLoading: historyLoading } = useStudentMessages(studentId);
+  const messages = messagesData?.data ?? [];
+
   function handleSend() {
-    if (!selected || !message.trim()) return;
-    setSending(true);
-    setTimeout(() => {
-      setSending(false);
-      setMessage('');
-      setTemplate('');
-    }, 1000);
+    if (!selected || !message.trim() || !studentPhone) return;
+    const fullBody = message + '\n' + signature;
+    sendMessage.mutate(
+      {
+        channel:           'sms',
+        recipient_type:    'student',
+        recipient_id:      studentId,
+        recipient_address: studentPhone,
+        body:              fullBody,
+        metadata:          { manual: true },
+      },
+      {
+        onSuccess: () => {
+          toast({ title: 'SMS skickat' });
+          setMessage('');
+          setTemplate('');
+        },
+        onError: (e) => toast({
+          title:       'Kunde inte skicka SMS',
+          description: e instanceof Error ? e.message : undefined,
+          variant:     'destructive',
+        }),
+      }
+    );
   }
 
   function handleTemplate(val: string) {
@@ -1618,35 +3611,52 @@ function SmsTab({ studentName, studentPhone }: { studentName: string; studentPho
             Återställ
           </button>
           <button
-            disabled
-            className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background text-muted-foreground opacity-50 cursor-not-allowed"
-          >
-            Förhandsvisning
-          </button>
-          <button
             onClick={handleSend}
-            disabled={!selected || !message.trim() || !studentPhone}
+            disabled={!selected || !message.trim() || !studentPhone || sendMessage.isPending}
             className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Skicka SMS
+            {sendMessage.isPending ? 'Skickar...' : 'Skicka SMS'}
           </button>
         </div>
         {!studentPhone && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">Ingen mobilnummer registrerat för denna elev.</p>
+          <p className="text-xs text-amber-600 dark:text-amber-400">Inget mobilnummer registrerat för denna elev.</p>
         )}
       </div>
 
       {/* Message history */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-border bg-muted/20">
+        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meddelandehistorik</p>
+          {messages.length > 0 && (
+            <span className="text-[10px] text-muted-foreground">{messages.length} meddelanden</span>
+          )}
         </div>
-        <div className="p-4 text-center py-12">
-          <p className="text-xs text-muted-foreground">Inga SMS-meddelanden hittades för denna elev.</p>
-          <span className="inline-block mt-2 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-            SMS-historik aktiveras med integrerat SMS-system
-          </span>
-        </div>
+        {historyLoading ? (
+          <div className="p-4 space-y-2">
+            {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="p-4 text-center py-12">
+            <p className="text-xs text-muted-foreground">Inga meddelanden skickade till denna elev.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {messages.map((msg) => (
+              <div key={msg.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
+                <ChannelBadge channel={msg.channel} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-foreground line-clamp-2">{msg.body}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {new Date(msg.created_at).toLocaleDateString('sv-SE', {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </p>
+                </div>
+                <StatusBadge status={msg.status} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
     </div>
@@ -1655,25 +3665,128 @@ function SmsTab({ studentName, studentPhone }: { studentName: string; studentPho
 
 // ─── E-post tab ───────────────────────────────────────────────────────────────
 
-function EpostTab({ studentEmail }: { studentEmail: string | null }) {
+function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail: string | null }) {
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const sendMessage = useSendMessage();
+  const { data: msgData, isLoading } = useStudentMessages(studentId);
+  const emails = useMemo(() => (msgData?.data ?? []).filter((m) => m.channel === 'email'), [msgData]);
+
+  function handleSend() {
+    if (!studentEmail || !message.trim()) return;
+    sendMessage.mutate(
+      {
+        channel:           'email',
+        recipient_type:    'student',
+        recipient_id:      studentId,
+        recipient_address: studentEmail,
+        subject:           subject || undefined,
+        body:              message,
+        metadata:          { manual: true },
+      },
+      {
+        onSuccess: () => {
+          toast({ title: 'E-post skickad' });
+          setMessage('');
+          setSubject('');
+        },
+        onError: (e) => toast({
+          title:       'Kunde inte skicka e-post',
+          description: e instanceof Error ? e.message : undefined,
+          variant:     'destructive',
+        }),
+      }
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <p className="text-sm text-muted-foreground">
-          E-post: <span className="font-medium text-foreground">{studentEmail ?? '—'}</span>
-        </p>
-      </div>
-      <div className="bg-card border border-border rounded-lg p-8 text-center space-y-3">
-        <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center mx-auto">
-          <Mail className="w-5 h-5 text-muted-foreground" />
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+
+      {/* Compose */}
+      <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+        <SectionHeading title="Skicka e-post" />
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Till</label>
+          <input
+            type="text"
+            value={studentEmail ?? 'Ingen e-postadress registrerad'}
+            readOnly
+            className="w-full h-8 px-2.5 text-sm rounded border border-input bg-muted/20 text-muted-foreground"
+          />
         </div>
-        <p className="text-sm font-medium text-foreground">E-posthistorik</p>
-        <p className="text-xs text-muted-foreground max-w-xs mx-auto">
-          Skickade e-postmeddelanden till denna elev visas här när e-postintegrationen är aktiv.
-        </p>
-        <span className="inline-block text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-          Aktiveras med e-postintegrering
-        </span>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Ämne</label>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Ämnesrad (valfritt)"
+            className="w-full h-8 px-2.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Meddelande</label>
+          <textarea
+            rows={6}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Skriv ditt meddelande..."
+            className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+          />
+        </div>
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={() => { setMessage(''); setSubject(''); }}
+            className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background hover:bg-accent text-foreground transition-colors"
+          >
+            Återställ
+          </button>
+          <button
+            onClick={handleSend}
+            disabled={!studentEmail || !message.trim() || sendMessage.isPending}
+            className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+            {sendMessage.isPending ? 'Skickar...' : 'Skicka e-post'}
+          </button>
+        </div>
+        {!studentEmail && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">Ingen e-postadress registrerad för denna elev.</p>
+        )}
+      </div>
+
+      {/* History */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">E-posthistorik</p>
+          {emails.length > 0 && <span className="text-[10px] text-muted-foreground">{emails.length} meddelanden</span>}
+        </div>
+        {isLoading ? (
+          <div className="p-4 space-y-2">{[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}</div>
+        ) : emails.length === 0 ? (
+          <div className="py-12 text-center space-y-2">
+            <Mail className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+            <p className="text-xs text-muted-foreground">Inga e-postmeddelanden skickade till denna elev.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {emails.map((msg) => (
+              <div key={msg.id} className="px-3 py-3 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
+                <Mail className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  {msg.subject && (
+                    <p className="text-xs font-medium text-foreground truncate">{msg.subject}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{msg.body}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {new Date(msg.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+                <StatusBadge status={msg.status} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1943,9 +4056,407 @@ function HistorikTab({ studentId }: { studentId: string }) {
   );
 }
 
-// ─── Övrigt tab (Bokningar + Teorimaterial + Loggar) ─────────────────────────
+// ─── Avtal tab ────────────────────────────────────────────────────────────────
 
-type OvrigtSubTab = 'bokningar' | 'teorimaterial' | 'loggar';
+function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
+  const [contractOpen, setContractOpen] = useState(false);
+  const { data: msgData, isLoading, refetch } = useStudentMessages(student.id);
+
+  const { data: termsData } = useQuery({
+    queryKey: ['student-terms', student.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('student_terms_acceptances')
+        .select('terms_version, accepted_at')
+        .eq('student_id', student.id)
+        .eq('organization_id', student.organization_id)
+        .maybeSingle();
+      return data as { terms_version: string; accepted_at: string } | null;
+    },
+    staleTime: 60_000,
+  });
+
+  const contracts = useMemo(
+    () => (msgData?.data ?? []).filter(
+      (m) => (m.metadata as Record<string, unknown>)?.['type'] === 'contract',
+    ),
+    [msgData],
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Portal T&C acceptance status */}
+      <div className="border border-border rounded-lg p-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-foreground">Villkorsgodkännande (elevportal)</p>
+            {termsData ? (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Accepterat {new Date(termsData.accepted_at).toLocaleDateString('sv-SE')} · Version {termsData.terms_version}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground/60 mt-0.5">Ej godkänt via elevportalen</p>
+            )}
+          </div>
+        </div>
+        <span className={cn(
+          'text-xs font-semibold px-2 py-0.5 rounded-full shrink-0',
+          termsData
+            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+            : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+        )}>
+          {termsData ? 'Godkänt' : 'Ej godkänt'}
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground">Avtal</h3>
+        <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+          <Button size="sm" className="gap-1.5" onClick={() => setContractOpen(true)}>
+            <Plus className="w-3.5 h-3.5" />
+            Nytt avtal
+          </Button>
+        </PermissionGate>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+        </div>
+      ) : contracts.length === 0 ? (
+        <div className="border border-dashed border-border rounded-lg py-12 text-center space-y-2">
+          <FileText className="w-8 h-8 text-muted-foreground/30 mx-auto" />
+          <p className="text-sm text-muted-foreground">Inga avtal har skickats till denna elev.</p>
+          <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 mt-2"
+              onClick={() => setContractOpen(true)}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Skapa och skicka avtal
+            </Button>
+          </PermissionGate>
+        </div>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              {contracts.length} avtal skickade
+            </span>
+            <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+              <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setContractOpen(true)}>
+                <Plus className="w-3 h-3" />
+                Nytt avtal
+              </Button>
+            </PermissionGate>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Typ</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Skickat</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide hidden sm:table-cell">Mottagare</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contracts.map((contract) => (
+                <tr key={contract.id} className="border-b border-border/50 last:border-0 hover:bg-muted/10 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-sm">Utbildningsavtal</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {formatDateTime(contract.sent_at ?? contract.created_at)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={contract.status} />
+                  </td>
+                  <td className="px-4 py-3 hidden sm:table-cell">
+                    <span className="text-xs text-muted-foreground">{contract.recipient_address}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <ContractSheet
+        student={student}
+        open={contractOpen}
+        onOpenChange={setContractOpen}
+        onSent={() => { void refetch(); }}
+      />
+    </div>
+  );
+}
+
+// ─── Dokument admin tab ───────────────────────────────────────────────────────
+
+const DOC_CATEGORY_OPTIONS = [
+  { value: 'enrollment_contract', label: 'Utbildningsavtal' },
+  { value: 'identity_document',   label: 'ID-handling' },
+  { value: 'medical_clearance',   label: 'Läkarintyg' },
+  { value: 'theory_result',       label: 'Kunskapsprov' },
+  { value: 'risk_education',      label: 'Riskutbildning' },
+  { value: 'practical_result',    label: 'Körprov' },
+  { value: 'licence_copy',        label: 'Körkortskopia' },
+  { value: 'other',               label: 'Övrigt' },
+];
+
+const DOC_CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+  DOC_CATEGORY_OPTIONS.map(o => [o.value, o.label])
+);
+
+const DOC_ICON: Record<string, React.ElementType> = {
+  medical_clearance:   ShieldCheck,
+  risk_education:      ShieldCheck,
+};
+
+type StudentDoc = {
+  id: string;
+  category: string;
+  file_name: string;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  description: string | null;
+  status: string;
+  expires_at: string | null;
+  storage_path: string;
+  storage_bucket: string;
+  created_at: string;
+};
+
+function fmtBytes(b: number | null): string {
+  if (!b) return '';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: string }) {
+  const qc = useQueryClient();
+  const [category, setCategory]     = useState('enrollment_contract');
+  const [description, setDescription] = useState('');
+  const [uploading, setUploading]   = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const { data: docs, isLoading } = useQuery({
+    queryKey: ['student-documents', studentId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('student_documents')
+        .select('id, category, file_name, mime_type, file_size_bytes, description, status, expires_at, storage_path, storage_bucket, created_at')
+        .eq('student_id', studentId)
+        .eq('organization_id', orgId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as StudentDoc[];
+    },
+    staleTime: 30_000,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (doc: StudentDoc) => {
+      await supabase.storage.from(doc.storage_bucket).remove([doc.storage_path]);
+      const { error } = await supabase
+        .from('student_documents')
+        .update({ deleted_at: new Date().toISOString() } as never)
+        .eq('id', doc.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['student-documents', studentId] });
+      toast({ title: 'Dokument borttaget' });
+    },
+    onError: () => toast({ title: 'Kunde inte ta bort dokumentet', variant: 'destructive' }),
+  });
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    try {
+      const ext    = file.name.split('.').pop() ?? '';
+      const path   = `${orgId}/${studentId}/${crypto.randomUUID()}.${ext}`;
+      const bucket = 'student-documents';
+
+      const { error: uploadErr } = await supabase.storage
+        .from(bucket)
+        .upload(path, file, { contentType: file.type, upsert: false });
+
+      if (uploadErr) throw uploadErr;
+
+      const { error: insertErr } = await supabase
+        .from('student_documents')
+        .insert({
+          organization_id:  orgId,
+          student_id:       studentId,
+          category,
+          status:           'approved',
+          file_name:        file.name,
+          storage_path:     path,
+          storage_bucket:   bucket,
+          mime_type:        file.type || null,
+          file_size_bytes:  file.size,
+          description:      description.trim() || null,
+          uploaded_by:      (await supabase.auth.getUser()).data.user?.id ?? '',
+        } as never);
+
+      if (insertErr) {
+        await supabase.storage.from(bucket).remove([path]);
+        throw insertErr;
+      }
+
+      void qc.invalidateQueries({ queryKey: ['student-documents', studentId] });
+      toast({ title: 'Dokument uppladdat' });
+      setDescription('');
+      if (fileRef.current) fileRef.current.value = '';
+    } catch {
+      toast({ title: 'Uppladdning misslyckades — kontrollera filformat och försök igen', variant: 'destructive' });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleDownload(doc: StudentDoc) {
+    const { data } = await supabase.storage
+      .from(doc.storage_bucket)
+      .createSignedUrl(doc.storage_path, 300);
+    if (data?.signedUrl) {
+      const a = document.createElement('a');
+      a.href = data.signedUrl;
+      a.download = doc.file_name;
+      a.click();
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Upload form */}
+      <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+        <div className="border border-border rounded-lg p-4 space-y-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Ladda upp dokument</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Kategori</label>
+              <select
+                value={category}
+                onChange={e => setCategory(e.target.value)}
+                className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {DOC_CATEGORY_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Beskrivning (valfri)</label>
+              <input
+                type="text"
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="t.ex. Risk 1 intyg 2024"
+                className="w-full h-8 px-2.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className={cn(
+              'flex items-center gap-2 px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors',
+              uploading
+                ? 'border-input text-muted-foreground opacity-50 cursor-not-allowed'
+                : 'border-primary text-primary hover:bg-primary/5'
+            )}>
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {uploading ? 'Laddar upp…' : 'Välj fil'}
+              <input
+                ref={fileRef}
+                type="file"
+                className="hidden"
+                disabled={uploading}
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                onChange={handleFileUpload}
+              />
+            </label>
+            <span className="text-xs text-muted-foreground">PDF, JPG, PNG, DOCX — max 10 MB</span>
+          </div>
+        </div>
+      </PermissionGate>
+
+      {/* Document list */}
+      {isLoading && (
+        <div className="py-6 flex justify-center">
+          <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      {!isLoading && (!docs || docs.length === 0) && (
+        <div className="py-8 text-center text-sm text-muted-foreground">
+          Inga uppladdade dokument
+        </div>
+      )}
+
+      {!isLoading && docs && docs.length > 0 && (
+        <div className="space-y-1">
+          {docs.map(doc => {
+            const Icon = DOC_ICON[doc.category] ?? FileText;
+            return (
+              <div key={doc.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border bg-card hover:bg-accent/20 transition-colors">
+                <Icon className="w-4 h-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{doc.file_name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {DOC_CATEGORY_LABELS[doc.category] ?? doc.category}
+                    {doc.description && ` — ${doc.description}`}
+                    {doc.file_size_bytes && ` · ${fmtBytes(doc.file_size_bytes)}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => void handleDownload(doc)}
+                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title="Ladda ned"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                  <PermissionGate permission={Permissions.DOCUMENTS_DELETE}>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Ta bort "${doc.file_name}"?`)) {
+                          deleteMutation.mutate(doc);
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                      className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      title="Ta bort"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </PermissionGate>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Övrigt tab (Bokningar + Teorimaterial + Loggar + Dokument) ───────────────
+
+type OvrigtSubTab = 'bokningar' | 'teorimaterial' | 'loggar' | 'dokument';
 
 function OvrigtTab({
   student, fullName, upcomingBookings, onNewBooking, licenceCat,
@@ -1962,6 +4473,7 @@ function OvrigtTab({
     { key: 'bokningar',    label: 'Bokningar' },
     { key: 'teorimaterial', label: 'Teorimaterial' },
     { key: 'loggar',       label: 'Loggar' },
+    { key: 'dokument',     label: 'Dokument' },
   ];
 
   return (
@@ -1979,7 +4491,10 @@ function OvrigtTab({
         {subTab === 'teorimaterial' && (
           <TeorimaterialTab licenceCat={licenceCat} />
         )}
-        {subTab === 'loggar' && <LoggarTab />}
+        {subTab === 'loggar' && <LoggarTab studentId={student.id} />}
+        {subTab === 'dokument' && (
+          <DokumentAdminTab studentId={student.id} orgId={student.organization_id} />
+        )}
       </div>
     </div>
   );

@@ -25,9 +25,12 @@
  *   Write operations on channels and templates additionally require admin/manager/owner role.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors }            from '../_shared/cors.ts';
-import { getOrgIdFromBearer, getUserIdFromBearer, getRoleFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext }     from '../_shared/context.ts';
+import { createServiceClient }  from '../_shared/supabase.ts';
+import { getRoleFromBearer }    from '../_shared/jwt.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { requireFeature }       from '../_shared/subscription.ts';
 import { dispatchMessage }      from '../_shared/comm-providers.ts';
 import { applyTemplateVars }    from '../_shared/template-utils.ts';
 
@@ -83,10 +86,11 @@ function extractPath(req: Request): PathParts {
   // /send
   if (first === 'send') return { id: null, action: 'send', sub: null };
 
-  // /analytics, /queue-health, /bulk-retry
-  if (first === 'analytics')    return { id: null, action: 'analytics',    sub: null };
-  if (first === 'queue-health') return { id: null, action: 'queue-health', sub: null };
-  if (first === 'bulk-retry')   return { id: null, action: 'bulk-retry',   sub: null };
+  // /analytics, /queue-health, /bulk-retry, /seed-defaults
+  if (first === 'analytics')     return { id: null, action: 'analytics',     sub: null };
+  if (first === 'queue-health')  return { id: null, action: 'queue-health',  sub: null };
+  if (first === 'bulk-retry')    return { id: null, action: 'bulk-retry',    sub: null };
+  if (first === 'seed-defaults') return { id: null, action: 'seed-defaults', sub: null };
 
   // /:uuid/(retry|cancel)
   if (UUID_RE.test(first)) return { id: first, action: second, sub: null };
@@ -116,18 +120,24 @@ async function isDailyLimitExceeded(supabase: any, orgId: string, channel: strin
 
 Deno.serve((req: Request) => serveCors(req, async () => {
 
-  const orgId  = getOrgIdFromBearer(req);
-  const userId = getUserIdFromBearer(req);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  if (!orgId || !userId) {
-    return err('Unauthorized — missing organization context', 401, 'UNAUTHORIZED');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
   }
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    { auth: { persistSession: false } },
-  );
+  const subGuard = requireFeature(ctx, 'communication:templates:manage');
+  if (subGuard) return subGuard;
+
+  const orgId  = ctx.organizationId!;
+  const userId = ctx.actorId!;
+
+  const supabase = createServiceClient();
 
   const { method } = req;
   const { id, action, sub } = extractPath(req);
@@ -536,19 +546,43 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (action === 'analytics') {
       if (method !== 'GET') return err('Method not allowed', 405);
 
-      const days  = Math.min(Math.max(1, parseInt(sp.get('days') ?? '7', 10)), 90);
-      const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+      const days   = Math.min(Math.max(1, parseInt(sp.get('days') ?? '7', 10)), 90);
+      const format = sp.get('format') ?? 'summary';
+      const since  = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 
       const { data, error } = await supabase
         .from('communication_daily_stats')
         .select('channel, status, stat_date, message_count')
         .eq('organization_id', orgId)
-        .gte('stat_date', since);
+        .gte('stat_date', since)
+        .order('stat_date', { ascending: true });
       if (error) throw error;
 
-      // Aggregate per channel
+      const rows = (data ?? []) as Array<{ channel: string; status: string; stat_date: string; message_count: number }>;
+
+      // ?format=daily — return per-day totals (all channels combined) for trend charts
+      if (format === 'daily') {
+        const byDate = new Map<string, { total: number; sent: number; failed: number }>();
+        for (const row of rows) {
+          if (!byDate.has(row.stat_date)) byDate.set(row.stat_date, { total: 0, sent: 0, failed: 0 });
+          const acc = byDate.get(row.stat_date)!;
+          acc.total += row.message_count;
+          if (row.status === 'sent'  || row.status === 'delivered') acc.sent   += row.message_count;
+          if (row.status === 'failed'|| row.status === 'bounced')   acc.failed += row.message_count;
+        }
+        // Fill every calendar date in the range (including empty days)
+        const daily: Array<{ date: string; total: number; sent: number; failed: number }> = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d    = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
+          const acc  = byDate.get(d) ?? { total: 0, sent: 0, failed: 0 };
+          daily.push({ date: d, ...acc });
+        }
+        return json({ data: daily, days, format: 'daily' });
+      }
+
+      // Default: aggregate per channel
       const byChannel = new Map<string, { total: number; sent: number; failed: number; queued: number }>();
-      for (const row of (data ?? []) as Array<{ channel: string; status: string; stat_date: string; message_count: number }>) {
+      for (const row of rows) {
         if (!byChannel.has(row.channel)) byChannel.set(row.channel, { total: 0, sent: 0, failed: 0, queued: 0 });
         const acc = byChannel.get(row.channel)!;
         acc.total += row.message_count;
@@ -620,20 +654,37 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // SEED DEFAULTS
+    // ══════════════════════════════════════════════════════════════════════════
+    // Seeds default channel_configs + notification_rules for this org using
+    // system-level templates. Safe to call multiple times (idempotent).
+
+    if (action === 'seed-defaults') {
+      if (method !== 'POST') return err('Method not allowed', 405);
+      const role = getRoleFromBearer(req);
+      if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden — requires admin role', 403, 'FORBIDDEN');
+
+      const { data, error } = await supabase.rpc('seed_org_communication', { p_org_id: orgId });
+      if (error) throw error;
+      return json({ success: true, ...(data as Record<string, unknown>) });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // MESSAGE LIST
     // ══════════════════════════════════════════════════════════════════════════
 
     if (!action && !id) {
       if (method !== 'GET') return err('Method not allowed', 405);
 
-      const page     = Math.max(1, parseInt(sp.get('page')     ?? '1',  10));
-      const per_page = Math.min(   parseInt(sp.get('per_page') ?? '50', 10), 200);
-      const channel  = sp.get('channel');
-      const status   = sp.get('status');
-      const from     = sp.get('from');
-      const to       = sp.get('to');
-      const rangeFrom = (page - 1) * per_page;
-      const rangeTo   = rangeFrom + per_page - 1;
+      const page         = Math.max(1, parseInt(sp.get('page')     ?? '1',  10));
+      const per_page     = Math.min(   parseInt(sp.get('per_page') ?? '50', 10), 200);
+      const channel      = sp.get('channel');
+      const status       = sp.get('status');
+      const from         = sp.get('from');
+      const to           = sp.get('to');
+      const recipient_id = sp.get('recipient_id');
+      const rangeFrom    = (page - 1) * per_page;
+      const rangeTo      = rangeFrom + per_page - 1;
 
       let q = supabase
         .from('outbound_messages')
@@ -643,10 +694,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .order('created_at', { ascending: false })
         .range(rangeFrom, rangeTo);
 
-      if (channel && CHANNELS.includes(channel as Channel)) q = q.eq('channel', channel);
-      if (status  && STATUSES.includes(status as Status))   q = q.eq('status', status);
-      if (from)    q = q.gte('created_at', from);
-      if (to)      q = q.lte('created_at', to);
+      if (channel      && CHANNELS.includes(channel as Channel)) q = q.eq('channel', channel);
+      if (status       && STATUSES.includes(status as Status))   q = q.eq('status', status);
+      if (from)         q = q.gte('created_at', from);
+      if (to)           q = q.lte('created_at', to);
+      if (recipient_id) q = q.eq('recipient_id', recipient_id);
 
       const { data, count, error } = await q;
       if (error) throw error;

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useSessionStore } from '@core/store/session.store.js';
 
 /**
@@ -6,5 +7,8 @@ import { useSessionStore } from '@core/store/session.store.js';
  */
 export function useSession() {
   const { user, profile, organization, isAuthenticated, isLoading } = useSessionStore();
-  return { user, profile, organization, isAuthenticated, isLoading };
+  return useMemo(
+    () => ({ user, profile, organization, isAuthenticated, isLoading }),
+    [user, profile, organization, isAuthenticated, isLoading],
+  );
 }

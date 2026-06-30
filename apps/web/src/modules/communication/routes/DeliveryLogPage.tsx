@@ -1,8 +1,7 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronRight, RefreshCcw, RotateCcw, X, Filter } from 'lucide-react';
+import { RefreshCcw, RotateCcw, X, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
-import { Button, toast } from '@platform/ui';
+import { toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { useMessageList, useRetryMessage, useCancelMessage } from '../hooks/useCommunication.js';
 import { ChannelBadge, StatusBadge } from '../components/ChannelIcon.js';

@@ -13,6 +13,7 @@ export interface CreateSlotInput {
   starts_at:       string;
   ends_at:         string;
   max_bookings?:   number;
+  vehicle_id?:     string | null;
   notes?:          string | null;
 }
 
@@ -53,6 +54,16 @@ export interface UpdateSlotTimingInput {
   id:        string;
   starts_at: string;
   ends_at:   string;
+}
+
+export interface UpdateSlotVehicleInput {
+  id:         string;
+  vehicle_id: string | null;
+}
+
+export interface UpdateSlotNotesInput {
+  id:    string;
+  notes: string | null;
 }
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
@@ -123,6 +134,26 @@ async function apiUpdateSlotTiming(input: UpdateSlotTimingInput): Promise<Lesson
   const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
     method: 'PATCH',
     body: { starts_at: input.starts_at, ends_at: input.ends_at },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+async function apiUpdateSlotNotes(input: UpdateSlotNotesInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { notes: input.notes },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+async function apiUpdateSlotVehicle(input: UpdateSlotVehicleInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { vehicle_id: input.vehicle_id },
   });
   if (error) throw error;
   if (!data) throw new Error('Inget svar från servern');
@@ -207,6 +238,28 @@ export function useUpdateSlotTiming() {
   });
 }
 
+export function useUpdateSlotNotes() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotNotes,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
+export function useUpdateSlotVehicle() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotVehicle,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
 export function useCreateSlot() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -229,6 +282,48 @@ export function useCreateSlotsBatch() {
         .map(r => (r.reason instanceof Error ? r.reason.message : 'Okänt fel'));
       return { succeeded, failed: errors.length, errors };
     },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+// ─── Sick-day instructor substitution ────────────────────────────────────────
+
+export interface ReassignSlotsInput {
+  fromInstructorId: string;
+  toInstructorId:   string;
+  fromDate:         string;
+  toDate:           string;
+}
+
+export interface ReassignSlotsResult {
+  count: number;
+}
+
+async function apiReassignInstructorSlots(input: ReassignSlotsInput): Promise<ReassignSlotsResult> {
+  const fromTs = `${input.fromDate}T00:00:00`;
+  const toTs   = `${input.toDate}T23:59:59`;
+
+  const { count, error } = await supabase
+    .from('lesson_slots')
+    .update({ instructor_id: input.toInstructorId } as never)
+    .eq('instructor_id', input.fromInstructorId)
+    .gte('starts_at', fromTs)
+    .lte('starts_at', toTs)
+    .is('deleted_at', null)
+    .not('status', 'in', '(completed,cancelled,blocked)')
+    .select('id');
+
+  if (error) throw new Error(error.message);
+  return { count: count ?? 0 };
+}
+
+export function useReassignInstructorSlots() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiReassignInstructorSlots,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] });

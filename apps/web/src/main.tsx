@@ -4,6 +4,15 @@ import App from './App.js';
 import './globals.css';
 import { initAdminI18n } from '@platform/i18n';
 
+// Register service worker for PWA + push notification support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
+      console.warn('[SW] Registration failed:', err);
+    });
+  });
+}
+
 // Initialize Swedish i18n before rendering.
 // Admin app is always Swedish — synchronous init, no suspense needed.
 initAdminI18n().then(() => {

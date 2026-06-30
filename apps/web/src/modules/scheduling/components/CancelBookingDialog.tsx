@@ -6,7 +6,7 @@ import {
   Label,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
-import type { CancellationCategory } from '@platform/types';
+import type { CancellationCategory, Student } from '@platform/types';
 import { useCancelBooking } from '../hooks/useSchedulingMutations.js';
 
 // ─── Cancellation category Swedish labels ─────────────────────────────────────
@@ -27,7 +27,10 @@ interface CancelBookingDialogProps {
   onOpenChange:  (open: boolean) => void;
   bookingId:     string | null;
   slotId:        string;
-  onSuccess?:    () => void;
+  student?:      Student | null | undefined;
+  slotLabel?:    string | undefined;
+  slotStartsAt?: string | undefined;
+  onSuccess?:    (() => void) | undefined;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

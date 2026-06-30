@@ -3,7 +3,7 @@ import { Bell, Plus, Archive, RotateCcw, Trash2 } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button, DataTable,
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
   Input, Label, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@platform/ui';
@@ -67,6 +67,7 @@ function AddDialog({ open, onClose, onSave }: AddDialogProps) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Ny bevakning</DialogTitle>
+          <DialogDescription className="sr-only">Lägg till en ny bevakning</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
@@ -293,17 +294,23 @@ export function WatchlistPage() {
           <span className="text-muted-foreground">Bevakningar</span>
           <span className="text-muted-foreground/50">/</span>
           <span className="font-medium text-foreground">
-            {activeTab === 'active' ? 'Aktiva bevakningar' : 'Avkladade bevakningar'}
+            {activeTab === 'active' ? 'Aktiva bevakningar' : 'Avklarade bevakningar'}
           </span>
         </nav>
         <button className="text-xs text-primary hover:underline">Ge feedback</button>
+      </div>
+
+      {/* Local-state notice */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300">
+        <Bell className="w-3.5 h-3.5 shrink-0" />
+        Bevakningar sparas bara i den här webbläsaren och försvinner vid radering av webbläsardata.
       </div>
 
       {/* Tab bar + action */}
       <div className="flex items-end border-b border-border mb-5">
         {([
           { key: 'active',   label: 'Aktiva bevakningar',    count: activeItems.length   },
-          { key: 'archived', label: 'Avkladade bevakningar', count: archivedItems.length },
+          { key: 'archived', label: 'Avklarade bevakningar', count: archivedItems.length },
         ] as { key: WatchTab; label: string; count: number }[]).map((tab) => (
           <button
             key={tab.key}
@@ -311,7 +318,7 @@ export function WatchlistPage() {
             className={cn(
               'px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-2',
               activeTab === tab.key
-                ? 'border-foreground text-foreground'
+                ? 'border-primary text-primary'
                 : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/40',
             )}
           >

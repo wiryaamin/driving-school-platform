@@ -1,0 +1,15 @@
+export { PlatformShell }             from './components/PlatformShell.js';
+export { PlatformPermissionGate }    from './components/PlatformPermissionGate.js';
+export { CreateOrgDialog }           from './components/CreateOrgDialog.js';
+export { EditOrgDialog }             from './components/EditOrgDialog.js';
+export { OrgDetailSheet }            from './components/OrgDetailSheet.js';
+export { PlatformDashboardPage }            from './routes/PlatformDashboardPage.js';
+export { PlatformOrganizationDetailPage }   from './routes/PlatformOrganizationDetailPage.js';
+export { PlatformOrganizationsPage } from './routes/PlatformOrganizationsPage.js';
+export { PlatformSubscriptionsPage }       from './routes/PlatformSubscriptionsPage.js';
+export { PlatformSubscriptionDetailPage }  from './routes/PlatformSubscriptionDetailPage.js';
+export { PlatformAuditPage }         from './routes/PlatformAuditPage.js';
+export { PlatformAdminsPage }        from './routes/PlatformAdminsPage.js';
+export { PlatformRolesPage }         from './routes/PlatformRolesPage.js';
+export { PlatformSupportPage }       from './routes/PlatformSupportPage.js';
+export { PlatformSecurityPage }      from './routes/PlatformSecurityPage.js';

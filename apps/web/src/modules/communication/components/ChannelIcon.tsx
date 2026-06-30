@@ -1,4 +1,4 @@
-import { MessageSquare, Mail, PhoneCall, Bell, Mic } from 'lucide-react';
+import { MessageSquare, Mail, Bell, Mic } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import type { CommChannel } from '../hooks/useCommunication.js';
 
