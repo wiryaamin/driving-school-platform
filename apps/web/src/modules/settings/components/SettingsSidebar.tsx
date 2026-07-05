@@ -162,8 +162,9 @@ export function SettingsSidebar({ segment }: { segment: string }) {
 
   return (
     <nav
+      aria-label="Inställningar navigation"
       className="w-44 shrink-0 border-r border-border bg-background py-3 space-y-0.5
-                 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto"
+                 sticky top-[52px] self-start h-[calc(100vh-52px)] overflow-y-auto"
     >
       {SETTINGS_NAV.map(section => {
         const Icon = section.icon;
@@ -205,10 +206,10 @@ export function SettingsSidebar({ segment }: { segment: string }) {
                         key={child.key}
                         to={`/settings/${child.segment}`}
                         className={cn(
-                          'block px-2.5 py-1.5 rounded-md text-sm transition-colors',
+                          'block px-2.5 py-1.5 rounded-lg text-sm transition-colors',
                           isActive
-                            ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                            : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+                            ? 'bg-primary/10 text-primary font-medium'
+                            : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                         )}
                       >
                         {child.label}
@@ -231,10 +232,10 @@ export function SettingsSidebar({ segment }: { segment: string }) {
             key={section.key}
             to={`/settings/${section.segment ?? ''}`}
             className={cn(
-              'flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors',
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
               isActive
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-accent'
             )}
           >
             <Icon className="w-4 h-4 shrink-0" />

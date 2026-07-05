@@ -185,7 +185,7 @@ export function SettingsHubPage() {
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-sm font-medium text-card-foreground leading-tight">{card.label}</span>
                       {card.beta === true && (
-                        <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary leading-none shrink-0">
+                        <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary leading-none shrink-0">
                           Beta
                         </span>
                       )}

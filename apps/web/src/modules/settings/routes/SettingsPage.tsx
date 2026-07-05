@@ -100,7 +100,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="flex -mx-4 md:-mx-5 -mt-4 md:-mt-5 min-h-[calc(100vh-3.5rem)]">
+    <div className="flex -mx-4 md:-mx-5 -mt-4 md:-mt-5 min-h-[calc(100vh-52px)]">
       <SettingsSidebar segment={segment} />
       <div className="flex-1 min-w-0 p-6 overflow-y-auto">
         <Page />
