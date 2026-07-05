@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Bell, Copy, Car, ChevronRight, Search, Plus, SlidersHorizontal, RefreshCw,
+  Bell, Copy, Car, Search, Plus, SlidersHorizontal, RefreshCw,
 } from 'lucide-react';
 import { PhoneLink } from '@shared/components/PhoneLink.js';
 import type { ColumnDef } from '@platform/ui';
@@ -16,6 +16,7 @@ import type { Student, StudentStatus, PermitStage } from '../hooks/useStudents.j
 import { useInstructorList } from '@modules/instructors/index.js';
 import { StudentStatusBadge } from '../components/StudentStatusBadge.js';
 import { StudentForm } from '../components/StudentForm.js';
+import { StudentQuickActions } from '../components/StudentQuickActions.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Tab types ────────────────────────────────────────────────────────────────
@@ -139,7 +140,7 @@ function formatActivityDate(ts: string | null | undefined): string {
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 
-function buildColumns(): ColumnDef<Student>[] {
+function buildColumns(onEdit: (s: Student) => void): ColumnDef<Student>[] {
   return [
     {
       id: 'bell',
@@ -259,12 +260,16 @@ function buildColumns(): ColumnDef<Student>[] {
       enableSorting: false,
     },
     {
-      id: 'arrow',
+      id: 'actions',
       header: '',
-      cell: () => <ChevronRight className="w-4 h-4 text-muted-foreground/40" />,
+      cell: ({ row }) => (
+        <div onClick={(e) => e.stopPropagation()}>
+          <StudentQuickActions student={row.original} onEdit={onEdit} />
+        </div>
+      ),
       enableSorting: false,
       enableHiding: false,
-      size: 32,
+      size: 40,
     },
   ];
 }
@@ -539,7 +544,10 @@ export function StudentListPage() {
   const { data, isLoading, error, refetch } = useStudentList(query);
   const students = data?.data ?? [];
 
-  const columns = useMemo(() => buildColumns(), []);
+  const columns = useMemo(
+    () => buildColumns((s) => { setEditStudent(s); setFormOpen(true); }),
+    [],
+  );
 
   function handleCreate() {
     setEditStudent(null);

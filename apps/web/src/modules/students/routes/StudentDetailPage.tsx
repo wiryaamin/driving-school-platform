@@ -385,10 +385,21 @@ export function StudentDetailPage() {
         {/* Name row */}
         <div className="flex items-center justify-between pb-3">
           <h1 className="text-base font-semibold text-foreground">{fullName}</h1>
-          <button className="text-xs text-blue-500 border border-blue-200 rounded px-2.5 py-1 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center gap-1.5">
-            <Pencil className="w-3 h-3" />
-            Ge feedback
-          </button>
+          <div className="flex items-center gap-2">
+            <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+              <button
+                onClick={() => setEditOpen(true)}
+                className="text-xs text-foreground border border-border rounded px-2.5 py-1 hover:bg-accent/50 transition-colors flex items-center gap-1.5"
+              >
+                <Pencil className="w-3 h-3" />
+                Redigera
+              </button>
+            </PermissionGate>
+            <button className="text-xs text-blue-500 border border-blue-200 rounded px-2.5 py-1 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center gap-1.5">
+              <Pencil className="w-3 h-3" />
+              Ge feedback
+            </button>
+          </div>
         </div>
 
         <TabBar tabs={TABS} active={activeTab} onSelect={setActiveTab} />
@@ -1742,49 +1753,55 @@ function KundkortTab({
           )}
         </div>
 
-        {/* Aktivera kund — shown for students not yet active */}
-        {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused') && (
+        {/* Aktivera / Återaktivera kund */}
+        {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused' || student.status === 'archived') && (
           <div className="bg-card border border-border rounded-lg p-4">
-            <SectionHeading title="Aktivera kund" />
+            <SectionHeading title={student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'} />
             <p className="text-xs text-muted-foreground mb-3">
-              Sätt kundens status till Aktiv för att kunna boka lektioner och skapa fakturor.
+              {student.status === 'archived'
+                ? 'Återaktivera kunden för att återuppta undervisning och bokningar.'
+                : 'Sätt kundens status till Aktiv för att kunna boka lektioner och skapa fakturor.'}
             </p>
             <button
               onClick={onActivate}
               disabled={activating}
               className="w-full py-1.5 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
             >
-              {activating ? 'Aktiverar...' : 'Aktivera kund'}
+              {activating
+                ? 'Aktiverar...'
+                : student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'}
             </button>
           </div>
         )}
 
-        {/* Arkivera kund */}
-        <div className="bg-card border border-border rounded-lg p-4">
-          <SectionHeading title="Arkivera kund" />
-          {student.status === 'active' ? (
-            <div className="space-y-2">
-              <div className="flex items-start gap-2 p-2.5 bg-red-50 dark:bg-red-950/20 rounded border border-red-100 dark:border-red-900/50">
-                <AlertTriangle className="w-3.5 h-3.5 text-red-500 mt-0.5 shrink-0" />
-                <div className="text-xs text-red-700 dark:text-red-400 space-y-1">
-                  <p className="font-medium">{fullName} kan inte arkiveras för tillfället av följande anledningar:</p>
-                  <p>• Kunden har kommande bokningar</p>
+        {/* Arkivera kund — hidden when already archived */}
+        {student.status !== 'archived' && (
+          <div className="bg-card border border-border rounded-lg p-4">
+            <SectionHeading title="Arkivera kund" />
+            {student.status === 'active' ? (
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 p-2.5 bg-red-50 dark:bg-red-950/20 rounded border border-red-100 dark:border-red-900/50">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-500 mt-0.5 shrink-0" />
+                  <div className="text-xs text-red-700 dark:text-red-400 space-y-1">
+                    <p className="font-medium">{fullName} kan inte arkiveras för tillfället av följande anledningar:</p>
+                    <p>• Kunden har kommande bokningar</p>
+                  </div>
                 </div>
+                <button disabled className="w-full py-1.5 text-xs font-medium rounded bg-red-200 text-red-400 cursor-not-allowed">
+                  Arkivera kund
+                </button>
               </div>
-              <button disabled className="w-full py-1.5 text-xs font-medium rounded bg-red-200 text-red-400 cursor-not-allowed">
-                Arkivera kund
+            ) : (
+              <button
+                onClick={onArchive}
+                disabled={archiving}
+                className="w-full py-1.5 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {archiving ? 'Arkiverar...' : 'Arkivera kund'}
               </button>
-            </div>
-          ) : (
-            <button
-              onClick={onArchive}
-              disabled={archiving}
-              className="w-full py-1.5 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
-            >
-              {archiving ? 'Arkiverar...' : 'Arkivera kund'}
-            </button>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
       </div>
 
