@@ -60,7 +60,9 @@ export const Permissions = {
   ADMIN_USER_UPDATE: 'administration:user:update',
   ADMIN_USER_DELETE: 'administration:user:delete',
   ADMIN_ROLE_READ: 'administration:role:read',
+  ADMIN_ROLE_CREATE: 'administration:role:create',
   ADMIN_ROLE_UPDATE: 'administration:role:update',
+  ADMIN_ROLE_DELETE: 'administration:role:delete',
   ADMIN_LOCATION_MANAGE: 'administration:location:manage',
   ADMIN_ORGANIZATION_READ: 'administration:organization:read',
   ADMIN_ORGANIZATION_UPDATE: 'administration:organization:update',
@@ -155,8 +157,6 @@ export const Permissions = {
   FINANCE_GOVERNANCE_MANAGE: 'finance:governance:manage',
 
   // ─── Notifications ─────────────────────────────────────────────────────────
-  NOTIFICATIONS_READ:                  'notifications:read',
-  NOTIFICATIONS_WRITE:                 'notifications:write',
   NOTIFICATIONS_PREFERENCES_MANAGE:    'notifications:preferences:manage',
   NOTIFICATIONS_NOTIFICATION_READ:     'notifications:notification:read',
   NOTIFICATIONS_NOTIFICATION_CREATE:   'notifications:notification:create',

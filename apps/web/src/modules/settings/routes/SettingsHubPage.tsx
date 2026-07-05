@@ -7,7 +7,7 @@ import {
   ShoppingBag, Gift, BookOpen, ShoppingCart, Package,
   GraduationCap, ClipboardList, MessageSquare, Mail,
   MessageCircle, Globe, Palette, TrendingUp, FileText,
-  ClipboardCheck, Star, Monitor,
+  ClipboardCheck, Star, Monitor, Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { useSession } from '@shared/hooks/useSession.js';
@@ -57,6 +57,7 @@ const SECTIONS: SettingSection[] = [
     cards: [
       { label: 'Platser',    description: 'Hantera verksamhetens platser',  icon: MapPin,  color: 'green',  path: '/settings/locations' },
       { label: 'Användare', description: 'Hantera personal och åtkomst',    icon: UserCog, color: 'violet', path: '/settings/users'     },
+      { label: 'Roller',    description: 'Roller och behörigheter',          icon: Shield,  color: 'blue',   path: '/settings/roles'     },
     ],
   },
   {

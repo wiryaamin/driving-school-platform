@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Building2, MapPin, Key, Briefcase, Calendar, Users,
   Wallet, GraduationCap, MessageSquare, Globe, Layers,
-  BookOpen, Settings, ChevronRight, UserCog,
+  BookOpen, Settings, ChevronRight, UserCog, Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 
@@ -34,6 +34,7 @@ const SETTINGS_NAV: NavSection[] = [
   },
   { key: 'platser',    label: 'Platser',           icon: MapPin,       segment: 'locations' },
   { key: 'anvandare', label: 'Användare',         icon: UserCog,      segment: 'users'     },
+  { key: 'roller',    label: 'Roller',            icon: Shield,       segment: 'roles'     },
   {
     key: 'elevbokning', label: 'Elevbokning', icon: Key,
     children: [

@@ -6,6 +6,7 @@ import { CompanySettingsPage }      from './CompanySettingsPage.js';
 import { LegalSettingsPage }        from './LegalSettingsPage.js';
 import { LocationsSettingsPage }    from './LocationsSettingsPage.js';
 import { UsersSettingsPage }        from './UsersSettingsPage.js';
+import { RolesSettingsPage }        from './RolesSettingsPage.js';
 import { ElevbokningTjansterPage }  from './ElevbokningTjansterPage.js';
 import { ElevbokningConfigPage }    from './ElevbokningConfigPage.js';
 import { ResourcesSettingsPage }    from './ResourcesSettingsPage.js';
@@ -52,6 +53,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   'legal':                          LegalSettingsPage,
   'locations':                      LocationsSettingsPage,
   'users':                          UsersSettingsPage,
+  'roles':                          RolesSettingsPage,
   'student-booking/services':       ElevbokningTjansterPage,
   'student-booking/config':         ElevbokningConfigPage,
   'resources':                      ResourcesSettingsPage,
