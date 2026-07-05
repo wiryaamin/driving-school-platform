@@ -55,7 +55,8 @@ const SECTIONS: SettingSection[] = [
   {
     title: 'Platser',
     cards: [
-      { label: 'Platser', description: 'Hantera verksamhetens platser', icon: MapPin, color: 'green', path: '/settings/locations' },
+      { label: 'Platser',    description: 'Hantera verksamhetens platser',  icon: MapPin,  color: 'green',  path: '/settings/locations' },
+      { label: 'Användare', description: 'Hantera personal och åtkomst',    icon: UserCog, color: 'violet', path: '/settings/users'     },
     ],
   },
   {
