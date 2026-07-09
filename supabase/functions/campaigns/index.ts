@@ -15,7 +15,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,15 +25,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 function extractPathParts(req: Request): { id: string | null; action: string | null } {
@@ -47,8 +45,8 @@ function extractPathParts(req: Request): { id: string | null; action: string | n
 // ─── List campaigns ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const url     = new URL(req.url);
   const page    = Number(url.searchParams.get('page')     ?? '1');
@@ -84,7 +82,7 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
       .eq('status', 'scheduled'),
   ]);
 
-  if (mainRes.error) return err(mainRes.error.message, 500, 'QUERY_FAILED');
+  if (mainRes.error) return err(ctx, mainRes.error.message, 500, 'QUERY_FAILED');
 
   return json({
     data: mainRes.data ?? [],
@@ -101,8 +99,8 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
 // ─── Get campaign detail (includes linked packages) ───────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGet(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGet(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const [campaignRes, linksRes] = await Promise.all([
     client
@@ -133,9 +131,9 @@ async function handleGet(id: string, client: any, orgId: string, user: any): Pro
       .eq('organization_id', orgId),
   ]);
 
-  if (campaignRes.error) return err(campaignRes.error.message, 500, 'QUERY_FAILED');
-  if (campaignRes.data === null) return err('Campaign not found', 404, 'NOT_FOUND');
-  if (linksRes.error) return err(linksRes.error.message, 500, 'QUERY_FAILED');
+  if (campaignRes.error) return err(ctx, campaignRes.error.message, 500, 'QUERY_FAILED');
+  if (campaignRes.data === null) return err(ctx, 'Campaign not found', 404, 'NOT_FOUND');
+  if (linksRes.error) return err(ctx, linksRes.error.message, 500, 'QUERY_FAILED');
 
   return json({ ...campaignRes.data, linked_packages: linksRes.data ?? [] });
 }
@@ -143,15 +141,15 @@ async function handleGet(id: string, client: any, orgId: string, user: any): Pro
 // ─── Create campaign ──────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreate(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:create')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreate(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:create')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const { name, campaign_type } = body;
   if (!name || !campaign_type) {
-    return err('name and campaign_type are required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'name and campaign_type are required', 400, 'VALIDATION_ERROR');
   }
 
   const { data, error } = await client
@@ -171,12 +169,12 @@ async function handleCreate(req: Request, client: any, orgId: string, user: any)
       ends_at:            body['ends_at']            ?? null,
       internal_notes:     body['internal_notes']     ?? null,
       metadata:           body['metadata']           ?? {},
-      created_by:         user.id,
+      created_by:         ctx.actorId,
     })
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
+  if (error) return err(ctx, error.message, 422, 'INSERT_FAILED');
 
   // Link packages if provided — errors are surfaced, not silently dropped
   const offeringIds = body['offering_ids'] as string[] | undefined;
@@ -185,7 +183,7 @@ async function handleCreate(req: Request, client: any, orgId: string, user: any)
       organization_id: orgId,
       campaign_id:     data.id,
       offering_id:     oid,
-      created_by:      user.id,
+      created_by:      ctx.actorId,
     }));
     const { error: linkErr } = await client.from('campaign_package_links').insert(links);
     if (linkErr) {
@@ -202,18 +200,18 @@ async function handleCreate(req: Request, client: any, orgId: string, user: any)
 // ─── Update campaign ──────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleUpdate(id: string, req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleUpdate(id: string, req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const allowed = [
     'name', 'description', 'visibility', 'priority',
     'discount_value', 'discount_is_pct', 'max_discount_amount', 'bonus_lessons',
     'starts_at', 'ends_at', 'internal_notes', 'metadata',
   ];
-  const patch: Record<string, unknown> = { updated_by: user.id };
+  const patch: Record<string, unknown> = { updated_by: ctx.actorId };
   for (const key of allowed) {
     if (body[key] !== undefined) patch[key] = body[key];
   }
@@ -227,16 +225,16 @@ async function handleUpdate(id: string, req: Request, client: any, orgId: string
     .select()
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Campaign not found or archived', 404, 'NOT_FOUND');
+  if (error) return err(ctx, error.message, 500, 'UPDATE_FAILED');
+  if (data === null) return err(ctx, 'Campaign not found or archived', 404, 'NOT_FOUND');
   return json(data);
 }
 
 // ─── Activate campaign ────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleActivate(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleActivate(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   // Read current campaign
   const { data: campaign, error: readErr } = await client
@@ -246,9 +244,9 @@ async function handleActivate(id: string, client: any, orgId: string, user: any)
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (readErr) return err(readErr.message, 500, 'QUERY_FAILED');
-  if (campaign === null) return err('Campaign not found', 404, 'NOT_FOUND');
-  if (campaign.status === 'archived') return err('Cannot activate an archived campaign', 400, 'INVALID_STATUS');
+  if (readErr) return err(ctx, readErr.message, 500, 'QUERY_FAILED');
+  if (campaign === null) return err(ctx, 'Campaign not found', 404, 'NOT_FOUND');
+  if (campaign.status === 'archived') return err(ctx, 'Cannot activate an archived campaign', 400, 'INVALID_STATUS');
 
   // Determine target status: scheduled if starts_at is in the future
   const startsAt     = campaign.starts_at ? new Date(campaign.starts_at as string) : null;
@@ -256,50 +254,50 @@ async function handleActivate(id: string, client: any, orgId: string, user: any)
 
   const { data, error } = await client
     .from('campaigns')
-    .update({ status: targetStatus, updated_by: user.id })
+    .update({ status: targetStatus, updated_by: ctx.actorId })
     .eq('id', id)
     .eq('organization_id', orgId)
     .select()
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Campaign not found', 404, 'NOT_FOUND');
+  if (error) return err(ctx, error.message, 500, 'UPDATE_FAILED');
+  if (data === null) return err(ctx, 'Campaign not found', 404, 'NOT_FOUND');
   return json(data);
 }
 
 // ─── Pause campaign ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handlePause(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handlePause(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data, error } = await client
     .from('campaigns')
-    .update({ status: 'paused', updated_by: user.id })
+    .update({ status: 'paused', updated_by: ctx.actorId })
     .eq('id', id)
     .eq('organization_id', orgId)
     .eq('status', 'active')
     .select()
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Campaign not found or not active', 404, 'NOT_FOUND');
+  if (error) return err(ctx, error.message, 500, 'UPDATE_FAILED');
+  if (data === null) return err(ctx, 'Campaign not found or not active', 404, 'NOT_FOUND');
   return json(data);
 }
 
 // ─── Archive campaign ─────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleArchive(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:archive')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleArchive(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:archive')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data, error } = await client
     .from('campaigns')
     .update({
       status:      'archived',
       archived_at: new Date().toISOString(),
-      archived_by: user.id,
-      updated_by:  user.id,
+      archived_by: ctx.actorId,
+      updated_by:  ctx.actorId,
     })
     .eq('id', id)
     .eq('organization_id', orgId)
@@ -307,23 +305,23 @@ async function handleArchive(id: string, client: any, orgId: string, user: any):
     .select()
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
-  if (data === null) return err('Campaign not found or already archived', 404, 'NOT_FOUND');
+  if (error) return err(ctx, error.message, 500, 'UPDATE_FAILED');
+  if (data === null) return err(ctx, 'Campaign not found or already archived', 404, 'NOT_FOUND');
   return json(data);
 }
 
 // ─── Link package offering ────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleLink(id: string, req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleLink(id: string, req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const offeringId = body['offering_id'] as string | undefined;
   if (!offeringId || !UUID_RE.test(offeringId)) {
-    return err('offering_id (UUID) is required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'offering_id (UUID) is required', 400, 'VALIDATION_ERROR');
   }
 
   // Verify campaign belongs to org
@@ -333,17 +331,17 @@ async function handleLink(id: string, req: Request, client: any, orgId: string, 
     .eq('id', id)
     .eq('organization_id', orgId)
     .maybeSingle();
-  if (campaign === null) return err('Campaign not found', 404, 'NOT_FOUND');
+  if (campaign === null) return err(ctx, 'Campaign not found', 404, 'NOT_FOUND');
 
   const { data, error } = await client
     .from('campaign_package_links')
-    .insert({ organization_id: orgId, campaign_id: id, offering_id: offeringId, created_by: user.id })
+    .insert({ organization_id: orgId, campaign_id: id, offering_id: offeringId, created_by: ctx.actorId })
     .select()
     .single();
 
   if (error) {
-    if (error.code === '23505') return err('Package already linked to this campaign', 409, 'DUPLICATE');
-    return err(error.message, 422, 'INSERT_FAILED');
+    if (error.code === '23505') return err(ctx, 'Package already linked to this campaign', 409, 'DUPLICATE');
+    return err(ctx, error.message, 422, 'INSERT_FAILED');
   }
   return json(data, 201);
 }
@@ -351,14 +349,14 @@ async function handleLink(id: string, req: Request, client: any, orgId: string, 
 // ─── Unlink package offering ──────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleUnlink(id: string, req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:campaign:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleUnlink(id: string, req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:campaign:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const offeringId = body['offering_id'] as string | undefined;
-  if (!offeringId) return err('offering_id is required', 400, 'VALIDATION_ERROR');
+  if (!offeringId) return err(ctx, 'offering_id is required', 400, 'VALIDATION_ERROR');
 
   const { error } = await client
     .from('campaign_package_links')
@@ -367,7 +365,7 @@ async function handleUnlink(id: string, req: Request, client: any, orgId: string
     .eq('offering_id', offeringId)
     .eq('organization_id', orgId);
 
-  if (error) return err(error.message, 500, 'DELETE_FAILED');
+  if (error) return err(ctx, error.message, 500, 'DELETE_FAILED');
   return json({ ok: true });
 }
 
@@ -382,54 +380,61 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (orgId === null) return err(ctx, 'No organization context', 400, 'NO_ORG_CONTEXT');
 
   const { id, action } = extractPathParts(req);
   const method = req.method;
 
   // /campaigns/:id/activate
   if (id !== null && action === 'activate' && method === 'POST') {
-    return handleActivate(id, client, orgId, user);
+    return handleActivate(id, client, orgId, ctx);
   }
 
   // /campaigns/:id/pause
   if (id !== null && action === 'pause' && method === 'POST') {
-    return handlePause(id, client, orgId, user);
+    return handlePause(id, client, orgId, ctx);
   }
 
   // /campaigns/:id/archive
   if (id !== null && action === 'archive' && method === 'POST') {
-    return handleArchive(id, client, orgId, user);
+    return handleArchive(id, client, orgId, ctx);
   }
 
   // /campaigns/:id/link
   if (id !== null && action === 'link' && method === 'POST') {
-    return handleLink(id, req, client, orgId, user);
+    return handleLink(id, req, client, orgId, ctx);
   }
 
   // /campaigns/:id/unlink
   if (id !== null && action === 'unlink' && method === 'POST') {
-    return handleUnlink(id, req, client, orgId, user);
+    return handleUnlink(id, req, client, orgId, ctx);
   }
 
   // /campaigns/:id
   if (id !== null && action === null) {
-    if (method === 'GET')   return handleGet(id, client, orgId, user);
-    if (method === 'PATCH') return handleUpdate(id, req, client, orgId, user);
-    return err('Method not allowed', 405);
+    if (method === 'GET')   return handleGet(id, client, orgId, ctx);
+    if (method === 'PATCH') return handleUpdate(id, req, client, orgId, ctx);
+    return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
   }
 
   // /campaigns
   if (id === null && action === null) {
-    if (method === 'GET')  return handleList(req, client, orgId, user);
-    if (method === 'POST') return handleCreate(req, client, orgId, user);
-    return err('Method not allowed', 405);
+    if (method === 'GET')  return handleList(req, client, orgId, ctx);
+    if (method === 'POST') return handleCreate(req, client, orgId, ctx);
+    return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
   }
 
-  return err('Not found', 404);
+  return err(ctx, 'Not found', 404, 'NOT_FOUND');
 }));

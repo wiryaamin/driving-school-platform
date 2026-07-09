@@ -15,7 +15,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors }        from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,15 +25,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined ? { code } : {}) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 function parsePath(req: Request): { id: string | null; action: string | null } {
@@ -47,8 +45,8 @@ function parsePath(req: Request): { id: string | null; action: string | null } {
 // ─── List ─────────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const url       = new URL(req.url);
   const studentId = url.searchParams.get('student_id');
@@ -76,7 +74,7 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   if (status)    q = q.eq('status', status);
 
   const { data, count, error } = await q;
-  if (error) return err('Failed to load packages', 500, 'QUERY_FAILED');
+  if (error) return err(ctx, 'Failed to load packages', 500, 'QUERY_FAILED');
 
   const total = count ?? 0;
   // Compute derived fields client-side to avoid view dependency
@@ -101,8 +99,8 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
 // ─── Detail ───────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleDetail(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleDetail(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const [assignmentRes, eventsRes, reversalsRes] = await Promise.all([
     client
@@ -123,8 +121,8 @@ async function handleDetail(_req: Request, client: any, orgId: string, user: any
       .order('created_at', { ascending: false }),
   ]);
 
-  if (assignmentRes.error) return err('Failed to load package', 500, 'QUERY_FAILED');
-  if (!assignmentRes.data) return err('Package assignment not found', 404, 'NOT_FOUND');
+  if (assignmentRes.error) return err(ctx, 'Failed to load package', 500, 'QUERY_FAILED');
+  if (!assignmentRes.data) return err(ctx, 'Package assignment not found', 404, 'NOT_FOUND');
 
   const a = assignmentRes.data as Record<string, unknown>;
   const qty = a['package_quantity'] as number;
@@ -148,8 +146,8 @@ async function handleDetail(_req: Request, client: any, orgId: string, user: any
 // ─── Events timeline ──────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleEvents(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleEvents(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   // Verify org ownership
   const { data: asgn } = await client
@@ -159,7 +157,7 @@ async function handleEvents(_req: Request, client: any, orgId: string, user: any
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!asgn) return err('Package assignment not found', 404, 'NOT_FOUND');
+  if (!asgn) return err(ctx, 'Package assignment not found', 404, 'NOT_FOUND');
 
   const { data, error } = await client
     .from('package_consumption_events')
@@ -167,22 +165,22 @@ async function handleEvents(_req: Request, client: any, orgId: string, user: any
     .eq('assignment_id', id)
     .order('created_at', { ascending: true });
 
-  if (error) return err('Failed to load events', 500, 'QUERY_FAILED');
+  if (error) return err(ctx, 'Failed to load events', 500, 'QUERY_FAILED');
   return json({ data: data ?? [] });
 }
 
 // ─── Consume credit ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleConsume(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:record')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleConsume(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:record')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'INVALID_JSON'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON', 400, 'INVALID_JSON'); }
 
   const assignmentId = body['assignment_id'];
   if (typeof assignmentId !== 'string' || !UUID_RE.test(assignmentId)) {
-    return err('assignment_id must be a UUID', 400, 'INVALID_PARAMS');
+    return err(ctx, 'assignment_id must be a UUID', 400, 'INVALID_PARAMS');
   }
 
   const bookingId      = typeof body['booking_id'] === 'string' ? body['booking_id'] : null;
@@ -194,16 +192,16 @@ async function handleConsume(req: Request, client: any, orgId: string, user: any
     p_organization_id: orgId,
     ...(bookingId      != null ? { p_booking_id:      bookingId }      : {}),
     ...(lessonCategory != null ? { p_lesson_category: lessonCategory } : {}),
-    p_actor_id:    user.id    as string | null ?? undefined,
-    p_actor_email: user.email as string | null ?? undefined,
+    p_actor_id:    ctx.actorId as string | null ?? undefined,
+    p_actor_email: ctx.actorEmail as string | null ?? undefined,
     ...(notes != null ? { p_metadata: { notes } } : {}),
   });
 
   if (error) {
-    if (error.code === 'P0001') return err(error.message, 409, 'BUSINESS_RULE');
-    if (error.code === 'P0002') return err('Package assignment not found', 404, 'NOT_FOUND');
+    if (error.code === 'P0001') return err(ctx, error.message, 409, 'BUSINESS_RULE');
+    if (error.code === 'P0002') return err(ctx, 'Package assignment not found', 404, 'NOT_FOUND');
     console.error('consume_lesson_credit failed:', error);
-    return err('Failed to consume credit', 500, 'RPC_FAILED');
+    return err(ctx, 'Failed to consume credit', 500, 'RPC_FAILED');
   }
 
   return json({ data });
@@ -212,15 +210,15 @@ async function handleConsume(req: Request, client: any, orgId: string, user: any
 // ─── Reverse credit ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleReverse(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:reverse')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleReverse(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:reverse')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'INVALID_JSON'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON', 400, 'INVALID_JSON'); }
 
   const assignmentId = body['assignment_id'];
   if (typeof assignmentId !== 'string' || !UUID_RE.test(assignmentId)) {
-    return err('assignment_id must be a UUID', 400, 'INVALID_PARAMS');
+    return err(ctx, 'assignment_id must be a UUID', 400, 'INVALID_PARAMS');
   }
 
   const VALID_REVERSAL_TYPES = [
@@ -228,12 +226,12 @@ async function handleReverse(req: Request, client: any, orgId: string, user: any
   ];
   const reversalType = body['reversal_type'];
   if (typeof reversalType !== 'string' || !VALID_REVERSAL_TYPES.includes(reversalType)) {
-    return err('Invalid reversal_type', 400, 'INVALID_PARAMS');
+    return err(ctx, 'Invalid reversal_type', 400, 'INVALID_PARAMS');
   }
 
   const reason = body['reason'];
   if (typeof reason !== 'string' || !reason.trim()) {
-    return err('reason is required', 400, 'INVALID_PARAMS');
+    return err(ctx, 'reason is required', 400, 'INVALID_PARAMS');
   }
 
   const bookingId = typeof body['booking_id'] === 'string' ? body['booking_id'] : null;
@@ -244,15 +242,15 @@ async function handleReverse(req: Request, client: any, orgId: string, user: any
     p_reversal_type:   reversalType,
     p_reason:          reason.trim(),
     ...(bookingId != null ? { p_booking_id: bookingId } : {}),
-    p_actor_id:    user.id    as string | null ?? undefined,
-    p_actor_email: user.email as string | null ?? undefined,
+    p_actor_id:    ctx.actorId as string | null ?? undefined,
+    p_actor_email: ctx.actorEmail as string | null ?? undefined,
   });
 
   if (error) {
-    if (error.code === 'P0001') return err(error.message, 409, 'BUSINESS_RULE');
-    if (error.code === 'P0002') return err('Package assignment not found', 404, 'NOT_FOUND');
+    if (error.code === 'P0001') return err(ctx, error.message, 409, 'BUSINESS_RULE');
+    if (error.code === 'P0002') return err(ctx, 'Package assignment not found', 404, 'NOT_FOUND');
     console.error('reverse_lesson_credit failed:', error);
-    return err('Failed to reverse credit', 500, 'RPC_FAILED');
+    return err(ctx, 'Failed to reverse credit', 500, 'RPC_FAILED');
   }
 
   return json({ data });
@@ -261,8 +259,8 @@ async function handleReverse(req: Request, client: any, orgId: string, user: any
 // ─── Expire stale packages ────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleExpire(_req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'packages:consumption:reverse')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleExpire(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'packages:consumption:reverse')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data, error } = await client.rpc('expire_stale_packages', {
     p_organization_id: orgId,
@@ -270,7 +268,7 @@ async function handleExpire(_req: Request, client: any, orgId: string, user: any
 
   if (error) {
     console.error('expire_stale_packages failed:', error);
-    return err('Failed to expire packages', 500, 'RPC_FAILED');
+    return err(ctx, 'Failed to expire packages', 500, 'RPC_FAILED');
   }
 
   return json({ data: { expired_count: data as number } });
@@ -279,18 +277,18 @@ async function handleExpire(_req: Request, client: any, orgId: string, user: any
 // ─── Patch (config) ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handlePatch(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:package:assign')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handlePatch(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:package:assign')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'INVALID_JSON'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON', 400, 'INVALID_JSON'); }
 
   const allowed: Record<string, unknown> = {};
   if (typeof body['cancellation_consumes_credit'] === 'boolean') {
     allowed['cancellation_consumes_credit'] = body['cancellation_consumes_credit'];
   }
 
-  if (Object.keys(allowed).length === 0) return err('No valid fields to update', 400, 'NO_FIELDS');
+  if (Object.keys(allowed).length === 0) return err(ctx, 'No valid fields to update', 400, 'NO_FIELDS');
 
   const { data, error } = await client
     .from('student_package_assignments')
@@ -300,7 +298,7 @@ async function handlePatch(req: Request, client: any, orgId: string, user: any, 
     .select('id, cancellation_consumes_credit, updated_at')
     .single();
 
-  if (error || !data) return err('Update failed', 500, 'UPDATE_FAILED');
+  if (error || !data) return err(ctx, 'Update failed', 500, 'UPDATE_FAILED');
   return json({ data });
 }
 
@@ -315,33 +313,40 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (orgId === null) return err(ctx, 'No organization context', 400, 'NO_ORG_CONTEXT');
 
   const { id, action } = parsePath(req);
 
   try {
     if (!id) {
-      if (action === 'consume' && req.method === 'POST') return await handleConsume(req, client, orgId, user);
-      if (action === 'reverse' && req.method === 'POST') return await handleReverse(req, client, orgId, user);
-      if (action === 'expire'  && req.method === 'POST') return await handleExpire(req, client, orgId, user);
-      if (!action && req.method === 'GET')               return await handleList(req, client, orgId, user);
-      return err('Not found', 404, 'NOT_FOUND');
+      if (action === 'consume' && req.method === 'POST') return await handleConsume(req, client, orgId, ctx);
+      if (action === 'reverse' && req.method === 'POST') return await handleReverse(req, client, orgId, ctx);
+      if (action === 'expire'  && req.method === 'POST') return await handleExpire(req, client, orgId, ctx);
+      if (!action && req.method === 'GET')               return await handleList(req, client, orgId, ctx);
+      return err(ctx, 'Not found', 404, 'NOT_FOUND');
     }
 
-    if (action === 'events' && req.method === 'GET') return await handleEvents(req, client, orgId, user, id);
+    if (action === 'events' && req.method === 'GET') return await handleEvents(req, client, orgId, ctx, id);
     if (!action) {
-      if (req.method === 'GET')   return await handleDetail(req, client, orgId, user, id);
-      if (req.method === 'PATCH') return await handlePatch(req, client, orgId, user, id);
+      if (req.method === 'GET')   return await handleDetail(req, client, orgId, ctx, id);
+      if (req.method === 'PATCH') return await handlePatch(req, client, orgId, ctx, id);
     }
 
-    return err('Not found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not found', 404, 'NOT_FOUND');
   } catch (e) {
     console.error('package-consumption error', e);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

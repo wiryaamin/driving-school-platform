@@ -11,7 +11,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,8 +24,8 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
 
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
 
 function extractId(req: Request): string | null {
@@ -39,21 +41,16 @@ function extractAction(req: Request): string | null {
   return segments[fnIdx + 2] ?? null;
 }
 
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'scheduling:booking:read')) {
-    return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'scheduling:booking:read')) {
+    return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   }
 
   const url    = new URL(req.url);
@@ -61,7 +58,7 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   const status = url.searchParams.get('status') ?? 'waiting';
 
   if (slotId === null || !UUID_RE.test(slotId)) {
-    return err('slot_id query param is required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'slot_id query param is required', 400, 'VALIDATION_ERROR');
   }
 
   // eslint-disable-next-line prefer-const
@@ -76,26 +73,26 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   if (status !== 'all') q = q.eq('status', status);
 
   const { data, error } = await q;
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
+  if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
   return json({ data: data ?? [] });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleJoin(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'scheduling:booking:create')) {
-    return err('Forbidden', 403, 'FORBIDDEN');
+async function handleJoin(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'scheduling:booking:create')) {
+    return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   }
 
   let body: Record<string, unknown>;
   try {
     body = await req.json();
   } catch {
-    return err('Invalid JSON body', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR');
   }
 
   const { slot_id, student_id } = body;
   if (!slot_id || !student_id) {
-    return err('slot_id and student_id are required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'slot_id and student_id are required', 400, 'VALIDATION_ERROR');
   }
 
   // Verify slot exists and belongs to this org
@@ -107,9 +104,9 @@ async function handleJoin(req: Request, client: any, orgId: string, user: any): 
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (slot === null) return err('Slot not found', 404, 'NOT_FOUND');
+  if (slot === null) return err(ctx, 'Slot not found', 404, 'NOT_FOUND');
   if (['cancelled', 'blocked'].includes(slot.status as string)) {
-    return err(`Cannot join waitlist for a ${slot.status} slot`, 409, 'CONFLICT');
+    return err(ctx, `Cannot join waitlist for a ${slot.status} slot`, 409, 'CONFLICT');
   }
 
   // Check for duplicate active entry
@@ -123,7 +120,7 @@ async function handleJoin(req: Request, client: any, orgId: string, user: any): 
     .maybeSingle();
 
   if (existing !== null) {
-    return err('Student already has an active waitlist entry for this slot', 409, 'CONFLICT');
+    return err(ctx, 'Student already has an active waitlist entry for this slot', 409, 'CONFLICT');
   }
 
   const { data, error } = await client
@@ -140,14 +137,14 @@ async function handleJoin(req: Request, client: any, orgId: string, user: any): 
     .select()
     .single();
 
-  if (error) return err(error.message, 422, 'INSERT_FAILED');
+  if (error) return err(ctx, error.message, 422, 'INSERT_FAILED');
   return json(data, 201);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetOne(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'scheduling:booking:read')) {
-    return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGetOne(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'scheduling:booking:read')) {
+    return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   }
 
   const { data, error } = await client
@@ -157,15 +154,15 @@ async function handleGetOne(id: string, client: any, orgId: string, user: any): 
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
-  if (data === null) return err('Waitlist entry not found', 404, 'NOT_FOUND');
+  if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
+  if (data === null) return err(ctx, 'Waitlist entry not found', 404, 'NOT_FOUND');
   return json(data);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleLeave(id: string, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'scheduling:booking:update')) {
-    return err('Forbidden', 403, 'FORBIDDEN');
+async function handleLeave(id: string, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'scheduling:booking:update')) {
+    return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   }
 
   const { data: existing } = await client
@@ -175,9 +172,9 @@ async function handleLeave(id: string, client: any, orgId: string, user: any): P
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (existing === null) return err('Waitlist entry not found', 404, 'NOT_FOUND');
+  if (existing === null) return err(ctx, 'Waitlist entry not found', 404, 'NOT_FOUND');
   if (existing.status !== 'waiting') {
-    return err(`Cannot cancel a waitlist entry in '${existing.status}' status`, 409, 'CONFLICT');
+    return err(ctx, `Cannot cancel a waitlist entry in '${existing.status}' status`, 409, 'CONFLICT');
   }
 
   const { data, error } = await client
@@ -188,34 +185,34 @@ async function handleLeave(id: string, client: any, orgId: string, user: any): P
     .select()
     .single();
 
-  if (error) return err(error.message, 500, 'UPDATE_FAILED');
+  if (error) return err(ctx, error.message, 500, 'UPDATE_FAILED');
   return json(data);
 }
 
 // Admin: manually trigger promotion for a specific slot
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handlePromote(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'scheduling:booking:update')) {
-    return err('Forbidden', 403, 'FORBIDDEN');
+async function handlePromote(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'scheduling:booking:update')) {
+    return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   }
 
   let body: Record<string, unknown>;
   try {
     body = await req.json();
   } catch {
-    return err('Invalid JSON body', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR');
   }
 
   const { slot_id } = body;
   if (!slot_id || !UUID_RE.test(String(slot_id))) {
-    return err('slot_id is required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'slot_id is required', 400, 'VALIDATION_ERROR');
   }
 
   const { data: promotedId, error } = await (client as any).rpc('promote_waitlist_next', {
     p_slot_id: slot_id,
   });
 
-  if (error) return err(error.message, 500, 'RPC_FAILED');
+  if (error) return err(ctx, error.message, 500, 'RPC_FAILED');
   if (promotedId === null) return json({ promoted: null, message: 'No waiting entries for this slot' });
   return json({ promoted: promotedId });
 }
@@ -231,15 +228,20 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) {
-    return err('Unauthorized', 401, 'UNAUTHORIZED');
-  }
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
   if (orgId === null) {
-    return err('No organization context', 400, 'NO_ORG_CONTEXT');
+    return err(ctx, 'No organization context', 400, 'NO_ORG_CONTEXT');
   }
 
   const id     = extractId(req);
@@ -248,18 +250,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   // POST /waitlist/:id/promote  (admin-triggered)
   if (id !== null && action === 'promote' && method === 'POST') {
-    return handlePromote(req, client, orgId, user);
+    return handlePromote(req, client, orgId, ctx);
   }
 
   // /waitlist/:id
   if (id !== null) {
-    if (method === 'GET')    return handleGetOne(id, client, orgId, user);
-    if (method === 'DELETE') return handleLeave(id, client, orgId, user);
-    return err('Method not allowed', 405);
+    if (method === 'GET')    return handleGetOne(id, client, orgId, ctx);
+    if (method === 'DELETE') return handleLeave(id, client, orgId, ctx);
+    return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
   }
 
   // /waitlist
-  if (method === 'GET')  return handleList(req, client, orgId, user);
-  if (method === 'POST') return handleJoin(req, client, orgId, user);
-  return err('Method not allowed', 405);
+  if (method === 'GET')  return handleList(req, client, orgId, ctx);
+  if (method === 'POST') return handleJoin(req, client, orgId, ctx);
+  return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 }));

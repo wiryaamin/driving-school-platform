@@ -11,7 +11,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors }        from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer, getUserIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,16 +21,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined ? { code } : {}) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  if (user.app_metadata?.['is_platform_admin'] === true) return true;
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  if (ctx.isPlatformAdmin) return true;
+  return ctx.permissions.includes(perm);
 }
 
 function parsePath(req: Request): { id: string | null; action: string | null } {
@@ -42,8 +40,8 @@ function parsePath(req: Request): { id: string | null; action: string | null } {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const url     = new URL(req.url);
   const page    = Math.max(1, Number(url.searchParams.get('page') ?? '1'));
@@ -75,20 +73,20 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   }
 
   const { data, error, count } = await q;
-  if (error !== null) return err(error.message, 500, 'QUERY_FAILED');
+  if (error !== null) return err(ctx, error.message, 500, 'QUERY_FAILED');
   return json({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0 } });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreate(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:create')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreate(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:create')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
   try { body = await req.json() as Record<string, unknown>; }
-  catch { return err('Request body must be valid JSON', 422, 'VALIDATION_ERROR'); }
+  catch { return err(ctx, 'Request body must be valid JSON', 422, 'VALIDATION_ERROR'); }
 
-  const actorId    = (user.id as string | undefined) ?? null;
-  const actorEmail = (user.email as string | undefined) ?? null;
+  const actorId    = ctx.actorId;
+  const actorEmail = ctx.actorEmail;
 
   const { data, error } = await client.rpc('create_order', {
     p_organization_id:     orgId,
@@ -114,13 +112,13 @@ async function handleCreate(req: Request, client: any, orgId: string, user: any)
     p_metadata:            body['metadata']            ?? {},
   });
 
-  if (error !== null) return err(error.message, 500, 'CREATE_FAILED');
+  if (error !== null) return err(ctx, error.message, 500, 'CREATE_FAILED');
   return json({ data }, 201);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetById(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGetById(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const [orderRes, itemsRes, eventsRes] = await Promise.all([
     client
@@ -143,8 +141,8 @@ async function handleGetById(req: Request, client: any, orgId: string, user: any
       .order('created_at', { ascending: true }),
   ]);
 
-  if (orderRes.error !== null) return err(orderRes.error.message, 500, 'QUERY_FAILED');
-  if (orderRes.data === null)  return err(`Order '${id}' not found`, 404, 'NOT_FOUND');
+  if (orderRes.error !== null) return err(ctx, orderRes.error.message, 500, 'QUERY_FAILED');
+  if (orderRes.data === null)  return err(ctx, `Order '${id}' not found`, 404, 'NOT_FOUND');
 
   return json({
     data: {
@@ -156,15 +154,15 @@ async function handleGetById(req: Request, client: any, orgId: string, user: any
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleUpdate(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleUpdate(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
   try { body = await req.json() as Record<string, unknown>; }
-  catch { return err('Request body must be valid JSON', 422, 'VALIDATION_ERROR'); }
+  catch { return err(ctx, 'Request body must be valid JSON', 422, 'VALIDATION_ERROR'); }
 
-  const actorId    = (user.id as string | undefined) ?? null;
-  const actorEmail = (user.email as string | undefined) ?? null;
+  const actorId    = ctx.actorId;
+  const actorEmail = ctx.actorEmail;
   const newStatus  = body['status'] as string | undefined;
 
   // If only updating notes (no status change), do a direct update
@@ -183,8 +181,8 @@ async function handleUpdate(req: Request, client: any, orgId: string, user: any,
       .single();
 
     if (error !== null) {
-      if (error.code === 'PGRST116') return err(`Order '${id}' not found`, 404, 'NOT_FOUND');
-      return err(error.message, 500, 'UPDATE_FAILED');
+      if (error.code === 'PGRST116') return err(ctx, `Order '${id}' not found`, 404, 'NOT_FOUND');
+      return err(ctx, error.message, 500, 'UPDATE_FAILED');
     }
 
     // Emit order_updated event
@@ -212,19 +210,19 @@ async function handleUpdate(req: Request, client: any, orgId: string, user: any,
     p_internal_notes:      body['internal_notes']      ?? null,
   });
 
-  if (error !== null) return err(error.message, 409, 'TRANSITION_FAILED');
+  if (error !== null) return err(ctx, error.message, 409, 'TRANSITION_FAILED');
   return json({ data });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCancel(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:cancel')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCancel(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:cancel')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown> = {};
   try { body = await req.json() as Record<string, unknown>; } catch { /* reason is optional */ }
 
-  const actorId    = (user.id as string | undefined) ?? null;
-  const actorEmail = (user.email as string | undefined) ?? null;
+  const actorId    = ctx.actorId;
+  const actorEmail = ctx.actorEmail;
 
   const { data, error } = await client.rpc('update_order_status', {
     p_order_id:            id,
@@ -237,15 +235,15 @@ async function handleCancel(req: Request, client: any, orgId: string, user: any,
     p_internal_notes:      null,
   });
 
-  if (error !== null) return err(error.message, 409, 'CANCEL_FAILED');
+  if (error !== null) return err(ctx, error.message, 409, 'CANCEL_FAILED');
   return json({ data });
 }
 
 // ─── Revenue report ──────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRevenueReport(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'orders:order:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleRevenueReport(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'orders:order:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const url     = new URL(req.url);
   const dateFrom = url.searchParams.get('date_from');
@@ -262,7 +260,7 @@ async function handleRevenueReport(req: Request, client: any, orgId: string, use
   if (dateTo   !== null) q = q.lte('period_month', dateTo);
 
   const { data, error } = await q;
-  if (error !== null) return err(error.message, 500, 'QUERY_FAILED');
+  if (error !== null) return err(ctx, error.message, 500, 'QUERY_FAILED');
   return json({ data: data ?? [] });
 }
 
@@ -276,29 +274,37 @@ Deno.serve((req: Request) =>
       global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
     });
 
-    let user = await client.auth.getUser().then((r) => r.data.user ?? {});
-    user = enrichUserFromJwt(req, user);
+    const ctxResult = await buildEdgeContext(req);
+    if (!ctxResult.ok) return ctxResult.response;
+    const ctx = ctxResult.ctx;
 
-    const orgId = getOrgId(user);
-    if (orgId === null) return err('No organization context', 401, 'UNAUTHORIZED');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+    const orgId = ctx.organizationId;
+    if (orgId === null) return err(ctx, 'No organization context', 401, 'UNAUTHORIZED');
 
     const { id, action } = parsePath(req);
 
     // Collection routes
     if (id === null) {
-      if (action === 'revenue-report' && req.method === 'GET') return handleRevenueReport(req, client, orgId, user);
-      if (req.method === 'GET')  return handleList(req, client, orgId, user);
-      if (req.method === 'POST') return handleCreate(req, client, orgId, user);
-      return err('Method not allowed', 405);
+      if (action === 'revenue-report' && req.method === 'GET') return handleRevenueReport(req, client, orgId, ctx);
+      if (req.method === 'GET')  return handleList(req, client, orgId, ctx);
+      if (req.method === 'POST') return handleCreate(req, client, orgId, ctx);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     // Item action routes
-    if (action === 'cancel' && req.method === 'POST') return handleCancel(req, client, orgId, user, id);
+    if (action === 'cancel' && req.method === 'POST') return handleCancel(req, client, orgId, ctx, id);
 
     // Item routes
-    if (req.method === 'GET')   return handleGetById(req, client, orgId, user, id);
-    if (req.method === 'PATCH') return handleUpdate(req, client, orgId, user, id);
+    if (req.method === 'GET')   return handleGetById(req, client, orgId, ctx, id);
+    if (req.method === 'PATCH') return handleUpdate(req, client, orgId, ctx, id);
 
-    return err('Method not allowed', 405);
+    return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
   })
 );

@@ -18,7 +18,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors }        from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -26,16 +28,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined ? { code } : {}) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  if (user.app_metadata?.['is_platform_admin'] === true) return true;
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  if (ctx.isPlatformAdmin) return true;
+  return ctx.permissions.includes(perm);
 }
 
 function parsePath(req: Request): { id: string | null; action: string | null } {
@@ -80,8 +78,8 @@ async function emitEvent(
 // ─── List ─────────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const url     = new URL(req.url);
   const page    = Number(url.searchParams.get('page')     ?? '1');
@@ -108,7 +106,7 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   }
 
   const { data, count, error } = await q;
-  if (error) return err('Failed to load enrollments', 500, 'QUERY_FAILED');
+  if (error) return err(ctx, 'Failed to load enrollments', 500, 'QUERY_FAILED');
 
   const total = count ?? 0;
   return json({
@@ -120,8 +118,8 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
 // ─── Detail ───────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleDetail(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleDetail(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   // Fetch enrollment + events + package assignment in parallel
   const [enrollmentRes, eventsRes, assignmentRes] = await Promise.all([
@@ -143,8 +141,8 @@ async function handleDetail(_req: Request, client: any, orgId: string, user: any
       .maybeSingle(),
   ]);
 
-  if (enrollmentRes.error) return err('Failed to load enrollment', 500, 'QUERY_FAILED');
-  if (!enrollmentRes.data) return err('Enrollment not found', 404, 'NOT_FOUND');
+  if (enrollmentRes.error) return err(ctx, 'Failed to load enrollment', 500, 'QUERY_FAILED');
+  if (!enrollmentRes.data) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
 
   const enrollment = enrollmentRes.data as Record<string, unknown>;
 
@@ -157,7 +155,7 @@ async function handleDetail(_req: Request, client: any, orgId: string, user: any
       .eq('id', id);
     enrollment['status'] = 'pending_review';
 
-    await emitEvent(client, orgId, id, 'viewed', user.id as string | null, user.email as string | null);
+    await emitEvent(client, orgId, id, 'viewed', ctx.actorId as string | null, ctx.actorEmail as string | null);
   }
 
   // Fetch student onboarding_status if converted
@@ -188,8 +186,8 @@ async function handleDetail(_req: Request, client: any, orgId: string, user: any
 // ─── Duplicates check ─────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleDuplicates(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleDuplicates(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data: enrollment } = await client
     .from('enrollment_requests')
@@ -198,7 +196,7 @@ async function handleDuplicates(_req: Request, client: any, orgId: string, user:
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!enrollment) return err('Enrollment not found', 404, 'NOT_FOUND');
+  if (!enrollment) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
 
   const email        = enrollment.email       as string;
   const phone        = enrollment.phone       as string | null;
@@ -244,16 +242,16 @@ async function handleDuplicates(_req: Request, client: any, orgId: string, user:
 // ─── Update (internal notes) ──────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleUpdate(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleUpdate(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'INVALID_JSON'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON', 400, 'INVALID_JSON'); }
 
   const allowed: Record<string, unknown> = {};
   if (typeof body['internal_notes'] === 'string') allowed['internal_notes'] = body['internal_notes'];
 
-  if (Object.keys(allowed).length === 0) return err('No valid fields to update', 400, 'NO_FIELDS');
+  if (Object.keys(allowed).length === 0) return err(ctx, 'No valid fields to update', 400, 'NO_FIELDS');
 
   const { data, error } = await client
     .from('enrollment_requests')
@@ -263,9 +261,9 @@ async function handleUpdate(req: Request, client: any, orgId: string, user: any,
     .select('id, status, internal_notes, updated_at')
     .single();
 
-  if (error || !data) return err('Update failed', 500, 'UPDATE_FAILED');
+  if (error || !data) return err(ctx, 'Update failed', 500, 'UPDATE_FAILED');
 
-  await emitEvent(client, orgId, id, 'notes_updated', user.id as string | null, user.email as string | null);
+  await emitEvent(client, orgId, id, 'notes_updated', ctx.actorId as string | null, ctx.actorEmail as string | null);
 
   return json({ data });
 }
@@ -273,16 +271,16 @@ async function handleUpdate(req: Request, client: any, orgId: string, user: any,
 // ─── Onboarding status update ─────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleOnboarding(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleOnboarding(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'INVALID_JSON'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON', 400, 'INVALID_JSON'); }
 
   const VALID = ['new_student', 'documents_pending', 'ready_for_booking', 'active_student'];
   const onboardingStatus = body['onboarding_status'];
   if (typeof onboardingStatus !== 'string' || !VALID.includes(onboardingStatus)) {
-    return err('Invalid onboarding_status value', 400, 'INVALID_STATUS');
+    return err(ctx, 'Invalid onboarding_status value', 400, 'INVALID_STATUS');
   }
 
   const { data: enrollment } = await client
@@ -292,8 +290,8 @@ async function handleOnboarding(req: Request, client: any, orgId: string, user: 
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!enrollment) return err('Enrollment not found', 404, 'NOT_FOUND');
-  if (!enrollment.student_id) return err('No student linked to this enrollment', 409, 'NO_STUDENT');
+  if (!enrollment) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
+  if (!enrollment.student_id) return err(ctx, 'No student linked to this enrollment', 409, 'NO_STUDENT');
 
   const { error } = await client.rpc('set_student_onboarding_status', {
     p_organization_id:   orgId,
@@ -303,10 +301,10 @@ async function handleOnboarding(req: Request, client: any, orgId: string, user: 
 
   if (error) {
     console.error('set_student_onboarding_status failed:', error);
-    return err('Failed to update onboarding status', 500, 'UPDATE_FAILED');
+    return err(ctx, 'Failed to update onboarding status', 500, 'UPDATE_FAILED');
   }
 
-  await emitEvent(client, orgId, id, 'status_updated', user.id as string | null, user.email as string | null, {
+  await emitEvent(client, orgId, id, 'status_updated', ctx.actorId as string | null, ctx.actorEmail as string | null, {
     onboarding_status: onboardingStatus,
   });
 
@@ -316,8 +314,8 @@ async function handleOnboarding(req: Request, client: any, orgId: string, user: 
 // ─── Approve ──────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleApprove(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleApprove(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data: current } = await client
     .from('enrollment_requests')
@@ -326,9 +324,9 @@ async function handleApprove(_req: Request, client: any, orgId: string, user: an
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!current) return err('Enrollment not found', 404, 'NOT_FOUND');
+  if (!current) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
   if (!['submitted', 'pending_review'].includes(current.status as string)) {
-    return err(`Cannot approve enrollment in status "${current.status}"`, 409, 'INVALID_STATUS');
+    return err(ctx, `Cannot approve enrollment in status "${current.status}"`, 409, 'INVALID_STATUS');
   }
 
   const { data, error } = await client
@@ -336,15 +334,15 @@ async function handleApprove(_req: Request, client: any, orgId: string, user: an
     .update({
       status:      'approved',
       reviewed_at: new Date().toISOString(),
-      reviewed_by: user.id,
+      reviewed_by: ctx.actorId,
     })
     .eq('id', id)
     .select('id, status, reviewed_at')
     .single();
 
-  if (error || !data) return err('Approve failed', 500, 'UPDATE_FAILED');
+  if (error || !data) return err(ctx, 'Approve failed', 500, 'UPDATE_FAILED');
 
-  await emitEvent(client, orgId, id, 'approved', user.id as string | null, user.email as string | null);
+  await emitEvent(client, orgId, id, 'approved', ctx.actorId as string | null, ctx.actorEmail as string | null);
 
   return json({ data });
 }
@@ -352,8 +350,8 @@ async function handleApprove(_req: Request, client: any, orgId: string, user: an
 // ─── Reject ───────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleReject(req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:update')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleReject(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:update')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown> = {};
   try { body = await req.json(); } catch { /* reason optional */ }
@@ -368,9 +366,9 @@ async function handleReject(req: Request, client: any, orgId: string, user: any,
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!current) return err('Enrollment not found', 404, 'NOT_FOUND');
+  if (!current) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
   if (current.status === 'converted') {
-    return err('Cannot reject a converted enrollment', 409, 'ALREADY_CONVERTED');
+    return err(ctx, 'Cannot reject a converted enrollment', 409, 'ALREADY_CONVERTED');
   }
 
   const { data, error } = await client
@@ -379,15 +377,15 @@ async function handleReject(req: Request, client: any, orgId: string, user: any,
       status:          'rejected',
       rejected_reason: reason,
       reviewed_at:     new Date().toISOString(),
-      reviewed_by:     user.id,
+      reviewed_by:     ctx.actorId,
     })
     .eq('id', id)
     .select('id, status, rejected_reason, reviewed_at')
     .single();
 
-  if (error || !data) return err('Reject failed', 500, 'UPDATE_FAILED');
+  if (error || !data) return err(ctx, 'Reject failed', 500, 'UPDATE_FAILED');
 
-  await emitEvent(client, orgId, id, 'rejected', user.id as string | null, user.email as string | null, {
+  await emitEvent(client, orgId, id, 'rejected', ctx.actorId as string | null, ctx.actorEmail as string | null, {
     reason,
   });
 
@@ -397,8 +395,8 @@ async function handleReject(req: Request, client: any, orgId: string, user: any,
 // ─── Convert to student ───────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleConvert(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:convert')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleConvert(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:convert')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data: enrollment } = await client
     .from('enrollment_requests')
@@ -407,12 +405,12 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!enrollment) return err('Enrollment not found', 404, 'NOT_FOUND');
+  if (!enrollment) return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
   if (enrollment.status !== 'approved') {
-    return err('Only approved enrollments can be converted', 409, 'INVALID_STATUS');
+    return err(ctx, 'Only approved enrollments can be converted', 409, 'INVALID_STATUS');
   }
   if (enrollment.student_id) {
-    return err('Already converted', 409, 'ALREADY_CONVERTED');
+    return err(ctx, 'Already converted', 409, 'ALREADY_CONVERTED');
   }
 
   // Check for existing student with same email in this org
@@ -452,7 +450,7 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
 
     if (studentErr || !newStudent) {
       console.error('student creation failed', studentErr);
-      return err('Kunde inte skapa elev', 500, 'STUDENT_CREATE_FAILED');
+      return err(ctx, 'Kunde inte skapa elev', 500, 'STUDENT_CREATE_FAILED');
     }
     studentId = newStudent.id as string;
   }
@@ -464,13 +462,13 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
       status:       'converted',
       student_id:   studentId,
       converted_at: new Date().toISOString(),
-      converted_by: user.id,
+      converted_by: ctx.actorId,
     })
     .eq('id', id)
     .select('id, status, student_id, converted_at')
     .single();
 
-  if (updateErr || !updated) return err('Conversion update failed', 500, 'UPDATE_FAILED');
+  if (updateErr || !updated) return err(ctx, 'Conversion update failed', 500, 'UPDATE_FAILED');
 
   // ── D3.E2: Set initial commercial status ──────────────────────────────────────
   // Marks the student as activated-but-not-yet-invoiced. Non-critical: status gap
@@ -509,8 +507,8 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
     p_coupon_discount:     enrollment.coupon_discount     as number ?? 0,
     p_vat_rate:            enrollment.vat_rate            as number ?? 0.25,
     p_currency:            enrollment.currency            as string ?? 'SEK',
-    p_actor_id:            user.id    as string | null,
-    p_actor_email:         user.email as string | null,
+    p_actor_id:            ctx.actorId    as string | null,
+    p_actor_email:         ctx.actorEmail as string | null,
     p_metadata:            { enrollment_id: id, source: 'enrollment_conversion' },
   });
 
@@ -547,7 +545,7 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
       final_price:         enrollment.final_price as number,
       final_price_incl_vat: enrollment.final_price_incl_vat as number,
       currency:            enrollment.currency as string,
-      assigned_by:         user.id,
+      assigned_by:         ctx.actorId,
     })
     .select('id')
     .single();
@@ -573,7 +571,7 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
     }
   }
 
-  await emitEvent(client, orgId, id, 'converted', user.id as string | null, user.email as string | null, {
+  await emitEvent(client, orgId, id, 'converted', ctx.actorId as string | null, ctx.actorEmail as string | null, {
     student_id:             studentId,
     student_created:        !existingStudent,
     ...(packageAssignmentId != null ? { package_assignment_id: packageAssignmentId } : {}),
@@ -581,7 +579,7 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
   });
 
   if (packageAssignmentId) {
-    await emitEvent(client, orgId, id, 'package_assigned', user.id as string | null, user.email as string | null, {
+    await emitEvent(client, orgId, id, 'package_assigned', ctx.actorId as string | null, ctx.actorEmail as string | null, {
       student_package_assignment_id: packageAssignmentId,
     });
     // emit package_assigned to package_consumption_events timeline
@@ -590,8 +588,8 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
       await client.rpc('record_package_assigned_event', {
         p_assignment_id:   packageAssignmentId,
         p_organization_id: orgId,
-        p_actor_id:        user.id   ?? null,
-        p_actor_email:     user.email ?? null,
+        p_actor_id:        ctx.actorId   ?? null,
+        p_actor_email:     ctx.actorEmail ?? null,
       });
       console.debug('[enrollments] record_package_assigned_event ok', { packageAssignmentId });
     } catch (e: unknown) {
@@ -601,7 +599,7 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
 
   // H-1: emit order_created enrollment event when an order was created
   if (orderId != null) {
-    await emitEvent(client, orgId, id, 'order_created', user.id as string | null, user.email as string | null, {
+    await emitEvent(client, orgId, id, 'order_created', ctx.actorId as string | null, ctx.actorEmail as string | null, {
       order_id:     orderId,
       order_number: orderNumber,
       student_id:   studentId,
@@ -625,8 +623,8 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
     const { data: invoiceResult, error: invoiceErr } = await client.rpc('create_invoice_from_order', {
       p_order_id:      orderId,
       p_enrollment_id: id,
-      p_actor_id:      user.id    as string | null,
-      p_actor_email:   user.email as string | null,
+      p_actor_id:      ctx.actorId    as string | null,
+      p_actor_email:   ctx.actorEmail as string | null,
     });
     console.debug('[enrollments] create_invoice_from_order done', { orderId, hasError: !!invoiceErr, hasResult: invoiceResult != null });
 
@@ -670,8 +668,8 @@ async function handleConvert(_req: Request, client: any, orgId: string, user: an
 // Returns existing assignment immediately if one already exists.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleAssignPackage(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:convert')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleAssignPackage(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:convert')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data: enrollment } = await client
     .from('enrollment_requests')
@@ -680,9 +678,9 @@ async function handleAssignPackage(_req: Request, client: any, orgId: string, us
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!enrollment)                 return err('Enrollment not found', 404, 'NOT_FOUND');
-  if (enrollment.status !== 'converted') return err('Enrollment must be converted first', 409, 'NOT_CONVERTED');
-  if (!enrollment.student_id)      return err('No student linked to this enrollment', 409, 'NO_STUDENT');
+  if (!enrollment)                 return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
+  if (enrollment.status !== 'converted') return err(ctx, 'Enrollment must be converted first', 409, 'NOT_CONVERTED');
+  if (!enrollment.student_id)      return err(ctx, 'No student linked to this enrollment', 409, 'NO_STUDENT');
 
   // Return existing assignment if present
   const { data: existing } = await client
@@ -715,17 +713,17 @@ async function handleAssignPackage(_req: Request, client: any, orgId: string, us
       final_price:         enrollment.final_price as number,
       final_price_incl_vat: enrollment.final_price_incl_vat as number,
       currency:            enrollment.currency as string,
-      assigned_by:         user.id,
+      assigned_by:         ctx.actorId,
     })
     .select('*')
     .single();
 
   if (error || !assignment) {
     console.error('handleAssignPackage failed:', error);
-    return err('Package assignment failed', 500, 'ASSIGN_FAILED');
+    return err(ctx, 'Package assignment failed', 500, 'ASSIGN_FAILED');
   }
 
-  await emitEvent(client, orgId, id, 'package_assigned', user.id as string | null, user.email as string | null, {
+  await emitEvent(client, orgId, id, 'package_assigned', ctx.actorId as string | null, ctx.actorEmail as string | null, {
     student_package_assignment_id: assignment.id as string,
   });
   // H-2: emit package_assigned to package_consumption_events timeline
@@ -734,8 +732,8 @@ async function handleAssignPackage(_req: Request, client: any, orgId: string, us
     await client.rpc('record_package_assigned_event', {
       p_assignment_id:   assignment.id as string,
       p_organization_id: orgId,
-      p_actor_id:        user.id   ?? null,
-      p_actor_email:     user.email ?? null,
+      p_actor_id:        ctx.actorId   ?? null,
+      p_actor_email:     ctx.actorEmail ?? null,
     });
     console.debug('[enrollments] record_package_assigned_event ok (assign-package)', { assignmentId: assignment.id });
   } catch (e: unknown) {
@@ -751,8 +749,8 @@ async function handleAssignPackage(_req: Request, client: any, orgId: string, us
 // Intended as the recovery path when invoice creation failed during convert.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreateInvoice(_req: Request, client: any, orgId: string, user: any, id: string): Promise<Response> {
-  if (!hasPermission(user, 'enrollment:request:convert')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleCreateInvoice(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, id: string): Promise<Response> {
+  if (!hasPermission(ctx, 'enrollment:request:convert')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   const { data: enrollment } = await client
     .from('enrollment_requests')
@@ -761,9 +759,9 @@ async function handleCreateInvoice(_req: Request, client: any, orgId: string, us
     .eq('organization_id', orgId)
     .maybeSingle();
 
-  if (!enrollment)                          return err('Enrollment not found', 404, 'NOT_FOUND');
-  if (enrollment.status !== 'converted')    return err('Enrollment must be converted before creating an invoice', 409, 'NOT_CONVERTED');
-  if (!enrollment.student_id)              return err('No student linked to this enrollment', 409, 'NO_STUDENT');
+  if (!enrollment)                          return err(ctx, 'Enrollment not found', 404, 'NOT_FOUND');
+  if (enrollment.status !== 'converted')    return err(ctx, 'Enrollment must be converted before creating an invoice', 409, 'NOT_CONVERTED');
+  if (!enrollment.student_id)              return err(ctx, 'No student linked to this enrollment', 409, 'NO_STUDENT');
 
   // Find the most recent eligible order for this enrollment.
   // ORDER BY created_at DESC LIMIT 1 selects the newest in the rare case where
@@ -781,22 +779,22 @@ async function handleCreateInvoice(_req: Request, client: any, orgId: string, us
 
   if (orderQueryErr) {
     console.error('handleCreateInvoice order query failed:', orderQueryErr);
-    return err('Failed to load order', 500, 'QUERY_FAILED');
+    return err(ctx, 'Failed to load order', 500, 'QUERY_FAILED');
   }
-  if (!order) return err('No eligible order found for this enrollment', 409, 'ORDER_MISSING');
+  if (!order) return err(ctx, 'No eligible order found for this enrollment', 409, 'ORDER_MISSING');
 
   // create_invoice_from_order() is idempotent: returns the existing invoice
   // with idempotent=true when orders.invoice_id is already set.
   const { data: invoiceResult, error: invoiceErr } = await client.rpc('create_invoice_from_order', {
     p_order_id:      order.id  as string,
     p_enrollment_id: id,
-    p_actor_id:      user.id    as string | null,
-    p_actor_email:   user.email as string | null,
+    p_actor_id:      ctx.actorId    as string | null,
+    p_actor_email:   ctx.actorEmail as string | null,
   });
 
   if (invoiceErr) {
     console.error('create_invoice_from_order failed in handleCreateInvoice:', invoiceErr);
-    return err((invoiceErr as { message?: string }).message ?? 'Invoice creation failed', 422, 'INVOICE_CREATION_FAILED');
+    return err(ctx, (invoiceErr as { message?: string }).message ?? 'Invoice creation failed', 422, 'INVOICE_CREATION_FAILED');
   }
 
   const result = invoiceResult as Record<string, unknown>;
@@ -836,40 +834,47 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authErr } = await client.auth.getUser();
-  if (authErr !== null || rawUser === null) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (orgId === null) return err('No organization context', 400, 'NO_ORG_CONTEXT');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (orgId === null) return err(ctx, 'No organization context', 400, 'NO_ORG_CONTEXT');
 
   const { id, action } = parsePath(req);
 
   try {
     // Routes without an id
     if (!id) {
-      if (req.method === 'GET') return await handleList(req, client, orgId, user);
-      return err('Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      if (req.method === 'GET') return await handleList(req, client, orgId, ctx);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     // Action sub-routes
-    if (action === 'approve'        && req.method === 'POST')  return await handleApprove(req, client, orgId, user, id);
-    if (action === 'reject'         && req.method === 'POST')  return await handleReject(req, client, orgId, user, id);
-    if (action === 'convert'        && req.method === 'POST')  return await handleConvert(req, client, orgId, user, id);
-    if (action === 'assign-package' && req.method === 'POST')  return await handleAssignPackage(req, client, orgId, user, id);
-    if (action === 'create-invoice' && req.method === 'POST')  return await handleCreateInvoice(req, client, orgId, user, id);
-    if (action === 'duplicates'     && req.method === 'GET')   return await handleDuplicates(req, client, orgId, user, id);
-    if (action === 'onboarding'     && req.method === 'PATCH') return await handleOnboarding(req, client, orgId, user, id);
+    if (action === 'approve'        && req.method === 'POST')  return await handleApprove(req, client, orgId, ctx, id);
+    if (action === 'reject'         && req.method === 'POST')  return await handleReject(req, client, orgId, ctx, id);
+    if (action === 'convert'        && req.method === 'POST')  return await handleConvert(req, client, orgId, ctx, id);
+    if (action === 'assign-package' && req.method === 'POST')  return await handleAssignPackage(req, client, orgId, ctx, id);
+    if (action === 'create-invoice' && req.method === 'POST')  return await handleCreateInvoice(req, client, orgId, ctx, id);
+    if (action === 'duplicates'     && req.method === 'GET')   return await handleDuplicates(req, client, orgId, ctx, id);
+    if (action === 'onboarding'     && req.method === 'PATCH') return await handleOnboarding(req, client, orgId, ctx, id);
 
     // Base id routes
     if (!action) {
-      if (req.method === 'GET')   return await handleDetail(req, client, orgId, user, id);
-      if (req.method === 'PATCH') return await handleUpdate(req, client, orgId, user, id);
+      if (req.method === 'GET')   return await handleDetail(req, client, orgId, ctx, id);
+      if (req.method === 'PATCH') return await handleUpdate(req, client, orgId, ctx, id);
     }
 
-    return err('Not found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not found', 404, 'NOT_FOUND');
   } catch (e) {
     console.error('enrollments error', e);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

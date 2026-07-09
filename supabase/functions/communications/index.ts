@@ -20,19 +20,23 @@
  *   PATCH  /communications/rules/:id           — update rule (enable/disable, template)
  *   DELETE /communications/rules/:id           — delete rule
  *
+ *   GET    /communications/analytics           — delivery analytics (?format=summary|daily|templates|latency)
+ *   GET    /communications/queue-health        — outbound_messages queue snapshot
+ *   GET    /communications/outbox-health       — event_outbox backlog snapshot (Epic 7.4)
+ *
  * Authorization:
  *   All routes require a valid JWT with organization_id + sub claims (via auth hook).
  *   Write operations on channels and templates additionally require admin/manager/owner role.
  */
 
 import { serveCors }            from '../_shared/cors.ts';
-import { buildEdgeContext }     from '../_shared/context.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { createServiceClient }  from '../_shared/supabase.ts';
-import { getRoleFromBearer }    from '../_shared/jwt.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { requireFeature }       from '../_shared/subscription.ts';
 import { dispatchMessage }      from '../_shared/comm-providers.ts';
 import { applyTemplateVars }    from '../_shared/template-utils.ts';
+import { buildErrorResponse }   from '../_shared/errors.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,8 +55,8 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
 
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
 
 // ─── URL routing ──────────────────────────────────────────────────────────────
@@ -86,9 +90,10 @@ function extractPath(req: Request): PathParts {
   // /send
   if (first === 'send') return { id: null, action: 'send', sub: null };
 
-  // /analytics, /queue-health, /bulk-retry, /seed-defaults
+  // /analytics, /queue-health, /outbox-health, /bulk-retry, /seed-defaults
   if (first === 'analytics')     return { id: null, action: 'analytics',     sub: null };
   if (first === 'queue-health')  return { id: null, action: 'queue-health',  sub: null };
+  if (first === 'outbox-health') return { id: null, action: 'outbox-health', sub: null };
   if (first === 'bulk-retry')    return { id: null, action: 'bulk-retry',    sub: null };
   if (first === 'seed-defaults') return { id: null, action: 'seed-defaults', sub: null };
 
@@ -150,7 +155,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (action === 'channels' && !sub) {
-      if (method !== 'GET') return err('Method not allowed', 405);
+      if (method !== 'GET') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
       const { data, error } = await supabase
         .from('channel_configs')
         .select('*')
@@ -161,13 +166,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     }
 
     if (action === 'channels' && sub) {
-      if (method !== 'PUT') return err('Method not allowed', 405);
-      const role = getRoleFromBearer(req);
+      if (method !== 'PUT') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      const role = ctx.actorRole;
       if (!ADMIN_ROLES.has(role ?? '')) {
-        return err('Forbidden — requires admin, manager, or owner role', 403, 'FORBIDDEN');
+        return err(ctx, 'Forbidden — requires admin, manager, or owner role', 403, 'FORBIDDEN');
       }
       const channel = sub as Channel;
-      if (!CHANNELS.includes(channel)) return err('Invalid channel', 400, 'INVALID_CHANNEL');
+      if (!CHANNELS.includes(channel)) return err(ctx, 'Invalid channel', 400, 'INVALID_CHANNEL');
 
       const body = await req.json() as {
         enabled?:      boolean;
@@ -182,12 +187,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .upsert({
           organization_id: orgId,
           channel,
-          enabled:      body.enabled      ?? false,
-          provider:     body.provider     ?? null,
-          from_address: body.from_address ?? null,
-          display_name: body.display_name ?? null,
-          daily_limit:  body.daily_limit  ?? 500,
-          updated_at:   new Date().toISOString(),
+          enabled:         body.enabled      ?? false,
+          provider:        body.provider     ?? null,
+          from_address:    body.from_address ?? null,
+          display_name:    body.display_name ?? null,
+          daily_limit:     body.daily_limit  ?? 500,
+          updated_at:      new Date().toISOString(),
         }, { onConflict: 'organization_id,channel' })
         .select()
         .single();
@@ -215,8 +220,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
 
       if (method === 'POST') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const body = await req.json() as {
           key:        string;
@@ -227,9 +232,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           body_html?: string | null;
           variables?: string[];
         };
-        if (!body.key?.trim())       return err('key is required', 400);
-        if (!body.channel?.trim())   return err('channel is required', 400);
-        if (!body.body_text?.trim()) return err('body_text is required', 400);
+        if (!body.key?.trim())       return err(ctx, 'key is required', 400, 'VALIDATION_ERROR');
+        if (!body.channel?.trim())   return err(ctx, 'channel is required', 400, 'VALIDATION_ERROR');
+        if (!body.body_text?.trim()) return err(ctx, 'body_text is required', 400, 'VALIDATION_ERROR');
 
         const { data, error } = await supabase
           .from('notification_templates')
@@ -250,13 +255,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         return json({ data }, 201);
       }
 
-      return err('Method not allowed', 405);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     if (action === 'templates' && id) {
       if (method === 'PATCH') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const body = await req.json() as {
           subject?:   string | null;
@@ -277,8 +282,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
 
       if (method === 'DELETE') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const { error } = await supabase
           .from('notification_templates')
@@ -289,7 +294,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         return json({ success: true });
       }
 
-      return err('Method not allowed', 405);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -312,8 +317,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
 
       if (method === 'POST') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const body = await req.json() as {
           trigger_event:  string;
@@ -322,9 +327,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           recipient_type?: 'student' | 'instructor';
           enabled?:       boolean;
         };
-        if (!body.trigger_event) return err('trigger_event is required', 400);
-        if (!body.channel || !CHANNELS.includes(body.channel)) return err('Invalid channel', 400);
-        if (!body.template_id)   return err('template_id is required', 400);
+        if (!body.trigger_event) return err(ctx, 'trigger_event is required', 400, 'VALIDATION_ERROR');
+        if (!body.channel || !CHANNELS.includes(body.channel)) return err(ctx, 'Invalid channel', 400, 'INVALID_CHANNEL');
+        if (!body.template_id)   return err(ctx, 'template_id is required', 400, 'VALIDATION_ERROR');
 
         const { data, error } = await supabase
           .from('notification_rules')
@@ -342,13 +347,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         return json({ data }, 201);
       }
 
-      return err('Method not allowed', 405);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     if (action === 'rules' && id) {
       if (method === 'PATCH') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const body = await req.json() as {
           enabled?:       boolean;
@@ -367,8 +372,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
 
       if (method === 'DELETE') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
         const { error } = await supabase
           .from('notification_rules')
@@ -379,7 +384,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         return json({ success: true });
       }
 
-      return err('Method not allowed', 405);
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -387,7 +392,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (action === 'send') {
-      if (method !== 'POST') return err('Method not allowed', 405);
+      if (method !== 'POST') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const body = await req.json() as {
         channel:            Channel;
@@ -403,10 +408,10 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       };
 
       if (!body.channel || !CHANNELS.includes(body.channel)) {
-        return err('Invalid or missing channel', 400, 'INVALID_CHANNEL');
+        return err(ctx, 'Invalid or missing channel', 400, 'INVALID_CHANNEL');
       }
-      if (!body.recipient_address?.trim()) return err('recipient_address is required', 400, 'MISSING_RECIPIENT');
-      if (!body.body?.trim())              return err('body is required', 400, 'MISSING_BODY');
+      if (!body.recipient_address?.trim()) return err(ctx, 'recipient_address is required', 400, 'MISSING_RECIPIENT');
+      if (!body.body?.trim())              return err(ctx, 'body is required', 400, 'MISSING_BODY');
 
       const finalBody    = body.variables ? applyTemplateVars(body.body, body.variables) : body.body.trim();
       const finalSubject = (body.subject && body.variables)
@@ -427,7 +432,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       if (!isScheduled && cfg?.enabled) {
         const limitExceeded = await isDailyLimitExceeded(supabase, orgId, body.channel, cfg.daily_limit ?? 500);
-        if (limitExceeded) return err(`Daily send limit reached for ${body.channel}`, 429, 'DAILY_LIMIT_EXCEEDED');
+        if (limitExceeded) return err(ctx, `Daily send limit reached for ${body.channel}`, 429, 'DAILY_LIMIT_EXCEEDED');
 
         const result = await dispatchMessage({
           channel:  body.channel,
@@ -474,7 +479,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (id && action === 'retry') {
-      if (method !== 'PATCH') return err('Method not allowed', 405);
+      if (method !== 'PATCH') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const { data: msg, error: fetchErr } = await supabase
         .from('outbound_messages')
@@ -482,9 +487,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('id', id)
         .eq('organization_id', orgId)
         .single();
-      if (fetchErr || !msg) return err('Message not found', 404, 'NOT_FOUND');
-      if (msg.status !== 'failed') return err('Only failed messages can be retried', 400, 'INVALID_STATE');
-      if (msg.retry_count >= msg.max_retries) return err('Max retries exceeded', 400, 'MAX_RETRIES');
+      if (fetchErr || !msg) return err(ctx, 'Message not found', 404, 'NOT_FOUND');
+      if (msg.status !== 'failed') return err(ctx, 'Only failed messages can be retried', 400, 'INVALID_STATE');
+      if (msg.retry_count >= msg.max_retries) return err(ctx, 'Max retries exceeded', 400, 'MAX_RETRIES');
 
       const { data: cfg } = await supabase
         .from('channel_configs')
@@ -525,7 +530,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     }
 
     if (id && action === 'cancel') {
-      if (method !== 'PATCH') return err('Method not allowed', 405);
+      if (method !== 'PATCH') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const { data, error: updErr } = await supabase
         .from('outbound_messages')
@@ -535,7 +540,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .in('status', ['queued'])
         .select()
         .single();
-      if (updErr || !data) return err('Message not found or already dispatched', 400, 'INVALID_STATE');
+      if (updErr || !data) return err(ctx, 'Message not found or already dispatched', 400, 'INVALID_STATE');
       return json({ data });
     }
 
@@ -544,7 +549,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (action === 'analytics') {
-      if (method !== 'GET') return err('Method not allowed', 405);
+      if (method !== 'GET') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const days   = Math.min(Math.max(1, parseInt(sp.get('days') ?? '7', 10)), 90);
       const format = sp.get('format') ?? 'summary';
@@ -591,6 +596,73 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         if (row.status === 'queued'|| row.status === 'sending')   acc.queued += row.message_count;
       }
 
+      // ?format=templates — per-template usage breakdown
+      if (format === 'templates') {
+        const { data: tplRows, error: tplErr } = await supabase
+          .from('communication_template_usage')
+          .select('template_id, template_key, channel, status, message_count')
+          .eq('organization_id', orgId);
+        if (tplErr) throw tplErr;
+
+        const byTemplate = new Map<string, {
+          template_id: string; template_key: string | null; channel: string;
+          total: number; sent: number; failed: number;
+        }>();
+        for (const row of (tplRows ?? []) as Array<{
+          template_id: string; template_key: string | null; channel: string; status: string; message_count: number;
+        }>) {
+          const key = `${row.template_id}:${row.channel}`;
+          if (!byTemplate.has(key)) {
+            byTemplate.set(key, {
+              template_id: row.template_id, template_key: row.template_key, channel: row.channel,
+              total: 0, sent: 0, failed: 0,
+            });
+          }
+          const acc = byTemplate.get(key)!;
+          acc.total += row.message_count;
+          if (row.status === 'sent' || row.status === 'delivered') acc.sent   += row.message_count;
+          if (row.status === 'failed' || row.status === 'bounced') acc.failed += row.message_count;
+        }
+
+        const templateSummary = [...byTemplate.values()]
+          .map((t) => ({ ...t, delivery_rate: t.total > 0 ? Math.round((t.sent / t.total) * 100) : 0 }))
+          .sort((a, b) => b.total - a.total);
+
+        return json({ data: templateSummary, days, format: 'templates' });
+      }
+
+      // ?format=latency — average dispatch latency per channel + daily trend
+      if (format === 'latency') {
+        const { data: latRows, error: latErr } = await supabase
+          .from('communication_delivery_latency_daily')
+          .select('channel, stat_date, avg_latency_seconds, delivered_count')
+          .eq('organization_id', orgId)
+          .gte('stat_date', since)
+          .order('stat_date', { ascending: true });
+        if (latErr) throw latErr;
+
+        const rows = (latRows ?? []) as Array<{
+          channel: string; stat_date: string; avg_latency_seconds: number | null; delivered_count: number;
+        }>;
+
+        const byChannelLatency = new Map<string, { weightedSum: number; count: number }>();
+        for (const row of rows) {
+          if (row.avg_latency_seconds === null) continue;
+          if (!byChannelLatency.has(row.channel)) byChannelLatency.set(row.channel, { weightedSum: 0, count: 0 });
+          const acc = byChannelLatency.get(row.channel)!;
+          acc.weightedSum += row.avg_latency_seconds * row.delivered_count;
+          acc.count       += row.delivered_count;
+        }
+
+        const perChannel = [...byChannelLatency.entries()].map(([channel, acc]) => ({
+          channel,
+          avg_latency_seconds: acc.count > 0 ? Math.round(acc.weightedSum / acc.count) : null,
+          delivered_count: acc.count,
+        }));
+
+        return json({ data: { per_channel: perChannel, daily: rows }, days, format: 'latency' });
+      }
+
       const summary = [...byChannel.entries()].map(([channel, counts]) => ({
         channel,
         ...counts,
@@ -601,11 +673,47 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // OUTBOX HEALTH (event_outbox backlog for this org)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    if (action === 'outbox-health') {
+      if (method !== 'GET') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+
+      const { data, error } = await supabase
+        .from('event_outbox_health')
+        .select('event_type, pending_count, processing_count, dead_letter_count, failed_count, oldest_pending_at')
+        .eq('organization_id', orgId);
+      if (error) throw error;
+
+      const rows = (data ?? []) as Array<{
+        event_type:        string;
+        pending_count:      number;
+        processing_count:   number;
+        dead_letter_count:  number;
+        failed_count:       number;
+        oldest_pending_at:  string | null;
+      }>;
+
+      const summary = {
+        total_pending:     rows.reduce((s, r) => s + (r.pending_count ?? 0), 0),
+        total_processing:  rows.reduce((s, r) => s + (r.processing_count ?? 0), 0),
+        total_dead_letter: rows.reduce((s, r) => s + (r.dead_letter_count ?? 0), 0),
+        oldest_pending_at: rows.reduce<string | null>((s, r) => {
+          if (!r.oldest_pending_at) return s;
+          return (!s || r.oldest_pending_at < s) ? r.oldest_pending_at : s;
+        }, null),
+        by_event_type: rows,
+      };
+
+      return json({ data: summary });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // QUEUE HEALTH
     // ══════════════════════════════════════════════════════════════════════════
 
     if (action === 'queue-health') {
-      if (method !== 'GET') return err('Method not allowed', 405);
+      if (method !== 'GET') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const { data, error } = await supabase
         .from('communication_queue_health')
@@ -640,9 +748,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (action === 'bulk-retry') {
-      if (method !== 'POST') return err('Method not allowed', 405);
-      const role = getRoleFromBearer(req);
-      if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden — requires admin role', 403, 'FORBIDDEN');
+      if (method !== 'POST') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      const role = ctx.actorRole;
+      if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden — requires admin role', 403, 'FORBIDDEN');
 
       const body = await req.json() as { channel?: string };
       const { data, error } = await supabase.rpc('bulk_retry_messages', {
@@ -660,9 +768,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // system-level templates. Safe to call multiple times (idempotent).
 
     if (action === 'seed-defaults') {
-      if (method !== 'POST') return err('Method not allowed', 405);
-      const role = getRoleFromBearer(req);
-      if (!ADMIN_ROLES.has(role ?? '')) return err('Forbidden — requires admin role', 403, 'FORBIDDEN');
+      if (method !== 'POST') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      const role = ctx.actorRole;
+      if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden — requires admin role', 403, 'FORBIDDEN');
 
       const { data, error } = await supabase.rpc('seed_org_communication', { p_org_id: orgId });
       if (error) throw error;
@@ -674,7 +782,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (!action && !id) {
-      if (method !== 'GET') return err('Method not allowed', 405);
+      if (method !== 'GET') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 
       const page         = Math.max(1, parseInt(sp.get('page')     ?? '1',  10));
       const per_page     = Math.min(   parseInt(sp.get('per_page') ?? '50', 10), 200);
@@ -709,12 +817,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       });
     }
 
-    return err('Not found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     console.error('[communications] error:', message);
-    return err(message, 500, 'INTERNAL');
+    return err(ctx, message, 500, 'INTERNAL');
   }
 
 }));

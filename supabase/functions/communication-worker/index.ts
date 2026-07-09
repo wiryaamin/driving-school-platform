@@ -73,8 +73,14 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
 
-function err(message: string, status: number): Response {
-  return json({ error: message }, status);
+/**
+ * communication-worker is a WORKER_SECRET-authenticated cron endpoint — it has
+ * no user JWT and therefore no EdgeRequestContext. Correlation/request IDs are
+ * generated locally per request, matching the canonical error shape (ADR-003)
+ * without forcing this into the tenant-context type.
+ */
+function err(correlationId: string, requestId: string, message: string, status: number, code: string): Response {
+  return json({ code, message, trace_id: correlationId, request_id: requestId, version: 1 }, status);
 }
 
 function isWorkerRequest(req: Request): boolean {
@@ -143,14 +149,41 @@ async function dispatchClaimed(supabase: any, msg: OutboundRow, cfg: ChannelConf
 // Processes scheduled messages + auto-retry candidates.
 
 // deno-lint-ignore no-explicit-any
-async function runMaintenanceTick(supabase: any): Promise<Response> {
+async function runMaintenanceTick(supabase: any, correlationId: string, requestId: string): Promise<Response> {
+  let workerRunId: string | null = null;
+  try {
+    const { data: runId } = await supabase.rpc('begin_worker_run', {
+      p_worker_name: 'communication-worker',
+      p_metadata:    {},
+    });
+    workerRunId = (runId as string | null) ?? null;
+  } catch (runLogErr) {
+    // Monitoring must never block message dispatch.
+    console.warn('[comm-worker] run_log_begin_failed:', runLogErr instanceof Error ? runLogErr.message : String(runLogErr));
+  }
+
+  const completeRun = (status: string, counts: Record<string, number>, error?: string) => {
+    if (!workerRunId) return Promise.resolve();
+    return supabase.rpc('complete_worker_run', {
+      p_run_id:            workerRunId,
+      p_status:            status,
+      p_processed_count:   counts.dispatched + counts.retried + counts.errors,
+      p_success_count:     counts.dispatched,
+      p_failed_count:      counts.errors,
+      p_retry_count:       counts.retried,
+      p_dead_letter_count: 0,
+      p_error_summary:     error ?? null,
+    }).catch(() => {});
+  };
+
   // Claim scheduled messages (uses FOR UPDATE SKIP LOCKED)
   const { data: scheduled = [], error: schedErr } = await supabase
     .rpc('claim_scheduled_messages', { max_count: 50 });
 
   if (schedErr) {
     console.error('[comm-worker] claim_scheduled error:', schedErr.message);
-    return err('Failed to claim scheduled messages', 500);
+    await completeRun('failed', { dispatched: 0, retried: 0, errors: 0 }, schedErr.message);
+    return err(correlationId, requestId, 'Failed to claim scheduled messages', 500, 'CLAIM_FAILED');
   }
 
   // Claim auto-retry candidates
@@ -159,12 +192,14 @@ async function runMaintenanceTick(supabase: any): Promise<Response> {
 
   if (retryErr) {
     console.error('[comm-worker] claim_retry error:', retryErr.message);
-    return err('Failed to claim retry messages', 500);
+    await completeRun('failed', { dispatched: 0, retried: 0, errors: 0 }, retryErr.message);
+    return err(correlationId, requestId, 'Failed to claim retry messages', 500, 'CLAIM_FAILED');
   }
 
   const allMessages: OutboundRow[] = [...(scheduled as OutboundRow[]), ...(retries as OutboundRow[])];
 
   if (allMessages.length === 0) {
+    await completeRun('completed', { dispatched: 0, retried: 0, errors: 0 });
     return json({ dispatched: 0, retried: 0, errors: 0, message: 'Queue empty' });
   }
 
@@ -181,6 +216,7 @@ async function runMaintenanceTick(supabase: any): Promise<Response> {
   for (const msg of allMessages) {
     const cfgs = cfgsByOrg.get(msg.organization_id);
     const cfg  = cfgs?.get(msg.channel);
+
     const status = await dispatchClaimed(supabase, msg, cfg);
     if (status === 'sent') dispatched++;
     else errors++;
@@ -189,6 +225,8 @@ async function runMaintenanceTick(supabase: any): Promise<Response> {
   const retried = (retries as OutboundRow[]).length;
   console.log(`[comm-worker] tick done: dispatched=${dispatched} retried=${retried} errors=${errors}`);
 
+  await completeRun(errors === 0 ? 'completed' : dispatched > 0 ? 'partial' : 'failed', { dispatched, retried, errors });
+
   return json({ dispatched, retried, errors });
 }
 
@@ -196,11 +234,11 @@ async function runMaintenanceTick(supabase: any): Promise<Response> {
 // Reads notification_rules for the org + trigger, renders templates, enqueues.
 
 // deno-lint-ignore no-explicit-any
-async function runNotify(supabase: any, body: Record<string, string>): Promise<Response> {
+async function runNotify(supabase: any, body: Record<string, string>, correlationId: string, requestId: string): Promise<Response> {
   const { trigger_event, organization_id } = body;
 
   if (!trigger_event || !organization_id) {
-    return err('trigger_event and organization_id are required', 400);
+    return err(correlationId, requestId, 'trigger_event and organization_id are required', 400, 'VALIDATION_ERROR');
   }
 
   // Load enabled rules for this trigger + org
@@ -213,7 +251,7 @@ async function runNotify(supabase: any, body: Record<string, string>): Promise<R
 
   if (rulesErr) {
     console.error('[comm-worker] rules lookup error:', rulesErr.message);
-    return err('Failed to load notification rules', 500);
+    return err(correlationId, requestId, 'Failed to load notification rules', 500, 'QUERY_FAILED');
   }
 
   if (rules.length === 0) {
@@ -310,12 +348,15 @@ async function runNotify(supabase: any, body: Record<string, string>): Promise<R
 
 Deno.serve((req: Request) => serveCors(req, async () => {
 
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+
   if (!isWorkerRequest(req)) {
-    return err('Unauthorized', 401);
+    return err(correlationId, requestId, 'Unauthorized', 401, 'UNAUTHORIZED');
   }
 
   if (req.method !== 'POST') {
-    return err('Method not allowed', 405);
+    return err(correlationId, requestId, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
   }
 
   const supabase = createClient(
@@ -327,15 +368,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   try {
     if (isNotifyPath(req)) {
       const body = await req.json() as Record<string, string>;
-      return runNotify(supabase, body);
+      return runNotify(supabase, body, correlationId, requestId);
     }
 
-    return runMaintenanceTick(supabase);
+    return runMaintenanceTick(supabase, correlationId, requestId);
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     console.error('[comm-worker] unhandled error:', message);
-    return err(message, 500);
+    return err(correlationId, requestId, message, 500, 'INTERNAL_ERROR');
   }
 
 }));

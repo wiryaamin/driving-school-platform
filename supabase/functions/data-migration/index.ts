@@ -1,10 +1,10 @@
 // deno-lint-ignore-file no-explicit-any
 import { serveCors } from '../_shared/cors.ts';
-import { buildEdgeContext } from '../_shared/context.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
-import { getRoleFromBearer } from '../_shared/jwt.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { requireFeature } from '../_shared/subscription.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,8 +42,8 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
 
-function err(message: string, status: number, code = 'ERROR'): Response {
-  return json({ error: message, code }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code = 'ERROR'): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
 
 const ADMIN_ROLES = new Set(['admin', 'manager', 'owner']);
@@ -668,7 +668,7 @@ const CSV_TEMPLATES: Record<EntityType, string> = {
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
 
-async function handleListSessions(supabase: any, orgId: string, url: URL): Promise<Response> {
+async function handleListSessions(supabase: any, orgId: string, url: URL, ctx: EdgeRequestContext): Promise<Response> {
   const page     = Math.max(1, parseInt(url.searchParams.get('page')     ?? '1', 10));
   const per_page = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per_page') ?? '25', 10)));
   const from = (page - 1) * per_page;
@@ -683,21 +683,21 @@ async function handleListSessions(supabase: any, orgId: string, url: URL): Promi
 
   if (error) {
     console.error('[data-migration] list_sessions:', error.message);
-    return err('Kunde inte hämta importhistorik', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Kunde inte hämta importhistorik', 500, 'INTERNAL_ERROR');
   }
   return json({ data: data ?? [], meta: { total: count ?? 0, page, per_page } });
 }
 
-async function handleCreateSession(supabase: any, orgId: string, userId: string, req: Request): Promise<Response> {
+async function handleCreateSession(supabase: any, orgId: string, userId: string, req: Request, ctx: EdgeRequestContext): Promise<Response> {
   let body: unknown;
-  try { body = await req.json(); } catch { return err('Ogiltig JSON', 422, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Ogiltig JSON', 422, 'VALIDATION_ERROR'); }
 
   const b = body as Record<string, unknown>;
   const entity_type = b['entity_type'] as string | undefined;
   const VALID_ENTITIES = new Set(['students', 'instructors', 'vehicles', 'packages', 'bookings', 'invoices', 'payments']);
 
   if (!entity_type || !VALID_ENTITIES.has(entity_type)) {
-    return err('entity_type måste vara en av: students, instructors, vehicles, packages, bookings, invoices, payments', 422, 'VALIDATION_ERROR');
+    return err(ctx, 'entity_type måste vara en av: students, instructors, vehicles, packages, bookings, invoices, payments', 422, 'VALIDATION_ERROR');
   }
 
   const { data: session, error } = await supabase
@@ -715,12 +715,12 @@ async function handleCreateSession(supabase: any, orgId: string, userId: string,
 
   if (error) {
     console.error('[data-migration] create_session:', error.message);
-    return err('Kunde inte skapa importsession', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Kunde inte skapa importsession', 500, 'INTERNAL_ERROR');
   }
   return json({ data: session }, 201);
 }
 
-async function handleGetSession(supabase: any, orgId: string, id: string): Promise<Response> {
+async function handleGetSession(supabase: any, orgId: string, id: string, ctx: EdgeRequestContext): Promise<Response> {
   const { data: session, error } = await supabase
     .from('data_migration_sessions')
     .select('*')
@@ -729,12 +729,12 @@ async function handleGetSession(supabase: any, orgId: string, id: string): Promi
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (error) return err('Kunde inte hämta importsession', 500, 'INTERNAL_ERROR');
-  if (!session) return err(`Session '${id}' hittades inte`, 404, 'NOT_FOUND');
+  if (error) return err(ctx, 'Kunde inte hämta importsession', 500, 'INTERNAL_ERROR');
+  if (!session) return err(ctx, `Session '${id}' hittades inte`, 404, 'NOT_FOUND');
   return json({ data: session });
 }
 
-async function handleCancelSession(supabase: any, orgId: string, id: string): Promise<Response> {
+async function handleCancelSession(supabase: any, orgId: string, id: string, ctx: EdgeRequestContext): Promise<Response> {
   const { data: existing } = await supabase
     .from('data_migration_sessions')
     .select('id, status')
@@ -748,28 +748,28 @@ async function handleCancelSession(supabase: any, orgId: string, id: string): Pr
     .update({ status: 'cancelled', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', id).eq('organization_id', orgId);
 
-  if (error) return err('Kunde inte avbryta importsession', 500, 'INTERNAL_ERROR');
+  if (error) return err(ctx, 'Kunde inte avbryta importsession', 500, 'INTERNAL_ERROR');
   return json({ success: true });
 }
 
-async function handleUploadRows(supabase: any, orgId: string, id: string, req: Request): Promise<Response> {
+async function handleUploadRows(supabase: any, orgId: string, id: string, req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const { data: session, error: sessErr } = await supabase
     .from('data_migration_sessions')
     .select('*').eq('id', id).eq('organization_id', orgId).is('deleted_at', null).maybeSingle();
 
-  if (sessErr || !session) return err(`Session '${id}' hittades inte`, 404, 'NOT_FOUND');
+  if (sessErr || !session) return err(ctx, `Session '${id}' hittades inte`, 404, 'NOT_FOUND');
   if (!['draft', 'failed'].includes(session.status as string)) {
-    return err('Kan bara ladda upp rader till en session i status draft eller failed', 409, 'CONFLICT');
+    return err(ctx, 'Kan bara ladda upp rader till en session i status draft eller failed', 409, 'CONFLICT');
   }
 
   let body: unknown;
-  try { body = await req.json(); } catch { return err('Ogiltig JSON', 422, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Ogiltig JSON', 422, 'VALIDATION_ERROR'); }
 
   const b    = body as Record<string, unknown>;
   const rows = b['rows'] as Array<Record<string, string>> | undefined;
 
-  if (!Array.isArray(rows) || rows.length === 0) return err('rows måste vara en icke-tom array', 422, 'VALIDATION_ERROR');
-  if (rows.length > 2000) return err('Max 2 000 rader per import — dela upp filen i mindre delar', 422, 'VALIDATION_ERROR');
+  if (!Array.isArray(rows) || rows.length === 0) return err(ctx, 'rows måste vara en icke-tom array', 422, 'VALIDATION_ERROR');
+  if (rows.length > 2000) return err(ctx, 'Max 2 000 rader per import — dela upp filen i mindre delar', 422, 'VALIDATION_ERROR');
 
   await supabase.from('data_migration_sessions').update({
     status: 'uploading',
@@ -802,7 +802,7 @@ async function handleUploadRows(supabase: any, orgId: string, id: string, req: R
   if (insertErr) {
     console.error('[data-migration] insert_rows:', insertErr.message);
     await supabase.from('data_migration_sessions').update({ status: 'failed', error_summary: insertErr.message, updated_at: new Date().toISOString() }).eq('id', id);
-    return err('Kunde inte lagra importrader', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Kunde inte lagra importrader', 500, 'INTERNAL_ERROR');
   }
 
   const valid_rows   = staged.filter((r) => r.validation_status === 'valid').length;
@@ -814,15 +814,15 @@ async function handleUploadRows(supabase: any, orgId: string, id: string, req: R
     .update({ status: 'validated', total_rows: rows.length, valid_rows, warning_rows, error_rows, updated_at: new Date().toISOString() })
     .eq('id', id).select().single();
 
-  if (updErr) return err('Rader sparades men sessionen kunde inte uppdateras', 500, 'INTERNAL_ERROR');
+  if (updErr) return err(ctx, 'Rader sparades men sessionen kunde inte uppdateras', 500, 'INTERNAL_ERROR');
   return json({ data: updated });
 }
 
-async function handleListRows(supabase: any, orgId: string, id: string, url: URL): Promise<Response> {
+async function handleListRows(supabase: any, orgId: string, id: string, url: URL, ctx: EdgeRequestContext): Promise<Response> {
   const { data: session } = await supabase
     .from('data_migration_sessions').select('id').eq('id', id).eq('organization_id', orgId).is('deleted_at', null).maybeSingle();
 
-  if (!session) return err(`Session '${id}' hittades inte`, 404, 'NOT_FOUND');
+  if (!session) return err(ctx, `Session '${id}' hittades inte`, 404, 'NOT_FOUND');
 
   const page     = Math.max(1, parseInt(url.searchParams.get('page')     ?? '1', 10));
   const per_page = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per_page') ?? '50', 10)));
@@ -838,7 +838,7 @@ async function handleListRows(supabase: any, orgId: string, id: string, url: URL
   if (status !== 'all') q = q.eq('validation_status', status);
 
   const { data, error, count } = await q;
-  if (error) return err('Kunde inte hämta importrader', 500, 'INTERNAL_ERROR');
+  if (error) return err(ctx, 'Kunde inte hämta importrader', 500, 'INTERNAL_ERROR');
   return json({ data: data ?? [], meta: { total: count ?? 0, page, per_page } });
 }
 
@@ -873,17 +873,17 @@ async function resolveInstructorByEmail(supabase: any, orgId: string, email: str
 
 // ─── Import handler ───────────────────────────────────────────────────────────
 
-async function handleImport(supabase: any, orgId: string, id: string, role: string | null): Promise<Response> {
+async function handleImport(supabase: any, orgId: string, id: string, role: string | null, ctx: EdgeRequestContext): Promise<Response> {
   if (!role || !ADMIN_ROLES.has(role)) {
-    return err('Endast admin, manager eller owner kan köra import', 403, 'FORBIDDEN');
+    return err(ctx, 'Endast admin, manager eller owner kan köra import', 403, 'FORBIDDEN');
   }
 
   const { data: session, error: sessErr } = await supabase
     .from('data_migration_sessions').select('*').eq('id', id).eq('organization_id', orgId).is('deleted_at', null).maybeSingle();
 
-  if (sessErr || !session) return err(`Session '${id}' hittades inte`, 404, 'NOT_FOUND');
+  if (sessErr || !session) return err(ctx, `Session '${id}' hittades inte`, 404, 'NOT_FOUND');
   if (!['validated', 'failed'].includes(session.status as string)) {
-    return err('Session måste vara i status validated för att kunna importeras', 409, 'CONFLICT');
+    return err(ctx, 'Session måste vara i status validated för att kunna importeras', 409, 'CONFLICT');
   }
 
   await supabase.from('data_migration_sessions').update({ status: 'importing', updated_at: new Date().toISOString() }).eq('id', id);
@@ -896,7 +896,7 @@ async function handleImport(supabase: any, orgId: string, id: string, role: stri
 
   if (rowsErr) {
     await supabase.from('data_migration_sessions').update({ status: 'failed', error_summary: rowsErr.message, updated_at: new Date().toISOString() }).eq('id', id);
-    return err('Kunde inte läsa importrader', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Kunde inte läsa importrader', 500, 'INTERNAL_ERROR');
   }
 
   if (dry_run) {
@@ -1322,9 +1322,9 @@ async function handleImport(supabase: any, orgId: string, id: string, role: stri
   return json({ data: { imported, skipped, failed, dry_run: false } });
 }
 
-function handleTemplate(entity: string): Response {
+function handleTemplate(entity: string, ctx: EdgeRequestContext): Response {
   const VALID = new Set(['students', 'instructors', 'vehicles', 'packages', 'bookings', 'invoices', 'payments']);
-  if (!VALID.has(entity)) return err(`Okänd entitetstyp: ${entity}`, 404, 'NOT_FOUND');
+  if (!VALID.has(entity)) return err(ctx, `Okänd entitetstyp: ${entity}`, 404, 'NOT_FOUND');
 
   return new Response(CSV_TEMPLATES[entity as EntityType], {
     status: 200,
@@ -1354,7 +1354,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   const orgId  = ctx.organizationId!;
   const userId = ctx.actorId!;
-  const role   = getRoleFromBearer(req);
+  const role   = ctx.actorRole;
 
   const supabaseClient = createServiceClient();
 
@@ -1366,28 +1366,28 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const second  = parts[1] ?? '';
 
   try {
-    if (req.method === 'GET' && first === 'templates' && second) return handleTemplate(second);
+    if (req.method === 'GET' && first === 'templates' && second) return handleTemplate(second, ctx);
 
     if (!first) {
-      if (req.method === 'GET')  return await handleListSessions(supabaseClient, orgId, url);
-      if (req.method === 'POST') return await handleCreateSession(supabaseClient, orgId, userId, req);
-      return err('Metod ej tillåten', 405, 'METHOD_NOT_ALLOWED');
+      if (req.method === 'GET')  return await handleListSessions(supabaseClient, orgId, url, ctx);
+      if (req.method === 'POST') return await handleCreateSession(supabaseClient, orgId, userId, req, ctx);
+      return err(ctx, 'Metod ej tillåten', 405, 'METHOD_NOT_ALLOWED');
     }
 
     const sessionId = first;
 
-    if (second === 'upload' && req.method === 'POST') return await handleUploadRows(supabaseClient, orgId, sessionId, req);
-    if (second === 'rows'   && req.method === 'GET')  return await handleListRows(supabaseClient, orgId, sessionId, url);
-    if (second === 'import' && req.method === 'POST') return await handleImport(supabaseClient, orgId, sessionId, role);
+    if (second === 'upload' && req.method === 'POST') return await handleUploadRows(supabaseClient, orgId, sessionId, req, ctx);
+    if (second === 'rows'   && req.method === 'GET')  return await handleListRows(supabaseClient, orgId, sessionId, url, ctx);
+    if (second === 'import' && req.method === 'POST') return await handleImport(supabaseClient, orgId, sessionId, role, ctx);
 
     if (!second) {
-      if (req.method === 'GET')    return await handleGetSession(supabaseClient, orgId, sessionId);
-      if (req.method === 'DELETE') return await handleCancelSession(supabaseClient, orgId, sessionId);
+      if (req.method === 'GET')    return await handleGetSession(supabaseClient, orgId, sessionId, ctx);
+      if (req.method === 'DELETE') return await handleCancelSession(supabaseClient, orgId, sessionId, ctx);
     }
 
-    return err('Rutten hittades inte', 404, 'NOT_FOUND');
+    return err(ctx, 'Rutten hittades inte', 404, 'NOT_FOUND');
   } catch (e) {
     console.error('[data-migration] unhandled error:', e);
-    return err('Ett oväntat fel inträffade', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Ett oväntat fel inträffade', 500, 'INTERNAL_ERROR');
   }
 }));
