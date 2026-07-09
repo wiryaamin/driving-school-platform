@@ -21,7 +21,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -29,15 +31,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+function preCtxUnauthorized(req: Request): Response {
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+  return new Response(
+    JSON.stringify({
+      code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+      trace_id: correlationId, request_id: requestId, version: 1,
+    }),
+    { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId, 'X-Request-ID': requestId } },
+  );
 }
-function hasPerm(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPerm(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 interface PathInfo {
@@ -58,16 +67,16 @@ function parsePath(req: Request): PathInfo {
   };
 }
 
-function handlePgError(e: { message?: string }, prefix: string): Response | null {
+function handlePgError(ctx: EdgeRequestContext, e: { message?: string }, prefix: string): Response | null {
   const msg = e.message ?? '';
-  if (msg.includes('IMPORT_NOT_FOUND'))          return err('Bank statement import not found', 404, 'NOT_FOUND');
-  if (msg.includes('LINE_NOT_FOUND'))            return err('Bank statement line not found', 404, 'NOT_FOUND');
-  if (msg.includes('PAYMENT_NOT_FOUND'))         return err('Payment not found', 404, 'NOT_FOUND');
-  if (msg.includes('LINE_ALREADY_MATCHED'))      return err('Line is already matched', 409, 'ALREADY_MATCHED');
-  if (msg.includes('LINE_NOT_MATCHED'))          return err('Line is not matched', 409, 'NOT_MATCHED');
-  if (msg.includes('IMPORT_CONFIRMED'))          return err('Import already confirmed', 409, 'ALREADY_CONFIRMED');
-  if (msg.includes('PERIOD_NOT_FOUND'))          return err('Financial period not found', 404, 'NOT_FOUND');
-  if (msg.includes('VAT_PERIOD_NOT_FOUND'))      return err('VAT period not found', 404, 'NOT_FOUND');
+  if (msg.includes('IMPORT_NOT_FOUND'))          return err(ctx, 'Bank statement import not found', 404, 'NOT_FOUND');
+  if (msg.includes('LINE_NOT_FOUND'))            return err(ctx, 'Bank statement line not found', 404, 'NOT_FOUND');
+  if (msg.includes('PAYMENT_NOT_FOUND'))         return err(ctx, 'Payment not found', 404, 'NOT_FOUND');
+  if (msg.includes('LINE_ALREADY_MATCHED'))      return err(ctx, 'Line is already matched', 409, 'ALREADY_MATCHED');
+  if (msg.includes('LINE_NOT_MATCHED'))          return err(ctx, 'Line is not matched', 409, 'NOT_MATCHED');
+  if (msg.includes('IMPORT_CONFIRMED'))          return err(ctx, 'Import already confirmed', 409, 'ALREADY_CONFIRMED');
+  if (msg.includes('PERIOD_NOT_FOUND'))          return err(ctx, 'Financial period not found', 404, 'NOT_FOUND');
+  if (msg.includes('VAT_PERIOD_NOT_FOUND'))      return err(ctx, 'VAT period not found', 404, 'NOT_FOUND');
   console.error(`[${prefix}]`, msg);
   return null;
 }
@@ -84,7 +93,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   }
 
   const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) return preCtxUnauthorized(req);
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')      ?? '',
@@ -92,12 +101,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
   const { seg1, seg2, seg3, seg4 } = parsePath(req);
   const url = new URL(req.url);
@@ -110,15 +126,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /reconciliation/bank/import
       if (req.method === 'POST' && seg2 === 'import') {
-        if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { account_number, bank_name, statement_date, period_start, period_end,
                 opening_balance, closing_balance, currency, lines } = body;
         if (!account_number || !statement_date || !period_start || !period_end) {
-          return err('account_number, statement_date, period_start, period_end are required', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'account_number, statement_date, period_start, period_end are required', 400, 'VALIDATION_ERROR');
         }
         if (!Array.isArray(lines) || lines.length === 0) {
-          return err('lines must be a non-empty array', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'lines must be a non-empty array', 400, 'VALIDATION_ERROR');
         }
         const { data, error } = await supabase.rpc('import_bank_statement' as never, {
           p_org_id:           orgId,
@@ -131,10 +147,10 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_closing_balance:  closing_balance  ?? 0,
           p_currency:         currency         ?? 'SEK',
           p_lines:            lines,
-          p_actor_id:         user.id,
+          p_actor_id:         ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'reconciliation/bank/import');
+          const mapped = handlePgError(ctx, error, 'reconciliation/bank/import');
           if (mapped) return mapped;
           throw error;
         }
@@ -143,7 +159,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /reconciliation/bank/imports
       if (req.method === 'GET' && seg2 === 'imports' && !seg3) {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const limit  = Math.min(100, parseInt(url.searchParams.get('limit')  ?? '50',  10));
         const offset = Math.max(0,   parseInt(url.searchParams.get('offset') ?? '0',   10));
         const { data, error } = await supabase
@@ -161,7 +177,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /reconciliation/bank/imports/:id
       if (req.method === 'GET' && importId && !seg4) {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('bank_statement_imports' as never)
           .select('*')
@@ -169,13 +185,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (error) throw error;
-        if (!data) return err('Bank statement import not found', 404, 'NOT_FOUND');
+        if (!data) return err(ctx, 'Bank statement import not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // GET /reconciliation/bank/imports/:id/lines
       if (req.method === 'GET' && importId && seg4 === 'lines') {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('bank_statement_lines' as never)
           .select('*')
@@ -188,13 +204,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /reconciliation/bank/imports/:id/auto-match
       if (req.method === 'POST' && importId && seg4 === 'auto-match') {
-        if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase.rpc('auto_match_bank_lines' as never, {
           p_import_id: importId,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'reconciliation/bank/auto-match');
+          const mapped = handlePgError(ctx, error, 'reconciliation/bank/auto-match');
           if (mapped) return mapped;
           throw error;
         }
@@ -203,18 +219,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /reconciliation/bank/imports/:id/confirm
       if (req.method === 'POST' && importId && seg4 === 'confirm') {
-        if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { period_id, notes } = body;
-        if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
+        if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
         const { data, error } = await supabase.rpc('confirm_bank_reconciliation' as never, {
           p_import_id: importId,
           p_period_id: period_id,
           p_notes:     notes ?? null,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'reconciliation/bank/confirm');
+          const mapped = handlePgError(ctx, error, 'reconciliation/bank/confirm');
           if (mapped) return mapped;
           throw error;
         }
@@ -223,18 +239,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /reconciliation/bank/lines/:id/match
       if (req.method === 'POST' && lineId && seg4 === 'match') {
-        if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { payment_id, notes } = body;
-        if (!payment_id || !UUID_RE.test(payment_id)) return err('payment_id is required', 400, 'VALIDATION_ERROR');
+        if (!payment_id || !UUID_RE.test(payment_id)) return err(ctx, 'payment_id is required', 400, 'VALIDATION_ERROR');
         const { error } = await supabase.rpc('manual_match_bank_line' as never, {
           p_line_id:    lineId,
           p_payment_id: payment_id,
           p_notes:      notes ?? null,
-          p_actor_id:   user.id,
+          p_actor_id:   ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'reconciliation/bank/lines/match');
+          const mapped = handlePgError(ctx, error, 'reconciliation/bank/lines/match');
           if (mapped) return mapped;
           throw error;
         }
@@ -243,13 +259,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /reconciliation/bank/lines/:id/unmatch
       if (req.method === 'POST' && lineId && seg4 === 'unmatch') {
-        if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { error } = await supabase.rpc('unmatch_bank_line' as never, {
           p_line_id:  lineId,
-          p_actor_id: user.id,
+          p_actor_id: ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'reconciliation/bank/lines/unmatch');
+          const mapped = handlePgError(ctx, error, 'reconciliation/bank/lines/unmatch');
           if (mapped) return mapped;
           throw error;
         }
@@ -260,16 +276,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /reconciliation/ar ───────────────────────────────────────────────────
 
     if (seg1 === 'ar' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { period_id } = body;
-      if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
+      if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('reconcile_accounts_receivable' as never, {
         p_period_id: period_id,
-        p_actor_id:  user.id,
+        p_actor_id:  ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'reconciliation/ar');
+        const mapped = handlePgError(ctx, error, 'reconciliation/ar');
         if (mapped) return mapped;
         throw error;
       }
@@ -279,18 +295,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /reconciliation/vat ──────────────────────────────────────────────────
 
     if (seg1 === 'vat' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { period_id, vat_period_id } = body;
-      if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
-      if (!vat_period_id || !UUID_RE.test(vat_period_id)) return err('vat_period_id is required', 400, 'VALIDATION_ERROR');
+      if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
+      if (!vat_period_id || !UUID_RE.test(vat_period_id)) return err(ctx, 'vat_period_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('reconcile_vat_period' as never, {
         p_period_id:     period_id,
         p_vat_period_id: vat_period_id,
-        p_actor_id:      user.id,
+        p_actor_id:      ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'reconciliation/vat');
+        const mapped = handlePgError(ctx, error, 'reconciliation/vat');
         if (mapped) return mapped;
         throw error;
       }
@@ -300,16 +316,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /reconciliation/deferred ─────────────────────────────────────────────
 
     if (seg1 === 'deferred' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:reconciliation:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:reconciliation:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { period_id } = body;
-      if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
+      if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('reconcile_deferred_revenue' as never, {
         p_period_id: period_id,
-        p_actor_id:  user.id,
+        p_actor_id:  ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'reconciliation/deferred');
+        const mapped = handlePgError(ctx, error, 'reconciliation/deferred');
         if (mapped) return mapped;
         throw error;
       }
@@ -323,7 +339,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /reconciliation/runs/:id/items
       if (req.method === 'GET' && runId && seg3 === 'items') {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('reconciliation_items' as never)
           .select('*')
@@ -336,7 +352,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /reconciliation/runs/:id
       if (req.method === 'GET' && runId) {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('reconciliation_runs' as never)
           .select('*')
@@ -344,15 +360,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (error) throw error;
-        if (!data) return err('Reconciliation run not found', 404, 'NOT_FOUND');
+        if (!data) return err(ctx, 'Reconciliation run not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // GET /reconciliation/runs (list by period)
       if (req.method === 'GET' && !runId) {
-        if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const periodId = url.searchParams.get('period_id');
-        if (!periodId) return err('period_id query param is required', 400, 'VALIDATION_ERROR');
+        if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
         const { data, error } = await supabase
           .from('reconciliation_runs' as never)
           .select('*')
@@ -367,26 +383,26 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /reconciliation/report ───────────────────────────────────────────────
 
     if (seg1 === 'report' && req.method === 'GET') {
-      if (!hasPerm(user, 'finance:reconciliation:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:reconciliation:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const periodId = url.searchParams.get('period_id');
-      if (!periodId || !UUID_RE.test(periodId)) return err('period_id query param is required', 400, 'VALIDATION_ERROR');
+      if (!periodId || !UUID_RE.test(periodId)) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('generate_reconciliation_report' as never, {
         p_period_id: periodId,
-        p_actor_id:  user.id,
+        p_actor_id:  ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'reconciliation/report');
+        const mapped = handlePgError(ctx, error, 'reconciliation/report');
         if (mapped) return mapped;
         throw error;
       }
       return json(data);
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[reconciliation]', msg);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

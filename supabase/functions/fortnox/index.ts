@@ -25,7 +25,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { getOrgIdFromBearer, getUserIdFromBearer, getRoleFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -41,8 +43,8 @@ const JSON_CT           = { 'Content-Type': 'application/json' };
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
 
 // ─── Path parser ──────────────────────────────────────────────────────────────
@@ -146,13 +148,20 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     });
   }
 
-  const orgId  = getOrgIdFromBearer(req);
-  const userId = getUserIdFromBearer(req);
-  if (!orgId || !userId) return err('Unauthorized — missing organization context', 401, 'UNAUTHORIZED');
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  // Auth bearer check: both claims required for access
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId  = ctx.organizationId;
+  const userId = ctx.actorId;
+  if (!orgId || !userId) return err(ctx, 'Unauthorized — missing organization context', 401, 'UNAUTHORIZED');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -161,7 +170,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   );
 
   if (!await hasFortnoxPermission(supabase, orgId, userId)) {
-    return err('Forbidden — requires finance:fortnox:manage permission', 403, 'FORBIDDEN');
+    return err(ctx, 'Forbidden — requires finance:fortnox:manage permission', 403, 'FORBIDDEN');
   }
 
   const { method }                  = req;
@@ -206,10 +215,10 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // GET /fortnox/oauth/start?redirect_uri=...
       if (sub === 'start' && method === 'GET') {
         const clientId = Deno.env.get('FORTNOX_CLIENT_ID');
-        if (!clientId) return err('Fortnox-integration ej konfigurerad — saknar FORTNOX_CLIENT_ID', 503, 'NOT_CONFIGURED');
+        if (!clientId) return err(ctx, 'Fortnox-integration ej konfigurerad — saknar FORTNOX_CLIENT_ID', 503, 'NOT_CONFIGURED');
 
         const redirectUri = sp.get('redirect_uri');
-        if (!redirectUri) return err('redirect_uri är obligatoriskt', 400, 'MISSING_REDIRECT_URI');
+        if (!redirectUri) return err(ctx, 'redirect_uri är obligatoriskt', 400, 'MISSING_REDIRECT_URI');
 
         const verifier  = genCodeVerifier();
         const challenge = await genCodeChallenge(verifier);
@@ -232,7 +241,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       if (sub === 'callback' && method === 'POST') {
         const clientId     = Deno.env.get('FORTNOX_CLIENT_ID');
         const clientSecret = Deno.env.get('FORTNOX_CLIENT_SECRET');
-        if (!clientId || !clientSecret) return err('Fortnox-integration ej konfigurerad', 503, 'NOT_CONFIGURED');
+        if (!clientId || !clientSecret) return err(ctx, 'Fortnox-integration ej konfigurerad', 503, 'NOT_CONFIGURED');
 
         const body = await req.json() as {
           code?:          string;
@@ -240,13 +249,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           redirect_uri?:  string;
           state?:         string;
         };
-        if (!body.code)          return err('code saknas', 400, 'MISSING_CODE');
-        if (!body.code_verifier) return err('code_verifier saknas', 400, 'MISSING_VERIFIER');
-        if (!body.redirect_uri)  return err('redirect_uri saknas', 400, 'MISSING_REDIRECT_URI');
+        if (!body.code)          return err(ctx, 'code saknas', 400, 'MISSING_CODE');
+        if (!body.code_verifier) return err(ctx, 'code_verifier saknas', 400, 'MISSING_VERIFIER');
+        if (!body.redirect_uri)  return err(ctx, 'redirect_uri saknas', 400, 'MISSING_REDIRECT_URI');
 
         // CSRF: state must start with orgId
         if (body.state && !body.state.startsWith(`${orgId}:`)) {
-          return err('Ogiltigt state-parameter', 400, 'INVALID_STATE');
+          return err(ctx, 'Ogiltigt state-parameter', 400, 'INVALID_STATE');
         }
 
         const tokens = await fortnoxTokenRequest(clientId, clientSecret, {
@@ -277,12 +286,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       if (sub === 'refresh' && method === 'POST') {
         const clientId     = Deno.env.get('FORTNOX_CLIENT_ID');
         const clientSecret = Deno.env.get('FORTNOX_CLIENT_SECRET');
-        if (!clientId || !clientSecret) return err('Fortnox-integration ej konfigurerad', 503, 'NOT_CONFIGURED');
+        if (!clientId || !clientSecret) return err(ctx, 'Fortnox-integration ej konfigurerad', 503, 'NOT_CONFIGURED');
 
         const settings     = await getOrgSettings(supabase, orgId);
         const oauth        = settings['fortnox_oauth'] as Record<string, string> | undefined;
         const refreshToken = oauth?.['refresh_token'];
-        if (!refreshToken) return err('Inte ansluten till Fortnox', 400, 'NOT_CONNECTED');
+        if (!refreshToken) return err(ctx, 'Inte ansluten till Fortnox', 400, 'NOT_CONNECTED');
 
         const tokens = await fortnoxTokenRequest(clientId, clientSecret, {
           grant_type:    'refresh_token',
@@ -306,8 +315,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // DELETE /fortnox/oauth/disconnect
       if (sub === 'disconnect' && method === 'DELETE') {
-        const role = getRoleFromBearer(req);
-        if (!ADMIN_ROLES.has(role ?? '')) return err('Förbjudet — kräver adminroll', 403, 'FORBIDDEN');
+        const role = ctx.actorRole;
+        if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Förbjudet — kräver adminroll', 403, 'FORBIDDEN');
 
         await updateOrgSettings(supabase, orgId, {
           fortnox_oauth:        null,
@@ -316,7 +325,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         return json({ disconnected: true });
       }
 
-      return err('Not found', 404, 'NOT_FOUND');
+      return err(ctx, 'Not found', 404, 'NOT_FOUND');
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -326,9 +335,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (method === 'POST' && resource === 'queue') {
       const body = await req.json();
       const { entity, entity_id } = body;
-      if (!entity || !entity_id) return err('entity och entity_id krävs', 400, 'VALIDATION_ERROR');
-      if (!['customer', 'invoice', 'payment'].includes(entity)) return err('entity måste vara customer, invoice eller payment', 400, 'VALIDATION_ERROR');
-      if (!UUID_RE.test(entity_id)) return err('entity_id måste vara ett giltigt UUID', 400, 'VALIDATION_ERROR');
+      if (!entity || !entity_id) return err(ctx, 'entity och entity_id krävs', 400, 'VALIDATION_ERROR');
+      if (!['customer', 'invoice', 'payment'].includes(entity)) return err(ctx, 'entity måste vara customer, invoice eller payment', 400, 'VALIDATION_ERROR');
+      if (!UUID_RE.test(entity_id)) return err(ctx, 'entity_id måste vara ett giltigt UUID', 400, 'VALIDATION_ERROR');
 
       const { error } = await supabase.rpc('queue_fortnox_sync', {
         p_org_id:    orgId,
@@ -336,7 +345,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_id: entity_id,
       });
       if (error) {
-        if (error.message?.includes('FORTNOX_QUEUE_UNKNOWN_ENTITY')) return err('Okänd entity-typ', 422, 'VALIDATION_ERROR');
+        if (error.message?.includes('FORTNOX_QUEUE_UNKNOWN_ENTITY')) return err(ctx, 'Okänd entity-typ', 422, 'VALIDATION_ERROR');
         throw error;
       }
       return json({ queued: true });
@@ -354,7 +363,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('student_id', entityId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('Customer sync-post ej hittad', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'Customer sync-post ej hittad', 404, 'NOT_FOUND');
       return json(data);
     }
 
@@ -384,7 +393,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('invoice_id', entityId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('Invoice sync-post ej hittad', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'Invoice sync-post ej hittad', 404, 'NOT_FOUND');
       return json(data);
     }
 
@@ -414,7 +423,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('payment_id', entityId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('Payment sync-post ej hittad', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'Payment sync-post ej hittad', 404, 'NOT_FOUND');
       return json(data);
     }
 
@@ -430,7 +439,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('export_run_id', entityId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('Export lineage ej hittad', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'Export lineage ej hittad', 404, 'NOT_FOUND');
       return json(data);
     }
 
@@ -446,12 +455,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       return json({ data: data ?? [] });
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[fortnox]', msg);
-    return err(msg || 'Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, msg || 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));
 

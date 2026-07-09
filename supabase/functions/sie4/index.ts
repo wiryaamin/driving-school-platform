@@ -10,7 +10,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -18,15 +20,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 function parsePath(req: Request): { sie4Id: string | null; sub: string | null; runId: string | null } {
@@ -53,7 +51,20 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   }
 
   const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) {
+    // No EdgeRequestContext exists yet at this point (buildEdgeContext runs below) —
+    // generate correlation/request IDs locally to keep the canonical shape without
+    // altering the pre-existing early-exit condition or status code.
+    const preCorrelationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+    const preRequestId     = crypto.randomUUID();
+    return new Response(
+      JSON.stringify({
+        code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+        trace_id: preCorrelationId, request_id: preRequestId, version: 1,
+      }),
+      { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': preCorrelationId, 'X-Request-ID': preRequestId } },
+    );
+  }
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
@@ -61,30 +72,37 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
   const { sie4Id, sub, runId } = parsePath(req);
 
   try {
     // POST /sie4/generate
     if (req.method === 'POST' && sub === 'generate') {
-      if (!hasPermission(user, 'finance:sie4:run')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie4:run')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json();
       const { export_run_id } = body;
-      if (!export_run_id || !UUID_RE.test(export_run_id)) return err('export_run_id is required', 400, 'VALIDATION_ERROR');
+      if (!export_run_id || !UUID_RE.test(export_run_id)) return err(ctx, 'export_run_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('generate_sie4_export' as never, {
         p_export_run_id: export_run_id,
-        p_actor_id:      user.id,
+        p_actor_id:      ctx.actorId,
       });
       if (error) {
-        if (error.message?.includes('EXPORT_RUN_NOT_FOUND'))    return err('Export run not found', 404, 'NOT_FOUND');
-        if (error.message?.includes('EXPORT_RUN_NOT_COMPLETE')) return err('Export run must be completed before generating SIE4', 409, 'CONFLICT');
-        if (error.message?.includes('SIE4_NO_ENTRIES'))         return err('Export run has no entries', 422, 'NO_ENTRIES');
+        if (error.message?.includes('EXPORT_RUN_NOT_FOUND'))    return err(ctx, 'Export run not found', 404, 'NOT_FOUND');
+        if (error.message?.includes('EXPORT_RUN_NOT_COMPLETE')) return err(ctx, 'Export run must be completed before generating SIE4', 409, 'CONFLICT');
+        if (error.message?.includes('SIE4_NO_ENTRIES'))         return err(ctx, 'Export run has no entries', 422, 'NO_ENTRIES');
         throw error;
       }
       return json({ sie4_export_id: data }, 201);
@@ -92,7 +110,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // GET /sie4/by-run/:runId
     if (req.method === 'GET' && sub === 'by-run' && runId) {
-      if (!hasPermission(user, 'finance:sie4:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('sie4_exports' as never)
         .select('*')
@@ -100,13 +118,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('organization_id', orgId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('SIE4 export not found', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'SIE4 export not found', 404, 'NOT_FOUND');
       return json(data);
     }
 
     // GET /sie4/:id
     if (req.method === 'GET' && sie4Id) {
-      if (!hasPermission(user, 'finance:sie4:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('sie4_exports' as never)
         .select('*')
@@ -114,13 +132,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('organization_id', orgId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('SIE4 export not found', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'SIE4 export not found', 404, 'NOT_FOUND');
       return json(data);
     }
 
     // GET /sie4
     if (req.method === 'GET' && !sie4Id && !sub) {
-      if (!hasPermission(user, 'finance:sie4:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const url   = new URL(req.url);
       const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
       const { data, error } = await supabase
@@ -133,11 +151,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       return json({ data: data ?? [] });
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[sie4]', msg);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

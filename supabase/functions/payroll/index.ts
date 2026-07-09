@@ -31,7 +31,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,15 +41,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
-}
-function hasPerm(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPerm(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 interface PathInfo {
@@ -80,12 +78,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authError } = await client.auth.getUser();
-  if (authError || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG_CONTEXT');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG_CONTEXT');
 
   const method = req.method.toUpperCase();
   const { seg1, seg2, seg3 } = parsePath(req);
@@ -95,7 +100,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (seg1 === 'runs') {
       // POST /payroll/runs
       if (method === 'POST' && seg2 === null) {
-        if (!hasPerm(user, 'finance:payroll:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('create_payroll_run', {
           p_org_id:               orgId,
@@ -106,15 +111,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_run_type:             body.run_type ?? 'regular',
           p_correction_of_run_id: body.correction_of_run_id ?? null,
           p_notes:                body.notes ?? null,
-          p_actor_id:             user.id,
+          p_actor_id:             ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ id: data }, 201);
       }
 
       // GET /payroll/runs
       if (method === 'GET' && seg2 === null) {
-        if (!hasPerm(user, 'finance:payroll:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const url    = new URL(req.url);
         const status = url.searchParams.get('status');
         const period = url.searchParams.get('financial_period_id');
@@ -124,33 +129,33 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         if (status) q = q.eq('status', status);
         if (period) q = q.eq('financial_period_id', period);
         const { data, error, count } = await q;
-        if (error) return err(error.message, 500);
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
         return json({ data, total: count ?? 0 });
       }
 
       // GET /payroll/runs/:id
       if (method === 'GET' && isUuid(seg2) && seg3 === null) {
-        if (!hasPerm(user, 'finance:payroll:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).from('payroll_runs')
           .select('*').eq('id', seg2).eq('organization_id', orgId).maybeSingle();
-        if (error) return err(error.message, 500);
-        if (!data) return err('Not found', 404, 'NOT_FOUND');
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
+        if (!data) return err(ctx, 'Not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // GET /payroll/runs/:id/entries
       if (method === 'GET' && isUuid(seg2) && seg3 === 'entries') {
-        if (!hasPerm(user, 'finance:payroll:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).from('payroll_entries')
           .select('*').eq('payroll_run_id', seg2).eq('organization_id', orgId)
           .order('employee_id');
-        if (error) return err(error.message, 500);
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
         return json({ data, total: data?.length ?? 0 });
       }
 
       // POST /payroll/runs/:id/entries
       if (method === 'POST' && isUuid(seg2) && seg3 === 'entries') {
-        if (!hasPerm(user, 'finance:payroll:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('add_payroll_entry', {
           p_run_id:                seg2,
@@ -162,44 +167,44 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_benefits_amount:       body.benefits_amount ?? 0,
           p_instructor_id:         body.instructor_id ?? null,
           p_notes:                 body.notes ?? null,
-          p_actor_id:              user.id,
+          p_actor_id:              ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ id: data }, 201);
       }
 
       // POST /payroll/runs/:id/post
       if (method === 'POST' && isUuid(seg2) && seg3 === 'post') {
-        if (!hasPerm(user, 'finance:payroll:post')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:post')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).rpc('post_payroll_journal', {
-          p_run_id: seg2, p_actor_id: user.id,
+          p_run_id: seg2, p_actor_id: ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ journal_entry_id: data });
       }
 
       // POST /payroll/runs/:id/salary-payment
       if (method === 'POST' && isUuid(seg2) && seg3 === 'salary-payment') {
-        if (!hasPerm(user, 'finance:payroll:post')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:post')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('post_salary_payment', {
           p_run_id:       seg2,
           p_payment_date: body.payment_date,
           p_bank_account: body.bank_account ?? '1930',
-          p_actor_id:     user.id,
+          p_actor_id:     ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ payment_entry_id: data });
       }
 
       // POST /payroll/runs/:id/reverse
       if (method === 'POST' && isUuid(seg2) && seg3 === 'reverse') {
-        if (!hasPerm(user, 'finance:payroll:post')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:post')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('reverse_payroll_run', {
-          p_run_id: seg2, p_reason: body.reason, p_actor_id: user.id,
+          p_run_id: seg2, p_reason: body.reason, p_actor_id: ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ reversal_entry_id: data });
       }
     }
@@ -208,7 +213,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (seg1 === 'tax-remittances') {
       // POST /payroll/tax-remittances
       if (method === 'POST' && seg2 === null) {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('create_tax_remittance', {
           p_org_id:                   orgId,
@@ -220,15 +225,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_withheld_tax_amount:      body.withheld_tax_amount,
           p_employer_contrib_amount:  body.employer_contrib_amount,
           p_notes:                    body.notes ?? null,
-          p_actor_id:                 user.id,
+          p_actor_id:                 ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ id: data }, 201);
       }
 
       // GET /payroll/tax-remittances
       if (method === 'GET' && seg2 === null) {
-        if (!hasPerm(user, 'finance:tax:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const url    = new URL(req.url);
         const status = url.searchParams.get('status');
         let q = (client as any).from('tax_remittances').select('*', { count: 'exact' })
@@ -236,51 +241,51 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .order('created_at', { ascending: false });
         if (status) q = q.eq('status', status);
         const { data, error, count } = await q;
-        if (error) return err(error.message, 500);
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
         return json({ data, total: count ?? 0 });
       }
 
       // GET /payroll/tax-remittances/:id
       if (method === 'GET' && isUuid(seg2) && seg3 === null) {
-        if (!hasPerm(user, 'finance:tax:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).from('tax_remittances')
           .select('*').eq('id', seg2).eq('organization_id', orgId).maybeSingle();
-        if (error) return err(error.message, 500);
-        if (!data) return err('Not found', 404, 'NOT_FOUND');
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
+        if (!data) return err(ctx, 'Not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // POST /payroll/tax-remittances/:id/clear
       if (method === 'POST' && isUuid(seg2) && seg3 === 'clear') {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).rpc('post_tax_clearing_journal', {
-          p_remittance_id: seg2, p_actor_id: user.id,
+          p_remittance_id: seg2, p_actor_id: ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ clearing_entry_id: data });
       }
 
       // POST /payroll/tax-remittances/:id/pay
       if (method === 'POST' && isUuid(seg2) && seg3 === 'pay') {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('post_tax_payment_journal', {
           p_remittance_id: seg2,
           p_payment_date:  body.payment_date,
           p_reference:     body.reference ?? null,
-          p_actor_id:      user.id,
+          p_actor_id:      ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ payment_entry_id: data });
       }
 
       // POST /payroll/tax-remittances/:id/complete
       if (method === 'POST' && isUuid(seg2) && seg3 === 'complete') {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { error } = await (client as any).rpc('complete_tax_remittance', {
-          p_remittance_id: seg2, p_actor_id: user.id,
+          p_remittance_id: seg2, p_actor_id: ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ success: true });
       }
     }
@@ -289,7 +294,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (seg1 === 'vat-clearings') {
       // POST /payroll/vat-clearings
       if (method === 'POST' && seg2 === null) {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('create_vat_clearing_run', {
           p_org_id:              orgId,
@@ -297,15 +302,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_vat_period_id:       body.vat_period_id ?? null,
           p_run_date:            body.run_date ?? null,
           p_notes:               body.notes ?? null,
-          p_actor_id:            user.id,
+          p_actor_id:            ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ id: data }, 201);
       }
 
       // GET /payroll/vat-clearings
       if (method === 'GET' && seg2 === null) {
-        if (!hasPerm(user, 'finance:tax:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const url    = new URL(req.url);
         const period = url.searchParams.get('financial_period_id');
         let q = (client as any).from('vat_clearing_runs').select('*', { count: 'exact' })
@@ -313,40 +318,40 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .order('run_date', { ascending: false });
         if (period) q = q.eq('financial_period_id', period);
         const { data, error, count } = await q;
-        if (error) return err(error.message, 500);
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
         return json({ data, total: count ?? 0 });
       }
 
       // GET /payroll/vat-clearings/:id
       if (method === 'GET' && isUuid(seg2) && seg3 === null) {
-        if (!hasPerm(user, 'finance:tax:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).from('vat_clearing_runs')
           .select('*').eq('id', seg2).eq('organization_id', orgId).maybeSingle();
-        if (error) return err(error.message, 500);
-        if (!data) return err('Not found', 404, 'NOT_FOUND');
+        if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
+        if (!data) return err(ctx, 'Not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // POST /payroll/vat-clearings/:id/clear
       if (method === 'POST' && isUuid(seg2) && seg3 === 'clear') {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await (client as any).rpc('post_vat_clearing_journal', {
-          p_run_id: seg2, p_actor_id: user.id,
+          p_run_id: seg2, p_actor_id: ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ clearing_entry_id: data });
       }
 
       // POST /payroll/vat-clearings/:id/pay
       if (method === 'POST' && isUuid(seg2) && seg3 === 'pay') {
-        if (!hasPerm(user, 'finance:tax:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:tax:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('post_vat_payment_journal', {
           p_run_id:       seg2,
           p_payment_date: body.payment_date,
-          p_actor_id:     user.id,
+          p_actor_id:     ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ payment_entry_id: data });
       }
     }
@@ -355,49 +360,49 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (seg1 === 'opening-balances') {
       // POST /payroll/opening-balances (post OB entry)
       if (method === 'POST' && seg2 === null) {
-        if (!hasPerm(user, 'finance:payroll:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('post_opening_balance_entry', {
           p_org_id:    orgId,
           p_period_id: body.period_id,
           p_balances:  body.balances,
           p_notes:     body.notes ?? null,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json({ journal_entry_id: data }, 201);
       }
 
       // POST /payroll/opening-balances/validate
       if (method === 'POST' && seg2 === 'validate') {
-        if (!hasPerm(user, 'finance:payroll:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:payroll:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json();
         const { data, error } = await (client as any).rpc('validate_opening_balances', {
           p_org_id:    orgId,
           p_period_id: body.period_id,
         });
-        if (error) return err(error.message, 400, error.code);
+        if (error) return err(ctx, error.message, 400, error.code);
         return json(data);
       }
     }
 
     // ── Year-end operations ───────────────────────────────────────────────────
     if (seg1 === 'year-end' && seg2 === 'profit-transfer' && method === 'POST') {
-      if (!hasPerm(user, 'finance:payroll:post')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:payroll:post')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json();
       const { data, error } = await (client as any).rpc('post_year_end_profit_transfer', {
         p_org_id:          orgId,
         p_new_period_id:   body.new_period_id,
         p_prior_period_id: body.prior_period_id,
-        p_actor_id:        user.id,
+        p_actor_id:        ctx.actorId,
       });
-      if (error) return err(error.message, 400, error.code);
+      if (error) return err(ctx, error.message, 400, error.code);
       return json({ journal_entry_id: data });
     }
 
-    return err('Not found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not found', 404, 'NOT_FOUND');
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Internal server error';
-    return err(message, 500, 'INTERNAL_ERROR');
+    return err(ctx, message, 500, 'INTERNAL_ERROR');
   }
 }));

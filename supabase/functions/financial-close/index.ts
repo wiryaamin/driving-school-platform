@@ -26,7 +26,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,15 +36,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+function preCtxUnauthorized(req: Request): Response {
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+  return new Response(
+    JSON.stringify({
+      code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+      trace_id: correlationId, request_id: requestId, version: 1,
+    }),
+    { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId, 'X-Request-ID': requestId } },
+  );
 }
-function hasPerm(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPerm(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 interface PathInfo {
@@ -63,25 +72,25 @@ function parsePath(req: Request): PathInfo {
   };
 }
 
-function handlePgError(e: { message?: string }, prefix: string): Response | null {
+function handlePgError(ctx: EdgeRequestContext, e: { message?: string }, prefix: string): Response | null {
   const msg = e.message ?? '';
-  if (msg.includes('PERIOD_NOT_FOUND'))            return err('Financial period not found', 404, 'NOT_FOUND');
-  if (msg.includes('PERIOD_NOT_OPEN'))             return err('Period must be open to soft-close', 409, 'PERIOD_NOT_OPEN');
-  if (msg.includes('PERIOD_NOT_CLOSED'))           return err('Period must be soft-closed first', 409, 'PERIOD_NOT_CLOSED');
-  if (msg.includes('PERIOD_NOT_SOFT_CLOSED'))      return err('Period must be soft-closed', 409, 'PERIOD_NOT_SOFT_CLOSED');
+  if (msg.includes('PERIOD_NOT_FOUND'))            return err(ctx, 'Financial period not found', 404, 'NOT_FOUND');
+  if (msg.includes('PERIOD_NOT_OPEN'))             return err(ctx, 'Period must be open to soft-close', 409, 'PERIOD_NOT_OPEN');
+  if (msg.includes('PERIOD_NOT_CLOSED'))           return err(ctx, 'Period must be soft-closed first', 409, 'PERIOD_NOT_CLOSED');
+  if (msg.includes('PERIOD_NOT_SOFT_CLOSED'))      return err(ctx, 'Period must be soft-closed', 409, 'PERIOD_NOT_SOFT_CLOSED');
   if (msg.includes('PERIOD_HARD_CLOSED') ||
-      msg.includes('PERIOD_ALREADY_LOCKED'))       return err('Period is hard-closed (locked)', 409, 'PERIOD_LOCKED');
-  if (msg.includes('PERIOD_CLOSE_BLOCKED'))        return err('Period close blocked by validation failures', 422, 'CLOSE_BLOCKED');
-  if (msg.includes('PERIOD_HARD_CLOSE_BLOCKED'))   return err('Hard close blocked — all checks must pass', 422, 'HARD_CLOSE_BLOCKED');
-  if (msg.includes('PERIOD_REOPEN_REASON_REQUIRED')) return err('Reason is required to reopen a period', 400, 'REASON_REQUIRED');
-  if (msg.includes('AMENDMENT_REASON_REQUIRED'))   return err('Reason is required for amendment journals', 400, 'REASON_REQUIRED');
-  if (msg.includes('SNAPSHOT_NOT_FOUND'))          return err('Audit snapshot not found', 404, 'NOT_FOUND');
-  if (msg.includes('FISCAL_YEAR_NOT_FOUND'))       return err('Fiscal year not found', 404, 'NOT_FOUND');
-  if (msg.includes('FISCAL_YEAR_ALREADY_CLOSED'))  return err('Fiscal year is already closed', 409, 'ALREADY_CLOSED');
-  if (msg.includes('FISCAL_YEAR_CLOSE_BLOCKED'))   return err('Fiscal year close blocked by validation failures', 422, 'CLOSE_BLOCKED');
-  if (msg.includes('FISCAL_YEAR_NO_INCOME_ACCOUNTS')) return err('No income statement accounts with balances', 422, 'NO_INCOME_ACCOUNTS');
-  if (msg.includes('ROLLOVER_DATE_CONFLICT'))      return err('Target period must start after year-end period ends', 422, 'DATE_CONFLICT');
-  if (msg.includes('LEDGER_IMBALANCED'))           return err('Journal lines do not balance', 422, 'LEDGER_IMBALANCED');
+      msg.includes('PERIOD_ALREADY_LOCKED'))       return err(ctx, 'Period is hard-closed (locked)', 409, 'PERIOD_LOCKED');
+  if (msg.includes('PERIOD_CLOSE_BLOCKED'))        return err(ctx, 'Period close blocked by validation failures', 422, 'CLOSE_BLOCKED');
+  if (msg.includes('PERIOD_HARD_CLOSE_BLOCKED'))   return err(ctx, 'Hard close blocked — all checks must pass', 422, 'HARD_CLOSE_BLOCKED');
+  if (msg.includes('PERIOD_REOPEN_REASON_REQUIRED')) return err(ctx, 'Reason is required to reopen a period', 400, 'REASON_REQUIRED');
+  if (msg.includes('AMENDMENT_REASON_REQUIRED'))   return err(ctx, 'Reason is required for amendment journals', 400, 'REASON_REQUIRED');
+  if (msg.includes('SNAPSHOT_NOT_FOUND'))          return err(ctx, 'Audit snapshot not found', 404, 'NOT_FOUND');
+  if (msg.includes('FISCAL_YEAR_NOT_FOUND'))       return err(ctx, 'Fiscal year not found', 404, 'NOT_FOUND');
+  if (msg.includes('FISCAL_YEAR_ALREADY_CLOSED'))  return err(ctx, 'Fiscal year is already closed', 409, 'ALREADY_CLOSED');
+  if (msg.includes('FISCAL_YEAR_CLOSE_BLOCKED'))   return err(ctx, 'Fiscal year close blocked by validation failures', 422, 'CLOSE_BLOCKED');
+  if (msg.includes('FISCAL_YEAR_NO_INCOME_ACCOUNTS')) return err(ctx, 'No income statement accounts with balances', 422, 'NO_INCOME_ACCOUNTS');
+  if (msg.includes('ROLLOVER_DATE_CONFLICT'))      return err(ctx, 'Target period must start after year-end period ends', 422, 'DATE_CONFLICT');
+  if (msg.includes('LEDGER_IMBALANCED'))           return err(ctx, 'Journal lines do not balance', 422, 'LEDGER_IMBALANCED');
   console.error(`[${prefix}]`, msg);
   return null;
 }
@@ -98,7 +107,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   }
 
   const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) return preCtxUnauthorized(req);
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')      ?? '',
@@ -106,12 +115,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
   const { seg1, seg2, seg3, seg4 } = parsePath(req);
   const url = new URL(req.url);
@@ -124,7 +140,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /financial-close/periods/readiness
       if (req.method === 'GET' && seg2 === 'readiness') {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('v_period_close_readiness' as never)
           .select('*')
@@ -135,17 +151,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
 
       const periodId = seg2 && UUID_RE.test(seg2) ? seg2 : null;
-      if (!periodId) return err('Not Found', 404, 'NOT_FOUND');
+      if (!periodId) return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
       // POST /financial-close/periods/:id/validate
       if (req.method === 'POST' && seg3 === 'validate') {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase.rpc('validate_period_for_close' as never, {
           p_period_id: periodId,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/validate');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/validate');
           if (mapped) return mapped;
           throw error;
         }
@@ -154,15 +170,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/soft-close
       if (req.method === 'POST' && seg3 === 'soft-close') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { error } = await supabase.rpc('soft_close_period' as never, {
           p_period_id: periodId,
           p_notes:     body.notes ?? null,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/soft-close');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/soft-close');
           if (mapped) return mapped;
           throw error;
         }
@@ -171,16 +187,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/reopen
       if (req.method === 'POST' && seg3 === 'reopen') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
-        if (!body.reason) return err('reason is required', 400, 'VALIDATION_ERROR');
+        if (!body.reason) return err(ctx, 'reason is required', 400, 'VALIDATION_ERROR');
         const { error } = await supabase.rpc('reopen_soft_closed_period' as never, {
           p_period_id: periodId,
           p_reason:    body.reason,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/reopen');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/reopen');
           if (mapped) return mapped;
           throw error;
         }
@@ -189,15 +205,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/hard-close
       if (req.method === 'POST' && seg3 === 'hard-close') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { error } = await supabase.rpc('hard_close_period' as never, {
           p_period_id: periodId,
           p_notes:     body.notes ?? null,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/hard-close');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/hard-close');
           if (mapped) return mapped;
           throw error;
         }
@@ -206,21 +222,21 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/amendment
       if (req.method === 'POST' && seg3 === 'amendment') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { lines, reason } = body;
-        if (!reason) return err('reason is required', 400, 'VALIDATION_ERROR');
+        if (!reason) return err(ctx, 'reason is required', 400, 'VALIDATION_ERROR');
         if (!Array.isArray(lines) || lines.length < 2) {
-          return err('lines must be an array of at least 2 entries', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'lines must be an array of at least 2 entries', 400, 'VALIDATION_ERROR');
         }
         const { data, error } = await supabase.rpc('post_amendment_journal' as never, {
           p_period_id: periodId,
           p_lines:     lines,
           p_reason:    reason,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/amendment');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/amendment');
           if (mapped) return mapped;
           throw error;
         }
@@ -229,7 +245,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /financial-close/periods/:id/snapshots
       if (req.method === 'GET' && seg3 === 'snapshots') {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('period_audit_snapshots' as never)
           .select('*')
@@ -242,17 +258,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/snapshot
       if (req.method === 'POST' && seg3 === 'snapshot') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { snapshot_type = 'manual', notes } = body;
         const { data, error } = await supabase.rpc('capture_period_audit_snapshot' as never, {
           p_period_id:     periodId,
           p_snapshot_type: snapshot_type,
           p_notes:         notes ?? null,
-          p_actor_id:      user.id,
+          p_actor_id:      ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/snapshot');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/snapshot');
           if (mapped) return mapped;
           throw error;
         }
@@ -261,16 +277,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/periods/:id/consistency
       if (req.method === 'POST' && seg3 === 'consistency') {
-        if (!hasPerm(user, 'finance:close:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { check_type = 'manual' } = body;
         const { data, error } = await supabase.rpc('run_ledger_consistency_check' as never, {
           p_period_id:  periodId,
           p_check_type: check_type,
-          p_actor_id:   user.id,
+          p_actor_id:   ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/periods/consistency');
+          const mapped = handlePgError(ctx, error, 'financial-close/periods/consistency');
           if (mapped) return mapped;
           throw error;
         }
@@ -279,7 +295,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /financial-close/periods/:id/checks
       if (req.method === 'GET' && seg3 === 'checks') {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const limit = Math.min(50, parseInt(url.searchParams.get('limit') ?? '10', 10));
         const { data, error } = await supabase
           .from('ledger_consistency_checks' as never)
@@ -297,11 +313,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     if (seg1 === 'snapshots') {
       const snapshotId = seg2 && UUID_RE.test(seg2) ? seg2 : null;
-      if (!snapshotId) return err('Not Found', 404, 'NOT_FOUND');
+      if (!snapshotId) return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
       // GET /financial-close/snapshots/:id
       if (req.method === 'GET' && !seg3) {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('period_audit_snapshots' as never)
           .select('*')
@@ -309,18 +325,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (error) throw error;
-        if (!data) return err('Audit snapshot not found', 404, 'NOT_FOUND');
+        if (!data) return err(ctx, 'Audit snapshot not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // POST /financial-close/snapshots/:id/verify
       if (req.method === 'POST' && seg3 === 'verify') {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase.rpc('verify_period_audit_snapshot' as never, {
           p_snapshot_id: snapshotId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/snapshots/verify');
+          const mapped = handlePgError(ctx, error, 'financial-close/snapshots/verify');
           if (mapped) return mapped;
           throw error;
         }
@@ -335,7 +351,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /financial-close/fiscal-years (overview)
       if (req.method === 'GET' && !fyId) {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('v_fiscal_year_overview' as never)
           .select('*')
@@ -347,11 +363,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/fiscal-years
       if (req.method === 'POST' && !fyId) {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { year_number, year_start, year_end, notes } = body;
         if (!year_number || !year_start || !year_end) {
-          return err('year_number, year_start, year_end are required', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'year_number, year_start, year_end are required', 400, 'VALIDATION_ERROR');
         }
         const { data, error } = await supabase.rpc('create_fiscal_year' as never, {
           p_org_id:       orgId,
@@ -359,21 +375,21 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           p_year_start:   year_start,
           p_year_end:     year_end,
           p_notes:        notes ?? null,
-          p_actor_id:     user.id,
+          p_actor_id:     ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/create');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/create');
           if (mapped) return mapped;
           throw error;
         }
         return json({ fiscal_year_id: data }, 201);
       }
 
-      if (!fyId) return err('Not Found', 404, 'NOT_FOUND');
+      if (!fyId) return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
       // GET /financial-close/fiscal-years/:id
       if (req.method === 'GET' && !seg3) {
-        if (!hasPerm(user, 'finance:close:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:close:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('fiscal_years' as never)
           .select('*')
@@ -381,24 +397,24 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (error) throw error;
-        if (!data) return err('Fiscal year not found', 404, 'NOT_FOUND');
+        if (!data) return err(ctx, 'Fiscal year not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // POST /financial-close/fiscal-years/:id/assign-period
       if (req.method === 'POST' && seg3 === 'assign-period') {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { period_id, is_year_end = false } = body;
-        if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
+        if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
         const { error } = await supabase.rpc('assign_period_to_fiscal_year' as never, {
           p_period_id:      period_id,
           p_fiscal_year_id: fyId,
           p_is_year_end:    is_year_end,
-          p_actor_id:       user.id,
+          p_actor_id:       ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/assign-period');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/assign-period');
           if (mapped) return mapped;
           throw error;
         }
@@ -407,13 +423,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/fiscal-years/:id/validate
       if (req.method === 'POST' && seg3 === 'validate') {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase.rpc('validate_fiscal_year_for_close' as never, {
           p_fiscal_year_id: fyId,
-          p_actor_id:       user.id,
+          p_actor_id:       ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/validate');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/validate');
           if (mapped) return mapped;
           throw error;
         }
@@ -422,13 +438,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/fiscal-years/:id/retained-earnings
       if (req.method === 'POST' && seg3 === 'retained-earnings') {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase.rpc('post_retained_earnings_entry' as never, {
           p_fiscal_year_id: fyId,
-          p_actor_id:       user.id,
+          p_actor_id:       ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/retained-earnings');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/retained-earnings');
           if (mapped) return mapped;
           throw error;
         }
@@ -437,13 +453,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/fiscal-years/:id/close
       if (req.method === 'POST' && seg3 === 'close') {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { error } = await supabase.rpc('close_fiscal_year' as never, {
           p_fiscal_year_id: fyId,
-          p_actor_id:       user.id,
+          p_actor_id:       ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/close');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/close');
           if (mapped) return mapped;
           throw error;
         }
@@ -452,19 +468,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /financial-close/fiscal-years/:id/rollover
       if (req.method === 'POST' && seg3 === 'rollover') {
-        if (!hasPerm(user, 'finance:year_end:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:year_end:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { target_period_id } = body;
         if (!target_period_id || !UUID_RE.test(target_period_id)) {
-          return err('target_period_id is required', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'target_period_id is required', 400, 'VALIDATION_ERROR');
         }
         const { data, error } = await supabase.rpc('rollover_opening_balances' as never, {
           p_fiscal_year_id:   fyId,
           p_target_period_id: target_period_id,
-          p_actor_id:         user.id,
+          p_actor_id:         ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'financial-close/fiscal-years/rollover');
+          const mapped = handlePgError(ctx, error, 'financial-close/fiscal-years/rollover');
           if (mapped) return mapped;
           throw error;
         }
@@ -472,11 +488,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[financial-close]', msg);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

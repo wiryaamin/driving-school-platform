@@ -22,7 +22,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -30,15 +32,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+function preCtxUnauthorized(req: Request): Response {
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+  return new Response(
+    JSON.stringify({
+      code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+      trace_id: correlationId, request_id: requestId, version: 1,
+    }),
+    { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId, 'X-Request-ID': requestId } },
+  );
 }
-function hasPerm(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPerm(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 interface PathInfo {
@@ -57,15 +66,15 @@ function parsePath(req: Request): PathInfo {
   };
 }
 
-function handlePgError(e: { message?: string }, prefix: string): Response | null {
+function handlePgError(ctx: EdgeRequestContext, e: { message?: string }, prefix: string): Response | null {
   const msg = e.message ?? '';
-  if (msg.includes('JOURNAL_NOT_FOUND'))       return err('Journal entry not found', 404, 'NOT_FOUND');
-  if (msg.includes('JOURNAL_NOT_POSTED'))      return err('Entry is not posted', 409, 'CONFLICT');
-  if (msg.includes('JOURNAL_ALREADY_REVERSED')) return err('Entry already reversed', 409, 'ALREADY_REVERSED');
-  if (msg.includes('LEDGER_IMBALANCED'))       return err('Journal lines do not balance', 422, 'LEDGER_IMBALANCED');
-  if (msg.includes('PERIOD_LOCKED'))           return err('Financial period is locked', 409, 'PERIOD_LOCKED');
-  if (msg.includes('INVOICE_NOT_FOUND'))       return err('Invoice not found', 404, 'NOT_FOUND');
-  if (msg.includes('PAYMENT_NOT_FOUND'))       return err('Payment not found', 404, 'NOT_FOUND');
+  if (msg.includes('JOURNAL_NOT_FOUND'))       return err(ctx, 'Journal entry not found', 404, 'NOT_FOUND');
+  if (msg.includes('JOURNAL_NOT_POSTED'))      return err(ctx, 'Entry is not posted', 409, 'CONFLICT');
+  if (msg.includes('JOURNAL_ALREADY_REVERSED')) return err(ctx, 'Entry already reversed', 409, 'ALREADY_REVERSED');
+  if (msg.includes('LEDGER_IMBALANCED'))       return err(ctx, 'Journal lines do not balance', 422, 'LEDGER_IMBALANCED');
+  if (msg.includes('PERIOD_LOCKED'))           return err(ctx, 'Financial period is locked', 409, 'PERIOD_LOCKED');
+  if (msg.includes('INVOICE_NOT_FOUND'))       return err(ctx, 'Invoice not found', 404, 'NOT_FOUND');
+  if (msg.includes('PAYMENT_NOT_FOUND'))       return err(ctx, 'Payment not found', 404, 'NOT_FOUND');
   console.error(`[${prefix}]`, msg);
   return null;
 }
@@ -82,7 +91,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   }
 
   const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) return preCtxUnauthorized(req);
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')      ?? '',
@@ -90,12 +99,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
   const { seg1, seg2, seg3 } = parsePath(req);
   const url = new URL(req.url);
@@ -109,17 +125,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/journal-entries/:id/reverse
       if (req.method === 'POST' && entryId && seg3 === 'reverse') {
-        if (!hasPerm(user, 'finance:ledger:void')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:void')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { reversal_date, reason } = body;
         const { data, error } = await supabase.rpc('reverse_journal_entry' as never, {
           p_entry_id:       entryId,
           p_reversal_date:  reversal_date ?? null,
           p_reason:         reason        ?? null,
-          p_actor_id:       user.id,
+          p_actor_id:       ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'ledger/reverse');
+          const mapped = handlePgError(ctx, error, 'ledger/reverse');
           if (mapped) return mapped;
           throw error;
         }
@@ -128,21 +144,21 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/journal-entries/:id/correct
       if (req.method === 'POST' && entryId && seg3 === 'correct') {
-        if (!hasPerm(user, 'finance:ledger:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { new_lines, reason, correction_date } = body;
         if (!Array.isArray(new_lines) || new_lines.length < 2) {
-          return err('new_lines must be an array of at least 2 lines', 400, 'VALIDATION_ERROR');
+          return err(ctx, 'new_lines must be an array of at least 2 lines', 400, 'VALIDATION_ERROR');
         }
         const { data, error } = await supabase.rpc('correct_journal_entry' as never, {
           p_entry_id:         entryId,
           p_new_lines:        new_lines,
           p_reason:           reason          ?? null,
           p_correction_date:  correction_date ?? null,
-          p_actor_id:         user.id,
+          p_actor_id:         ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'ledger/correct');
+          const mapped = handlePgError(ctx, error, 'ledger/correct');
           if (mapped) return mapped;
           throw error;
         }
@@ -151,7 +167,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /ledger/journal-entries/:id
       if (req.method === 'GET' && entryId) {
-        if (!hasPerm(user, 'finance:ledger:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data: entry, error: eErr } = await supabase
           .from('journal_entries' as never)
           .select('*')
@@ -159,7 +175,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (eErr) throw eErr;
-        if (!entry) return err('Journal entry not found', 404, 'NOT_FOUND');
+        if (!entry) return err(ctx, 'Journal entry not found', 404, 'NOT_FOUND');
 
         const { data: lines, error: lErr } = await supabase
           .from('journal_lines' as never)
@@ -174,14 +190,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /ledger/journal-entries
       if (req.method === 'GET' && !entryId) {
-        if (!hasPerm(user, 'finance:ledger:read')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const periodId  = url.searchParams.get('period_id');
         const entryType = url.searchParams.get('entry_type');
         const status    = url.searchParams.get('status');
         const page      = Math.max(1, parseInt(url.searchParams.get('page')    ?? '1',  10));
         const perPage   = Math.min(100, parseInt(url.searchParams.get('per_page') ?? '50', 10));
 
-        if (!periodId) return err('period_id query param is required', 400, 'VALIDATION_ERROR');
+        if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
 
         let q = supabase
           .from('journal_entries' as never)
@@ -205,9 +221,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /ledger/account-balances ──────────────────────────────────────────────
 
     if (seg1 === 'account-balances' && req.method === 'GET') {
-      if (!hasPerm(user, 'finance:ledger:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const periodId = url.searchParams.get('period_id');
-      if (!periodId) return err('period_id query param is required', 400, 'VALIDATION_ERROR');
+      if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
 
       const { data, error } = await supabase
         .from('account_balances' as never)
@@ -223,9 +239,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /ledger/trial-balance ─────────────────────────────────────────────────
 
     if (seg1 === 'trial-balance' && req.method === 'GET') {
-      if (!hasPerm(user, 'finance:ledger:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const periodId = url.searchParams.get('period_id');
-      if (!periodId) return err('period_id query param is required', 400, 'VALIDATION_ERROR');
+      if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
 
       const { data: rows, error } = await supabase
         .from('v_trial_balance' as never)
@@ -254,16 +270,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /ledger/post-invoice ──────────────────────────────────────────────────
 
     if (seg1 === 'post-invoice' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:ledger:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:ledger:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { invoice_id } = body;
-      if (!invoice_id || !UUID_RE.test(invoice_id)) return err('invoice_id is required', 400, 'VALIDATION_ERROR');
+      if (!invoice_id || !UUID_RE.test(invoice_id)) return err(ctx, 'invoice_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('post_invoice_journal_entry' as never, {
         p_invoice_id: invoice_id,
-        p_actor_id:   user.id,
+        p_actor_id:   ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'ledger/post-invoice');
+        const mapped = handlePgError(ctx, error, 'ledger/post-invoice');
         if (mapped) return mapped;
         throw error;
       }
@@ -273,16 +289,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /ledger/post-payment ──────────────────────────────────────────────────
 
     if (seg1 === 'post-payment' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:ledger:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:ledger:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { payment_id } = body;
-      if (!payment_id || !UUID_RE.test(payment_id)) return err('payment_id is required', 400, 'VALIDATION_ERROR');
+      if (!payment_id || !UUID_RE.test(payment_id)) return err(ctx, 'payment_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('post_payment_journal_entry' as never, {
         p_payment_id: payment_id,
-        p_actor_id:   user.id,
+        p_actor_id:   ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'ledger/post-payment');
+        const mapped = handlePgError(ctx, error, 'ledger/post-payment');
         if (mapped) return mapped;
         throw error;
       }
@@ -292,16 +308,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     // ── /ledger/post-void ────────────────────────────────────────────────────
 
     if (seg1 === 'post-void' && req.method === 'POST') {
-      if (!hasPerm(user, 'finance:ledger:void')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPerm(ctx, 'finance:ledger:void')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json().catch(() => ({}));
       const { invoice_id } = body;
-      if (!invoice_id || !UUID_RE.test(invoice_id)) return err('invoice_id is required', 400, 'VALIDATION_ERROR');
+      if (!invoice_id || !UUID_RE.test(invoice_id)) return err(ctx, 'invoice_id is required', 400, 'VALIDATION_ERROR');
       const { data, error } = await supabase.rpc('post_void_journal_entry' as never, {
         p_invoice_id: invoice_id,
-        p_actor_id:   user.id,
+        p_actor_id:   ctx.actorId,
       });
       if (error) {
-        const mapped = handlePgError(error, 'ledger/post-void');
+        const mapped = handlePgError(ctx, error, 'ledger/post-void');
         if (mapped) return mapped;
         throw error;
       }
@@ -314,16 +330,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/deferred/post
       if (req.method === 'POST' && seg2 === 'post') {
-        if (!hasPerm(user, 'finance:revenue:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:revenue:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { invoice_id } = body;
-        if (!invoice_id || !UUID_RE.test(invoice_id)) return err('invoice_id is required', 400, 'VALIDATION_ERROR');
+        if (!invoice_id || !UUID_RE.test(invoice_id)) return err(ctx, 'invoice_id is required', 400, 'VALIDATION_ERROR');
         const { data, error } = await supabase.rpc('post_deferred_revenue_entry' as never, {
           p_invoice_id: invoice_id,
-          p_actor_id:   user.id,
+          p_actor_id:   ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'ledger/deferred/post');
+          const mapped = handlePgError(ctx, error, 'ledger/deferred/post');
           if (mapped) return mapped;
           throw error;
         }
@@ -332,16 +348,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/deferred/recognize
       if (req.method === 'POST' && seg2 === 'recognize') {
-        if (!hasPerm(user, 'finance:revenue:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:revenue:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { booking_id } = body;
-        if (!booking_id || !UUID_RE.test(booking_id)) return err('booking_id is required', 400, 'VALIDATION_ERROR');
+        if (!booking_id || !UUID_RE.test(booking_id)) return err(ctx, 'booking_id is required', 400, 'VALIDATION_ERROR');
         const { data, error } = await supabase.rpc('recognize_lesson_revenue' as never, {
           p_booking_id: booking_id,
-          p_actor_id:   user.id,
+          p_actor_id:   ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'ledger/deferred/recognize');
+          const mapped = handlePgError(ctx, error, 'ledger/deferred/recognize');
           if (mapped) return mapped;
           throw error;
         }
@@ -350,13 +366,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/deferred/bulk-recognize
       if (req.method === 'POST' && seg2 === 'bulk-recognize') {
-        if (!hasPerm(user, 'finance:revenue:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:revenue:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { as_of_date } = body;
         const { data, error } = await supabase.rpc('bulk_recognize_revenue' as never, {
           p_org_id:     orgId,
           p_as_of_date: as_of_date ?? null,
-          p_actor_id:   user.id,
+          p_actor_id:   ctx.actorId,
         });
         if (error) throw error;
         return json({ count: data ?? 0 });
@@ -364,7 +380,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /ledger/deferred/:invoiceId
       if (req.method === 'GET' && seg2 && UUID_RE.test(seg2)) {
-        if (!hasPerm(user, 'finance:revenue:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:revenue:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data: schedule, error } = await supabase
           .from('deferred_revenue_schedules' as never)
           .select('*')
@@ -372,7 +388,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('invoice_id', seg2)
           .maybeSingle();
         if (error) throw error;
-        if (!schedule) return err('Deferred revenue schedule not found', 404, 'NOT_FOUND');
+        if (!schedule) return err(ctx, 'Deferred revenue schedule not found', 404, 'NOT_FOUND');
         return json(schedule);
       }
     }
@@ -384,17 +400,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // POST /ledger/sie4/generate
       if (req.method === 'POST' && seg2 === 'generate') {
-        if (!hasPerm(user, 'finance:ledger:export')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const body = await req.json().catch(() => ({}));
         const { period_id } = body;
-        if (!period_id || !UUID_RE.test(period_id)) return err('period_id is required', 400, 'VALIDATION_ERROR');
+        if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
         const { data, error } = await supabase.rpc('generate_sie4_from_ledger' as never, {
           p_org_id:    orgId,
           p_period_id: period_id,
-          p_actor_id:  user.id,
+          p_actor_id:  ctx.actorId,
         });
         if (error) {
-          const mapped = handlePgError(error, 'ledger/sie4/generate');
+          const mapped = handlePgError(ctx, error, 'ledger/sie4/generate');
           if (mapped) return mapped;
           throw error;
         }
@@ -403,7 +419,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       // GET /ledger/sie4/:id
       if (req.method === 'GET' && exportId) {
-        if (!hasPerm(user, 'finance:ledger:export')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const { data, error } = await supabase
           .from('ledger_sie4_exports' as never)
           .select('*')
@@ -411,13 +427,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           .eq('organization_id', orgId)
           .maybeSingle();
         if (error) throw error;
-        if (!data) return err('Ledger SIE4 export not found', 404, 'NOT_FOUND');
+        if (!data) return err(ctx, 'Ledger SIE4 export not found', 404, 'NOT_FOUND');
         return json(data);
       }
 
       // GET /ledger/sie4
       if (req.method === 'GET' && !exportId && seg2 !== 'generate') {
-        if (!hasPerm(user, 'finance:ledger:export')) return err('Forbidden', 403, 'FORBIDDEN');
+        if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
         const limit = Math.min(50, parseInt(url.searchParams.get('limit') ?? '10', 10));
         const { data, error } = await supabase
           .from('ledger_sie4_exports' as never)
@@ -430,11 +446,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       }
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[ledger]', msg);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

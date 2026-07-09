@@ -12,7 +12,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -20,15 +22,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+function preCtxUnauthorized(req: Request): Response {
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+  return new Response(
+    JSON.stringify({
+      code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+      trace_id: correlationId, request_id: requestId, version: 1,
+    }),
+    { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId, 'X-Request-ID': requestId } },
+  );
 }
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 
 function parsePath(req: Request): { sub: string | null; invoiceId: string | null } {
@@ -54,7 +63,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   }
 
   const authHeader = req.headers.get('Authorization');
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) return preCtxUnauthorized(req);
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
@@ -62,19 +71,26 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     { global: { headers: { Authorization: authHeader } } }
   );
 
-  const { data: { user: rawUser }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
   const { sub, invoiceId } = parsePath(req);
 
   try {
     // GET /swedish-settings/ocr/:invoiceId
     if (req.method === 'GET' && sub === 'ocr' && invoiceId) {
-      if (!hasPermission(user, 'finance:settings:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:settings:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('invoice_ocr_references' as never)
         .select('*')
@@ -82,13 +98,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('organization_id', orgId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return err('OCR reference not found', 404, 'NOT_FOUND');
+      if (!data) return err(ctx, 'OCR reference not found', 404, 'NOT_FOUND');
       return json(data);
     }
 
     // GET /swedish-settings/ocr
     if (req.method === 'GET' && sub === 'ocr') {
-      if (!hasPermission(user, 'finance:settings:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:settings:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('invoice_ocr_references' as never)
         .select('*')
@@ -101,10 +117,10 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // POST /swedish-settings/seed-bas
     if (req.method === 'POST' && sub === 'seed-bas') {
-      if (!hasPermission(user, 'finance:bas:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:bas:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase.rpc('seed_org_chart_of_accounts' as never, {
         p_org_id:   orgId,
-        p_actor_id: user.id,
+        p_actor_id: ctx.actorId,
       });
       if (error) throw error;
       return json({ seeded: data ?? 0 });
@@ -112,10 +128,10 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // POST /swedish-settings/seed-dunning
     if (req.method === 'POST' && sub === 'seed-dunning') {
-      if (!hasPermission(user, 'finance:settings:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:settings:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase.rpc('seed_swedish_dunning_schedule' as never, {
         p_org_id:   orgId,
-        p_actor_id: user.id,
+        p_actor_id: ctx.actorId,
       });
       if (error) throw error;
       return json({ schedule_id: data });
@@ -123,7 +139,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // GET /swedish-settings
     if (req.method === 'GET' && !sub) {
-      if (!hasPermission(user, 'finance:settings:read')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:settings:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('organization_swedish_settings' as never)
         .select('*')
@@ -135,7 +151,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // PUT /swedish-settings
     if (req.method === 'PUT' && !sub) {
-      if (!hasPermission(user, 'finance:settings:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:settings:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json();
       const { data, error } = await supabase
         .from('organization_swedish_settings' as never)
@@ -147,11 +163,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       return json(data);
     }
 
-    return err('Not Found', 404, 'NOT_FOUND');
+    return err(ctx, 'Not Found', 404, 'NOT_FOUND');
 
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[swedish-settings]', msg);
-    return err('Internal server error', 500, 'INTERNAL_ERROR');
+    return err(ctx, 'Internal server error', 500, 'INTERNAL_ERROR');
   }
 }));

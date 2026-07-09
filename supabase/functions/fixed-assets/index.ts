@@ -15,7 +15,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
-import { enrichUserFromJwt, getOrgIdFromBearer } from '../_shared/jwt.ts';
+import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { buildErrorResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,15 +25,22 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_CT });
 }
-function err(message: string, status: number, code?: string): Response {
-  return json({ error: message, ...(code !== undefined && { code }) }, status);
+function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
+  return buildErrorResponse(ctx, status, code, message);
 }
-function getOrgId(user: { app_metadata?: Record<string, unknown> }): string | null {
-  return (user.app_metadata?.['organization_id'] as string | undefined) ?? null;
+function preCtxUnauthorized(req: Request): Response {
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const requestId      = crypto.randomUUID();
+  return new Response(
+    JSON.stringify({
+      code: 'UNAUTHORIZED', message: 'Missing Authorization header',
+      trace_id: correlationId, request_id: requestId, version: 1,
+    }),
+    { status: 401, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId, 'X-Request-ID': requestId } },
+  );
 }
-function hasPermission(user: { app_metadata?: Record<string, unknown> }, perm: string): boolean {
-  const perms = (user.app_metadata?.['permissions'] as string[] | undefined) ?? [];
-  return perms.includes(perm);
+function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
+  return ctx.permissions.includes(perm);
 }
 function extractPathSegments(req: Request): string[] {
   return new URL(req.url).pathname.split('/').filter(Boolean);
@@ -49,20 +58,20 @@ function extractSubPath(req: Request): string | null {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleClasses(_req: Request, client: any, _orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleClasses(_req: Request, client: any, _orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const { data, error } = await client
     .from('fixed_asset_classes')
     .select('*')
     .eq('is_active', true)
     .order('class_code');
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
+  if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
   return json({ data: data ?? [] });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleList(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleList(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const url    = new URL(req.url);
   const status = url.searchParams.get('status');
   const classId = url.searchParams.get('asset_class_id');
@@ -82,20 +91,20 @@ async function handleList(req: Request, client: any, orgId: string, user: any): 
   if (classId) q = q.eq('asset_class_id', classId);
 
   const { data, error, count } = await q;
-  if (error) return err(error.message, 500, 'QUERY_FAILED');
+  if (error) return err(ctx, error.message, 500, 'QUERY_FAILED');
   return json({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0 } });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegister(req: Request, client: any, orgId: string, user: any): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleRegister(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const { period_id, asset_class_id, asset_code, asset_name, acquisition_date, acquisition_cost } = body;
   if (!period_id || !asset_class_id || !asset_code || !asset_name || !acquisition_date || !acquisition_cost) {
-    return err('period_id, asset_class_id, asset_code, asset_name, acquisition_date, acquisition_cost are required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'period_id, asset_class_id, asset_code, asset_name, acquisition_date, acquisition_cost are required', 400, 'VALIDATION_ERROR');
   }
 
   const { data, error } = await client.rpc('register_fixed_asset', {
@@ -112,9 +121,9 @@ async function handleRegister(req: Request, client: any, orgId: string, user: an
     p_credit_account:      body['credit_account'] ?? '2440',
     p_description:         body['description'] ?? null,
     p_notes:               body['notes'] ?? null,
-    p_actor_id:            user.id,
+    p_actor_id:            ctx.actorId,
   });
-  if (error) return err(error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
+  if (error) return err(ctx, error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
 
   const { data: asset } = await client
     .from('fixed_assets')
@@ -126,34 +135,34 @@ async function handleRegister(req: Request, client: any, orgId: string, user: an
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetAsset(req: Request, client: any, orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGetAsset(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const { data } = await client
     .from('fixed_assets')
     .select('*')
     .eq('id', assetId)
     .eq('organization_id', orgId)
     .maybeSingle();
-  if (!data) return err('Asset not found', 404, 'NOT_FOUND');
+  if (!data) return err(ctx, 'Asset not found', 404, 'NOT_FOUND');
   return json({ data });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleDepreciate(req: Request, client: any, orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:depreciate')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleDepreciate(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:depreciate')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown> = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
 
   const periodId = body['period_id'] as string | undefined;
-  if (!periodId) return err('period_id is required', 400, 'VALIDATION_ERROR');
+  if (!periodId) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
 
   const { data, error } = await client.rpc('post_depreciation_period', {
     p_asset_id:  assetId,
     p_period_id: periodId,
-    p_actor_id:  user.id,
+    p_actor_id:  ctx.actorId,
   });
-  if (error) return err(error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
+  if (error) return err(ctx, error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
 
   const { data: asset } = await client
     .from('fixed_assets')
@@ -165,15 +174,15 @@ async function handleDepreciate(req: Request, client: any, orgId: string, user: 
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleDispose(req: Request, client: any, orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:manage')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleDispose(req: Request, client: any, orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const { period_id, disposal_type, disposal_date } = body;
   if (!period_id || !disposal_type || !disposal_date) {
-    return err('period_id, disposal_type, disposal_date are required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'period_id, disposal_type, disposal_date are required', 400, 'VALIDATION_ERROR');
   }
 
   const { data, error } = await client.rpc('post_asset_disposal', {
@@ -183,9 +192,9 @@ async function handleDispose(req: Request, client: any, orgId: string, user: any
     p_disposal_date: disposal_date,
     p_proceeds:      Number(body['proceeds'] ?? 0),
     p_notes:         body['notes'] ?? null,
-    p_actor_id:      user.id,
+    p_actor_id:      ctx.actorId,
   });
-  if (error) return err(error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
+  if (error) return err(ctx, error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
 
   const { data: disposal } = await client
     .from('asset_disposals')
@@ -197,15 +206,15 @@ async function handleDispose(req: Request, client: any, orgId: string, user: any
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleImpair(req: Request, client: any, _orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:depreciate')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleImpair(req: Request, client: any, _orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:depreciate')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return err('Invalid JSON body', 400, 'VALIDATION_ERROR'); }
+  try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }
 
   const { period_id, impairment_date, impairment_amount } = body;
   if (!period_id || !impairment_date || !impairment_amount) {
-    return err('period_id, impairment_date, impairment_amount are required', 400, 'VALIDATION_ERROR');
+    return err(ctx, 'period_id, impairment_date, impairment_amount are required', 400, 'VALIDATION_ERROR');
   }
 
   const { data, error } = await client.rpc('post_impairment_adjustment', {
@@ -214,15 +223,15 @@ async function handleImpair(req: Request, client: any, _orgId: string, user: any
     p_impairment_date:   impairment_date,
     p_impairment_amount: Number(impairment_amount),
     p_reason:            body['reason'] ?? null,
-    p_actor_id:          user.id,
+    p_actor_id:          ctx.actorId,
   });
-  if (error) return err(error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
+  if (error) return err(ctx, error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
   return json({ journal_entry_id: data });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGetSchedule(_req: Request, client: any, orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:read')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGetSchedule(_req: Request, client: any, orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const { data } = await client
     .from('depreciation_schedules')
     .select('*')
@@ -233,13 +242,13 @@ async function handleGetSchedule(_req: Request, client: any, orgId: string, user
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGenerateSchedule(_req: Request, client: any, _orgId: string, user: any, assetId: string): Promise<Response> {
-  if (!hasPermission(user, 'finance:assets:depreciate')) return err('Forbidden', 403, 'FORBIDDEN');
+async function handleGenerateSchedule(_req: Request, client: any, _orgId: string, ctx: EdgeRequestContext, assetId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:assets:depreciate')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const { data, error } = await client.rpc('generate_depreciation_schedule', {
     p_asset_id: assetId,
-    p_actor_id: user.id,
+    p_actor_id: ctx.actorId,
   });
-  if (error) return err(error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
+  if (error) return err(ctx, error.message, error.code === 'P0002' ? 404 : 422, error.code ?? 'RPC_ERROR');
   return json({ lines_generated: data });
 }
 
@@ -248,18 +257,25 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!;
   const authHeader  = req.headers.get('Authorization');
 
-  if (!authHeader) return err('Missing Authorization header', 401, 'UNAUTHORIZED');
+  if (!authHeader) return preCtxUnauthorized(req);
 
   const client = createClient(supabaseUrl, supabaseKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: { user: rawUser }, error: authError } = await client.auth.getUser();
-  if (authError || !rawUser) return err('Unauthorized', 401, 'UNAUTHORIZED');
-  const user = enrichUserFromJwt(req, rawUser);
+  const ctxResult = await buildEdgeContext(req);
+  if (!ctxResult.ok) return ctxResult.response;
+  const ctx = ctxResult.ctx;
 
-  const orgId = getOrgId(user) ?? getOrgIdFromBearer(req);
-  if (!orgId) return err('No organization context', 403, 'NO_ORG_CONTEXT');
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
+  const orgId = ctx.organizationId;
+  if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG_CONTEXT');
 
   const method  = req.method;
   const segs    = extractPathSegments(req);
@@ -269,23 +285,23 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   // GET /fixed-assets/classes
   if (method === 'GET' && segs[fnIdx + 1] === 'classes' && !assetId) {
-    return handleClasses(req, client, orgId, user);
+    return handleClasses(req, client, orgId, ctx);
   }
 
   // Routes on a specific asset: /fixed-assets/:id/...
   if (assetId) {
-    if (method === 'GET'  && !subPath)                          return handleGetAsset(req, client, orgId, user, assetId);
-    if (method === 'GET'  && subPath === 'schedule')            return handleGetSchedule(req, client, orgId, user, assetId);
-    if (method === 'POST' && subPath === 'schedule' && segs[fnIdx + 3] === 'generate') return handleGenerateSchedule(req, client, orgId, user, assetId);
-    if (method === 'POST' && subPath === 'depreciate')          return handleDepreciate(req, client, orgId, user, assetId);
-    if (method === 'POST' && subPath === 'dispose')             return handleDispose(req, client, orgId, user, assetId);
-    if (method === 'POST' && subPath === 'impair')              return handleImpair(req, client, orgId, user, assetId);
-    return err('Not found', 404, 'NOT_FOUND');
+    if (method === 'GET'  && !subPath)                          return handleGetAsset(req, client, orgId, ctx, assetId);
+    if (method === 'GET'  && subPath === 'schedule')            return handleGetSchedule(req, client, orgId, ctx, assetId);
+    if (method === 'POST' && subPath === 'schedule' && segs[fnIdx + 3] === 'generate') return handleGenerateSchedule(req, client, orgId, ctx, assetId);
+    if (method === 'POST' && subPath === 'depreciate')          return handleDepreciate(req, client, orgId, ctx, assetId);
+    if (method === 'POST' && subPath === 'dispose')             return handleDispose(req, client, orgId, ctx, assetId);
+    if (method === 'POST' && subPath === 'impair')              return handleImpair(req, client, orgId, ctx, assetId);
+    return err(ctx, 'Not found', 404, 'NOT_FOUND');
   }
 
   // Collection routes
-  if (method === 'GET')  return handleList(req, client, orgId, user);
-  if (method === 'POST') return handleRegister(req, client, orgId, user);
+  if (method === 'GET')  return handleList(req, client, orgId, ctx);
+  if (method === 'POST') return handleRegister(req, client, orgId, ctx);
 
-  return err('Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+  return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
 }));
