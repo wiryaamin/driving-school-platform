@@ -5,6 +5,8 @@ import { logger } from './logger.ts';
 export interface EdgeTenantContext {
   organizationId: string | null;
   actorId: string | null;
+  /** Verified actor email from auth.getUser(). Null if not present on the auth user. */
+  actorEmail: string | null;
   actorRole: string | null;
   permissions: string[];
   /** Subscription tier from JWT claims. Defaults to 'trial' if not present. */
@@ -37,12 +39,16 @@ export type ContextResult =
 export async function buildEdgeContext(req: Request): Promise<ContextResult> {
   const correlationId =
     req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  // request_id always identifies exactly this one invocation — never accepted
+  // from the client, unlike correlation_id which may span a multi-request flow.
+  // See PR-2 Observability Architecture v1.0, ADR-001.
+  const requestId = crypto.randomUUID();
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return {
       ok: false,
-      response: errorResponse(401, 'UNAUTHORIZED', 'Missing bearer token', correlationId),
+      response: errorResponse(401, 'UNAUTHORIZED', 'Missing bearer token', correlationId, requestId),
     };
   }
 
@@ -64,7 +70,7 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
     });
     return {
       ok: false,
-      response: errorResponse(401, 'UNAUTHORIZED', 'Invalid or expired token', correlationId),
+      response: errorResponse(401, 'UNAUTHORIZED', 'Invalid or expired token', correlationId, requestId),
     };
   }
 
@@ -82,19 +88,37 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
   const ctx: EdgeRequestContext = {
     organizationId:   (claims['organization_id']  as string | null) ?? null,
     actorId:          user.id,
+    actorEmail:       user.email ?? null,
     actorRole:        (claims['role']             as string | null) ?? null,
     permissions:      (claims['permissions']      as string[])      ?? [],
     subscriptionTier: (claims['subscription_tier'] as string)       ?? 'trial',
     correlationId,
     isPlatformAdmin:  (claims['is_platform_admin'] as boolean)      ?? false,
     isWorker:         false,
-    requestId:        correlationId,
+    requestId,
     userAgent:        req.headers.get('User-Agent'),
     ipAddress:        req.headers.get('X-Forwarded-For'),
     startedAt:        Date.now(),
   };
 
   return { ok: true, ctx };
+}
+
+/**
+ * Guard clause for route-level permission checks. Mirrors the local
+ * requirePerm() already used in students/instructors/etc. — centralised here
+ * so newly-migrated functions can import instead of redefining it.
+ * Platform admins bypass. Returns null when allowed, or a 403 Response.
+ */
+export function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) {
+    return errorResponse(403, 'FORBIDDEN', 'Organisation context is required', ctx.correlationId, ctx.requestId);
+  }
+  if (!ctx.permissions.includes(code)) {
+    return errorResponse(403, 'FORBIDDEN', `Requires permission: ${code}`, ctx.correlationId, ctx.requestId);
+  }
+  return null;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -114,16 +138,22 @@ function errorResponse(
   status: number,
   code: string,
   message: string,
-  traceId: string
+  traceId: string,
+  requestId?: string
 ): Response {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Correlation-ID': traceId,
+  };
+  if (requestId !== undefined) headers['X-Request-ID'] = requestId;
+
   return new Response(
-    JSON.stringify({ code, message, trace_id: traceId }),
-    {
-      status,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Correlation-ID': traceId,
-      },
-    }
+    JSON.stringify({
+      code,
+      message,
+      trace_id: traceId,
+      ...(requestId !== undefined && { request_id: requestId }),
+    }),
+    { status, headers }
   );
 }
