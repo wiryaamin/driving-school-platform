@@ -22,6 +22,7 @@ export default defineConfig({
       '@platform/utils': path.resolve(__dirname, '../../packages/utils/src'),
       '@platform/i18n': path.resolve(__dirname, '../../packages/i18n/src'),
       '@platform/ui': path.resolve(__dirname, '../../packages/ui/src'),
+      '@platform/database': path.resolve(__dirname, '../../packages/database/src'),
     },
   },
 

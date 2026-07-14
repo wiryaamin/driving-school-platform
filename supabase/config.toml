@@ -110,6 +110,16 @@ verify_jwt = false
 enabled = true
 verify_jwt = true
 
+# verify_jwt = false because /bankid-auth/init (login) and /collect are reached
+# before any session exists — same reasoning as identity-events. Per P-023's
+# hosted-deployment lesson, this setting is not reliably honored on deploy;
+# the function is deployed with --no-verify-jwt directly (see Phase 3
+# Completion Report). /init(link) and /collect(link) independently validate
+# the caller's own JWT internally, exactly like identity-events/logout.
+[functions.bankid-auth]
+enabled = true
+verify_jwt = false
+
 [functions.students]
 enabled = true
 verify_jwt = true
