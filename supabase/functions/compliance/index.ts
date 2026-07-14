@@ -93,7 +93,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
-import { buildErrorResponse } from '../_shared/errors.ts';
+import { buildErrorResponse, buildSuccessResponse } from '../_shared/errors.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -103,6 +103,15 @@ function json(body: unknown, status = 200): Response {
 }
 function err(ctx: EdgeRequestContext, message: string, status: number, code: string): Response {
   return buildErrorResponse(ctx, status, code, message);
+}
+// Runtime defect fix (Action 4): `ok()` was called 31 times below but never
+// defined or imported — every call threw ReferenceError. Mirrors `err()`
+// above: delegates to the canonical ADR-003 success helper rather than a
+// bespoke shortcut, exactly as `err()` already delegates to
+// `buildErrorResponse`. Response body shape ({ data }) and status code
+// (default 200, matching every existing call site) are unchanged.
+function ok<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
+  return buildSuccessResponse(ctx, data, status);
 }
 function hasPermission(ctx: EdgeRequestContext, perm: string): boolean {
   return ctx.permissions.includes(perm);
@@ -2211,7 +2220,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'CI_PIPELINE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'validate-migration' && method === 'POST') {
       const body = await req.json();
@@ -2220,7 +2229,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_pre_hash: body.pre_hash, p_post_hash: body.post_hash, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'MIGRATION_REPRO_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'post-deploy-integrity' && method === 'POST') {
       const body = await req.json();
@@ -2228,7 +2237,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_deploy_ver: body.deploy_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'DEPLOY_INTEGRITY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'smoke-tests' && method === 'POST') {
       const body = await req.json();
@@ -2236,7 +2245,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_run_id: body.run_id, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'SMOKE_TESTS_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'deployment-report' && method === 'POST') {
       const body = await req.json();
@@ -2244,7 +2253,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_deploy_ver: body.deploy_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'DEPLOYMENT_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2256,7 +2265,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_rebuild_ver: body.rebuild_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'SHADOW_REBUILD_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'compare' && method === 'POST') {
       const body = await req.json();
@@ -2264,7 +2273,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_primary_hash: body.primary_hash, p_shadow_hash: body.shadow_hash,
       });
       if (error) return err(ctx, error.message, 500, 'SHADOW_COMPARE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'validate-equivalence' && method === 'POST') {
       const body = await req.json();
@@ -2273,7 +2282,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_shadow_hash: body.shadow_hash, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'SHADOW_EQUIV_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'detect-divergence' && method === 'POST') {
       const body = await req.json();
@@ -2283,7 +2292,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'REBUILD_DIVERGENCE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'report' && method === 'POST') {
       const body = await req.json();
@@ -2291,7 +2300,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_rebuild_ver: body.rebuild_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'SHADOW_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2303,7 +2312,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_sim_ver: body.sim_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'COLD_RESTORE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'equivalence' && method === 'POST') {
       const body = await req.json();
@@ -2312,7 +2321,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_post_hash: body.post_hash, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'RESTORE_EQUIV_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'compare-hashes' && method === 'POST') {
       const body = await req.json();
@@ -2320,7 +2329,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_pre_hash: body.pre_hash, p_post_hash: body.post_hash,
       });
       if (error) return err(ctx, error.message, 500, 'RESTORE_COMPARE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'benchmark' && method === 'POST') {
       const body = await req.json();
@@ -2330,7 +2339,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'RESTORE_BENCHMARK_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'report' && method === 'POST') {
       const body = await req.json();
@@ -2338,7 +2347,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_sim_ver: body.sim_ver, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'RESTORE_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2352,7 +2361,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ARCHIVE_BATCH_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'validate-integrity' && method === 'POST') {
       const body = await req.json();
@@ -2360,7 +2369,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_batch_id: body.batch_id, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ARCHIVE_INTEGRITY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'hash-continuity' && method === 'GET') {
       const url   = new URL(req.url);
@@ -2373,7 +2382,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_type: entityType, p_elements_count: elementsCount,
       });
       if (error) return err(ctx, error.message, 500, 'ARCHIVE_CONTINUITY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'reconstruct' && method === 'POST') {
       const body = await req.json();
@@ -2381,14 +2390,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_batch_id: body.batch_id, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ARCHIVE_RECONSTRUCT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'report' && method === 'GET') {
       const { data, error } = await client.rpc('generate_archive_integrity_report', {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ARCHIVE_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2399,35 +2408,35 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'METRICS_COLLECT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'growth-rate' && method === 'GET') {
       const { data, error } = await client.rpc('calculate_chronology_growth_rate', {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'GROWTH_RATE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'detect-anomalies' && method === 'POST') {
       const { data, error } = await client.rpc('detect_replay_integrity_anomalies', {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'INTEGRITY_ANOMALY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'health' && method === 'GET') {
       const { data, error } = await client.rpc('validate_operational_replay_health', {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'OPERATIONAL_HEALTH_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'report' && method === 'GET') {
       const { data, error } = await client.rpc('generate_operability_report', {
         p_org_id: orgId, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'OPERABILITY_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2440,7 +2449,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_id: body.entity_id ?? null, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ANOMALY_DETECT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'discontinuities' && method === 'POST') {
       const body = await req.json();
@@ -2449,7 +2458,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_id: body.entity_id ?? null, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'DISCONTINUITY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'chain-integrity' && method === 'POST') {
       const body = await req.json();
@@ -2458,7 +2467,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_id: body.entity_id ?? null, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'CHAIN_INTEGRITY_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'serializer-divergence' && method === 'POST') {
       const body = await req.json();
@@ -2467,7 +2476,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_expected_hash: body.expected_hash, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'SERIALIZER_DIVERGENCE_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
     if (seg2 === 'report' && method === 'POST') {
       const body = await req.json();
@@ -2476,7 +2485,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         p_entity_id: body.entity_id ?? null, p_actor_id: ctx.actorId,
       });
       if (error) return err(ctx, error.message, 500, 'ANOMALY_REPORT_ERROR');
-      return ok(data);
+      return ok(ctx, data);
     }
   }
 
@@ -2484,7 +2493,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (seg1 === 'validate' && seg2 === 'phase6b' && method === 'GET') {
     const { data, error } = await client.rpc('run_phase6b_validation_suite', {});
     if (error) return err(ctx, error.message, 500, 'PHASE6B_VALIDATION_ERROR');
-    return ok(data);
+    return ok(ctx, data);
   }
 
   return err(ctx, 'Not found', 404, 'NOT_FOUND');
