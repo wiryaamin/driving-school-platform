@@ -20,6 +20,12 @@ export const Permissions = {
   INSTRUCTORS_UPDATE: 'instructors:instructor:update',
   INSTRUCTORS_DELETE: 'instructors:instructor:delete',
 
+  // ─── Vehicles ──────────────────────────────────────────────────────────────
+  VEHICLES_READ: 'vehicles:vehicle:read',
+  VEHICLES_CREATE: 'vehicles:vehicle:create',
+  VEHICLES_UPDATE: 'vehicles:vehicle:update',
+  VEHICLES_DELETE: 'vehicles:vehicle:delete',
+
   // ─── Scheduling ────────────────────────────────────────────────────────────
   SCHEDULING_READ: 'scheduling:booking:read',
   SCHEDULING_CREATE: 'scheduling:booking:create',
@@ -44,6 +50,7 @@ export const Permissions = {
   // ─── Documents ─────────────────────────────────────────────────────────────
   DOCUMENTS_READ: 'documents:document:read',
   DOCUMENTS_CREATE: 'documents:document:create',
+  DOCUMENTS_UPDATE: 'documents:document:update',
   DOCUMENTS_DELETE: 'documents:document:delete',
 
   // ─── Communications ────────────────────────────────────────────────────────
@@ -148,8 +155,9 @@ export const Permissions = {
   FINANCE_INTEGRITY_MANAGE: 'finance:integrity:manage',
 
   // ─── Finance — SIE4 Export ────────────────────────────────────────────────
-  FINANCE_SIE4_READ: 'finance:sie4:read',
-  FINANCE_SIE4_RUN: 'finance:sie4:run',
+  // Code is "sie_export", not "sie4" — permissions_code_format forbids digits.
+  FINANCE_SIE4_READ: 'finance:sie_export:read',
+  FINANCE_SIE4_RUN: 'finance:sie_export:run',
 
   // ─── Finance — Ledger Replay & Governance (Phase 4H) ─────────────────────
   FINANCE_REPLAY_READ: 'finance:replay:read',

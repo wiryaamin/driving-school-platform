@@ -13,22 +13,22 @@ export class Sie4Service {
   }
 
   async generate(ctx: TenantContext, exportRunId: string): Promise<string> {
-    assertPermission(ctx, 'finance:sie4:run');
+    assertPermission(ctx, 'finance:sie_export:run');
     return this.repo.generateViaRpc(ctx, exportRunId);
   }
 
   async getById(ctx: TenantContext, id: string): Promise<Sie4Export | null> {
-    assertPermission(ctx, 'finance:sie4:read');
+    assertPermission(ctx, 'finance:sie_export:read');
     return this.repo.findById(ctx, id);
   }
 
   async getByExportRun(ctx: TenantContext, exportRunId: string): Promise<Sie4Export | null> {
-    assertPermission(ctx, 'finance:sie4:read');
+    assertPermission(ctx, 'finance:sie_export:read');
     return this.repo.findByExportRun(ctx, exportRunId);
   }
 
   async listRecent(ctx: TenantContext, limit = 10): Promise<Sie4Export[]> {
-    assertPermission(ctx, 'finance:sie4:read');
+    assertPermission(ctx, 'finance:sie_export:read');
     return this.repo.listRecent(ctx, limit);
   }
 }

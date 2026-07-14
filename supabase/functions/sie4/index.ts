@@ -13,6 +13,7 @@ import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { buildErrorResponse } from '../_shared/errors.ts';
+import { requireFeature } from '../_shared/subscription.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -83,6 +84,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (writeGuard) return writeGuard;
   }
 
+  const subGuard = requireFeature(ctx, 'finance:sie4:export');
+  if (subGuard) return subGuard;
+
   const orgId = ctx.organizationId;
   if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
 
@@ -91,7 +95,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   try {
     // POST /sie4/generate
     if (req.method === 'POST' && sub === 'generate') {
-      if (!hasPermission(ctx, 'finance:sie4:run')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie_export:run')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const body = await req.json();
       const { export_run_id } = body;
       if (!export_run_id || !UUID_RE.test(export_run_id)) return err(ctx, 'export_run_id is required', 400, 'VALIDATION_ERROR');
@@ -110,7 +114,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // GET /sie4/by-run/:runId
     if (req.method === 'GET' && sub === 'by-run' && runId) {
-      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie_export:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('sie4_exports' as never)
         .select('*')
@@ -124,7 +128,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // GET /sie4/:id
     if (req.method === 'GET' && sie4Id) {
-      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie_export:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const { data, error } = await supabase
         .from('sie4_exports' as never)
         .select('*')
@@ -138,7 +142,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     // GET /sie4
     if (req.method === 'GET' && !sie4Id && !sub) {
-      if (!hasPermission(ctx, 'finance:sie4:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      if (!hasPermission(ctx, 'finance:sie_export:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
       const url   = new URL(req.url);
       const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
       const { data, error } = await supabase

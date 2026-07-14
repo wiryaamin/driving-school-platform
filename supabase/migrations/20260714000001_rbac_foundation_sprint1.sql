@@ -23,17 +23,21 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- Unit 1 — SIE4 export (finance:sie4:read, finance:sie4:run)
+-- Unit 1 — SIE4 export (finance:sie_export:read, finance:sie_export:run)
 -- Root cause: declared in apps/web/src/core/rbac/permissions.ts and consumed
 -- by SIE4ExportsPage.tsx, but never seeded into public.permissions at all.
+-- Naming note: the resource segment is "sie_export", not "sie4" — the
+-- permissions_code_format constraint (^[a-z_]+:[a-z_]+:[a-z_]+$) forbids
+-- digits, so the code cannot literally spell "sie4"; only SIE4 is
+-- implemented in this codebase, so "sie_export" is unambiguous.
 -- -----------------------------------------------------------------------------
 
 INSERT INTO public.permissions (id, code, domain, resource, action, description)
 VALUES (
   gen_random_uuid(),
-  'finance:sie4:read',
+  'finance:sie_export:read',
   'finance',
-  'sie4',
+  'sie_export',
   'read',
   'View SIE4 export files and their generation status'
 )
@@ -42,9 +46,9 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO public.permissions (id, code, domain, resource, action, description)
 VALUES (
   gen_random_uuid(),
-  'finance:sie4:run',
+  'finance:sie_export:run',
   'finance',
-  'sie4',
+  'sie_export',
   'run',
   'Generate and export SIE4 accounting files'
 )
@@ -56,7 +60,7 @@ FROM   public.roles r
        CROSS JOIN public.permissions p
 WHERE  r.is_system_role = true
   AND  r.name IN ('org_owner', 'org_admin', 'finance_admin', 'org_manager')
-  AND  p.code = 'finance:sie4:read'
+  AND  p.code = 'finance:sie_export:read'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_permissions (role_id, permission_id)
@@ -65,7 +69,7 @@ FROM   public.roles r
        CROSS JOIN public.permissions p
 WHERE  r.is_system_role = true
   AND  r.name IN ('org_owner', 'org_admin', 'finance_admin')
-  AND  p.code = 'finance:sie4:run'
+  AND  p.code = 'finance:sie_export:run'
 ON CONFLICT DO NOTHING;
 
 -- -----------------------------------------------------------------------------
