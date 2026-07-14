@@ -1,12 +1,12 @@
-import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
+import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Search, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
-import { useNotificationDot, useRecentActivity } from '@shared/hooks/useNotifications.js';
-import type { Notification } from '@shared/hooks/useNotifications.js';
+import { useNotificationDot, useRecentActivity } from '@shared/hooks/useNotificationBell.js';
+import type { Notification } from '@shared/hooks/useNotificationBell.js';
 import { useLocations } from '@modules/scheduling/hooks/useLocations.js';
 
 // ─── Location Picker (Gap 8) ──────────────────────────────────────────────────
@@ -88,12 +88,18 @@ function LocationPicker() {
 }
 
 export function TopBar() {
-  const { user, profile, organization, isLoading } = useSessionStore();
+  const { user, profile } = useSessionStore();
   const { toggleMobileMenu, theme, toggleTheme } = useUiStore();
+
+  function openCommandPalette() {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true })
+    );
+  }
 
   return (
     <header
-      className="h-14 bg-background border-b border-border flex items-center px-4 gap-3 fixed top-0 right-0 z-30 left-0 md:left-[280px]"
+      className="h-[52px] bg-background border-b border-border flex items-center px-4 gap-2 fixed top-0 right-0 z-30 left-0 md:left-[280px]"
     >
       {/* Mobile hamburger — only visible on mobile */}
       <button
@@ -104,29 +110,25 @@ export function TopBar() {
         <Menu className="w-5 h-5" />
       </button>
 
-      {/* Organization context */}
-      <div className="min-w-0 shrink-0">
-        <p className="text-sm font-semibold text-foreground truncate max-w-[160px]">
-          {organization?.name ?? (isLoading ? '' : '—')}
-        </p>
-        {organization?.subscription_status === 'trialing' && (
-          <p className="text-[10px] font-medium text-amber-500 leading-none">Testperiod aktiv</p>
-        )}
-        {organization?.subscription_status === 'past_due' && (
-          <p className="text-[10px] font-medium text-destructive leading-none">Betalning försenad</p>
-        )}
-        {organization?.status === 'suspended' && (
-          <p className="text-[10px] font-medium text-destructive leading-none">Inaktivt konto</p>
-        )}
-      </div>
-
-      {/* Location filter (multi-branch) */}
-      <div className="flex-1 flex justify-start pl-2">
+      {/* Left section: location picker + ⌘K search pill */}
+      <div className="flex-1 flex items-center gap-2 min-w-0">
         <LocationPicker />
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="hidden sm:flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-xs font-medium border border-border bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors shrink-0"
+          aria-label="Sök eller navigera (Ctrl+K)"
+        >
+          <Search className="w-3 h-3 shrink-0" />
+          <span className="hidden md:inline">Sök...</span>
+          <kbd className="ml-0.5 text-[10px] font-mono bg-background border border-border rounded px-1 py-px leading-none">
+            ⌘K
+          </kbd>
+        </button>
       </div>
 
       {/* Right side controls */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-1.5 shrink-0">
         {/* Kassa quick-access */}
         <NavLink
           to="/finance/cash"

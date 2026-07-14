@@ -60,9 +60,15 @@
     --sidebar-border: 222 47% 18%;
 
     /* Layout */
-    --sidebar-width: 256px;
-    --sidebar-collapsed-width: 64px;
-    --topbar-height: 56px;
+    --sidebar-width: 280px;
+    --topbar-height: 52px;
+
+    /* Portal accent colors */
+    --accent-platform:   #B45309;
+    --accent-student:    #684EFF;
+    --accent-guardian:   #2D5BE3;
+    --accent-instructor: #0F7E6B;
+    --accent-public:     #006AA7;
   }
 
   .dark {

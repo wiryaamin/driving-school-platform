@@ -1,5 +1,6 @@
 export type * from './database.types.js';
-export type * from './common.types.js';
+// common.types exports SUBSCRIPTION_TIERS (runtime value) — must not use `export type *`
+export * from './common.types.js';
 export type * from './auth.types.js';
 export type * from './rbac.types.js';
 export type * from './events.types.js';

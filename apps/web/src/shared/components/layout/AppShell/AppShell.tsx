@@ -17,7 +17,7 @@ export function AppShell() {
       {/* Main area — offset by fixed 280px sidebar on desktop */}
       <div className="flex flex-col min-h-screen md:pl-[280px]">
         <TopBar />
-        <main className="flex-1 pt-14 overflow-auto">
+        <main className="flex-1 pt-[52px] overflow-auto">
           <div className="p-4 md:p-5">
             <Outlet />
           </div>

@@ -92,3 +92,124 @@ export interface InstructorListQueryInput {
   teaching_category?: string;
   location_id?: string;
 }
+
+// ─── Instructor Certifications ────────────────────────────────────────────────
+
+export type CertificationStatus = 'active' | 'expiring_soon' | 'expired' | 'suspended' | 'revoked';
+
+export interface InstructorCertification {
+  id: UUID;
+  organization_id: UUID;
+  instructor_id: UUID;
+  certification_type: string;
+  issuing_authority: string | null;
+  certificate_number: string | null;
+  status: CertificationStatus;
+  issued_at: DateString;
+  expires_at: DateString | null;
+  renewal_reminded_at: Timestamp | null;
+  renewal_completed_at: Timestamp | null;
+  notes: string | null;
+  storage_path: string | null;
+  created_by: UUID | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface CreateInstructorCertificationInput {
+  certification_type: string;
+  issuing_authority?: string | null;
+  certificate_number?: string | null;
+  issued_at: string;
+  expires_at?: string | null;
+  notes?: string | null;
+}
+
+// ─── Instructor Availability Rules ───────────────────────────────────────────
+
+export interface InstructorAvailabilityRule {
+  id: UUID;
+  organization_id: UUID;
+  instructor_id: UUID;
+  location_id: UUID | null;
+  day_of_week: number;        // 0=Sunday … 6=Saturday
+  start_time: string;         // 'HH:MM:SS'
+  end_time: string;
+  timezone: string;
+  effective_from: DateString;
+  effective_until: DateString | null;
+  slot_duration_minutes: number;
+  slot_buffer_minutes: number;
+  max_lessons_override: number | null;
+  is_active: boolean;
+  notes: string | null;
+  created_by: UUID | null;
+  updated_by: UUID | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface CreateAvailabilityRuleInput {
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  timezone?: string;
+  effective_from?: string;
+  effective_until?: string | null;
+  slot_duration_minutes?: number;
+  notes?: string | null;
+}
+
+// ─── Instructor Time Off ──────────────────────────────────────────────────────
+
+export type TimeOffType = 'vacation' | 'sickness' | 'training' | 'public_holiday' | 'emergency' | 'other';
+export type TimeOffStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface InstructorTimeOff {
+  id: UUID;
+  organization_id: UUID;
+  instructor_id: UUID;
+  time_off_type: TimeOffType;
+  status: TimeOffStatus;
+  starts_at: Timestamp;
+  ends_at: Timestamp;
+  is_full_day: boolean;
+  reason: string | null;
+  approved_by: UUID | null;
+  approved_at: Timestamp | null;
+  rejection_reason: string | null;
+  created_by: UUID | null;
+  updated_by: UUID | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface CreateTimeOffInput {
+  time_off_type: TimeOffType;
+  starts_at: string;
+  ends_at: string;
+  is_full_day?: boolean;
+  reason?: string | null;
+}
+
+// ─── Instructor Vehicle Assignments ───────────────────────────────────────────
+
+export interface InstructorVehicleAssignment {
+  id: UUID;
+  organization_id: UUID;
+  instructor_id: UUID;
+  vehicle_id: UUID;
+  is_primary: boolean;
+  assigned_at: Timestamp;
+  unassigned_at: Timestamp | null;  // null = currently active
+  notes: string | null;
+  assigned_by: UUID | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface CreateVehicleAssignmentInput {
+  vehicle_id: string;
+  is_primary?: boolean;
+  notes?: string | null;
+}

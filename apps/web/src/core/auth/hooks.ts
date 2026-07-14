@@ -22,6 +22,11 @@ export function useAuth() {
 
       if (error) {
         logger.warn('Sign-in failed', { code: error.code });
+        // Best effort, non-blocking — a failure to record this must never
+        // affect the error already being returned to the user (ADR-007).
+        void supabase.functions.invoke('identity-events/login-failed', {
+          body: { email: credentials.email },
+        }).catch(() => {});
         return {
           success: false,
           error: error.code === 'invalid_credentials'
@@ -38,6 +43,14 @@ export function useAuth() {
   }, []);
 
   const signOut = useCallback(async (): Promise<void> => {
+    // Must be recorded before signOut() clears the session — identity_security_events
+    // RLS requires a valid caller JWT, and this call authenticates as the user
+    // themselves (ADR-007). Best effort: a failure here must never block sign-out.
+    try {
+      await supabase.functions.invoke('identity-events/logout', {});
+    } catch {
+      // non-fatal
+    }
     try {
       await supabase.auth.signOut();
     } finally {

@@ -141,5 +141,8 @@ export interface StudentListQueryInput {
   instructor_id?: string | undefined;
   permit_stage?: PermitStage | undefined;
   licence_category?: string | undefined;
+  not_licence_category?: string | undefined;
   corporate_customer_id?: string | undefined;
+  age_from?: number | undefined;
+  age_to?: number | undefined;
 }
