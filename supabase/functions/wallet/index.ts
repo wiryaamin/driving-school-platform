@@ -23,14 +23,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function ok<T>(ctx: EdgeRequestContext, body: T, status = 200): Response {
   return new Response(JSON.stringify({ data: body }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function fail(ctx: EdgeRequestContext, status: number, code: string, message: string): Response {
-  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId }), {
+  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -123,7 +123,7 @@ async function handleGetLedger(req: Request, ctx: EdgeRequestContext, client: an
 
   return new Response(
     JSON.stringify({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0, has_more: page * perPage < (count ?? 0) } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -193,7 +193,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   const action = extractAction(req);
   const method = req.method;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   let response: Response;
 

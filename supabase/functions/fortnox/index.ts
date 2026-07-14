@@ -28,6 +28,7 @@ import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { buildErrorResponse } from '../_shared/errors.ts';
+import { requireFeature } from '../_shared/subscription.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -158,6 +159,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
     if (writeGuard) return writeGuard;
   }
+
+  const subGuard = requireFeature(ctx, 'finance:fortnox:sync');
+  if (subGuard) return subGuard;
 
   const orgId  = ctx.organizationId;
   const userId = ctx.actorId;

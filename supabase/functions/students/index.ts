@@ -1,8 +1,10 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { getPersonLookupProvider, isValidPersonnummerFormat } from '../_shared/person-lookup.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline Zod schemas (Deno can't import workspace packages) ───────────────
@@ -46,6 +48,10 @@ const CreateStudentSchema = z.object({
 
 const UpdateStudentSchema = CreateStudentSchema.partial();
 
+const PersonLookupSchema = z.object({
+  personnummer: z.string().min(1).max(20),
+});
+
 const StudentListQuerySchema = z.object({
   page:             z.coerce.number().int().positive().max(1000).default(1),
   per_page:         z.coerce.number().int().positive().max(500).default(25),
@@ -56,7 +62,10 @@ const StudentListQuerySchema = z.object({
   instructor_id:    z.string().uuid().optional(),
   permit_stage:          z.enum(PERMIT_STAGES).optional(),
   licence_category:      z.string().max(10).optional(),
+  not_licence_category:  z.string().max(10).optional(),
   corporate_customer_id: z.string().uuid().optional(),
+  age_from: z.coerce.number().int().min(14).max(110).optional(),
+  age_to:   z.coerce.number().int().min(14).max(110).optional(),
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -70,18 +79,18 @@ function errorResp(
   message: string,
   details?: unknown
 ): Response {
-  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 };
   if (details !== undefined) body['details'] = details;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function successResp<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -97,7 +106,7 @@ function pagedResp<T>(
       data,
       meta: { total, page, per_page: perPage, has_more: page * perPage < total },
     }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -132,7 +141,9 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
 
   const {
     page, per_page, sort_by = 'created_at', sort_dir = 'desc',
-    search, status, instructor_id, permit_stage, licence_category, corporate_customer_id,
+    search, status, instructor_id, permit_stage,
+    licence_category, not_licence_category, corporate_customer_id,
+    age_from, age_to,
   } = parsed.data;
 
   const ALLOWED_SORT_COLUMNS = new Set([
@@ -141,7 +152,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   ]);
   const safeSortBy = ALLOWED_SORT_COLUMNS.has(sort_by) ? sort_by : 'created_at';
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const from = (page - 1) * per_page;
   const to   = from + per_page - 1;
 
@@ -172,9 +183,20 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   if (instructor_id !== undefined)         q = q.eq('assigned_instructor_id', instructor_id);
   if (permit_stage !== undefined)          q = q.eq('permit_stage', permit_stage);
   if (licence_category !== undefined)      q = q.eq('target_licence_category', licence_category);
+  if (not_licence_category !== undefined)  q = q.neq('target_licence_category', not_licence_category);
   if (corporate_customer_id !== undefined) q = q.eq('corporate_customer_id', corporate_customer_id);
   if (search !== undefined && search !== '') {
-    q = q.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+    q = q.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`);
+  }
+  if (age_from !== undefined) {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - age_from);
+    q = q.lte('date_of_birth', d.toISOString().slice(0, 10));
+  }
+  if (age_to !== undefined) {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - age_to);
+    q = q.gte('date_of_birth', d.toISOString().slice(0, 10));
   }
 
   const { data, error, count } = await q;
@@ -204,7 +226,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate checks in parallel
   const [emailDup, pnrDup] = await Promise.all([
@@ -232,7 +254,11 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     return errorResp(ctx, 409, 'CONFLICT', `A student with email ${dto.email} already exists in this organisation`);
   }
   if (dto.personnummer_hash !== undefined && pnrDup.data !== null) {
-    return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
+    return errorResp(
+      ctx, 409, 'DUPLICATE_PERSONAL_NUMBER',
+      'A student with this personnummer is already registered in this organisation',
+      { existing_student_id: pnrDup.data.id },
+    );
   }
 
   const { data: student, error } = await (client as any)
@@ -250,6 +276,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   logger.info('Student.Created', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     student_id:     student.id,
@@ -257,6 +284,83 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   });
 
   return successResp(ctx, student, 201);
+}
+
+// ─── Person Lookup Framework (Sprint 6) ────────────────────────────────────────
+// Assists Student Registration by pre-filling the form from a configured
+// identity-lookup provider (Mock Provider only in Version 1.0). Never
+// persists anything — the caller decides what to keep when the student is
+// actually saved via handleCreate above.
+
+async function handlePersonLookup(req: Request, ctx: EdgeRequestContext): Promise<Response> {
+  const guard = requirePerm(ctx, 'students:student:create');
+  if (guard) return guard;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON');
+  }
+
+  const parsed = PersonLookupSchema.safeParse(body);
+  if (!parsed.success) {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
+  }
+
+  const { personnummer } = parsed.data;
+
+  // Invalid personnummer must never reach the provider.
+  if (!isValidPersonnummerFormat(personnummer)) {
+    return errorResp(ctx, 422, 'INVALID_PERSONNUMMER', 'Personnummer format or checksum is invalid');
+  }
+
+  const provider = getPersonLookupProvider();
+
+  let result: { status: string; data: unknown };
+  try {
+    result = await provider.lookupByPersonnummer(personnummer);
+  } catch (err) {
+    logger.error('students.person_lookup_failed', {
+      correlation_id: ctx.correlationId,
+      provider:       provider.getProviderName(),
+      error:          err instanceof Error ? err.message : String(err),
+    });
+    result = { status: 'unavailable', data: null };
+  }
+
+  logger.info('Student.PersonLookup', {
+    request_id:     ctx.requestId,
+    correlation_id: ctx.correlationId,
+    org_id:         ctx.organizationId,
+    actor_id:       ctx.actorId,
+    provider:       provider.getProviderName(),
+    outcome:        result.status,
+  });
+
+  return successResp(ctx, {
+    status:       result.status,
+    data:         result.data,
+    provider:     provider.getProviderName(),
+    capabilities: provider.getProviderCapabilities(),
+  });
+}
+
+// Read-only status/capability check for the External Services settings page
+// — no personnummer involved, so it's gated on the lower read-tier permission
+// rather than the create-tier permission handlePersonLookup uses.
+async function handlePersonLookupStatus(_req: Request, ctx: EdgeRequestContext): Promise<Response> {
+  const guard = requirePerm(ctx, 'students:student:read');
+  if (guard) return guard;
+
+  const provider = getPersonLookupProvider();
+  const connected = await provider.validateConnection().catch(() => false);
+
+  return successResp(ctx, {
+    provider:     provider.getProviderName(),
+    connected,
+    capabilities: provider.getProviderCapabilities(),
+  });
 }
 
 async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Response> {
@@ -273,7 +377,7 @@ async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Respo
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'ids parameter supports a maximum of 50 IDs');
   }
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data, error } = await (client as any)
     .from('students')
     .select('id, organization_id, first_name, last_name, date_of_birth, identity_type, personnummer_last4, email, phone, status, permit_stage, target_licence_category, assigned_instructor_id, enrollment_location_id, enrolled_at, corporate_customer_id, created_at, updated_at')
@@ -293,7 +397,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: student, error } = await (client as any)
     .from('students')
     .select('*')
@@ -330,7 +434,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate checks for mutable unique fields (parallel)
   const [emailDup, pnrDup] = await Promise.all([
@@ -382,6 +486,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   logger.info('Student.Updated', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     student_id:     id,
@@ -395,7 +500,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'students:student:delete');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Verify the student exists before soft-deleting via RPC
   const { data: existing } = await (client as any)
@@ -421,6 +526,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   }
 
   logger.info('Student.Archived', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     student_id:     id,
@@ -429,7 +535,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
   return new Response(null, {
     status: 204,
-    headers: { 'X-Correlation-ID': ctx.correlationId },
+    headers: { 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -440,9 +546,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   logger.info('request.started', {
     method:         req.method,
     path:           new URL(req.url).pathname,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId ?? 'platform',
     actor_id:       ctx.actorId,
@@ -453,8 +567,23 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   try {
     const id = extractId(req);
+    const pathname = new URL(req.url).pathname;
 
-    if (!id) {
+    if (pathname.endsWith('/lookup-person/status')) {
+      response = req.method === 'GET'
+        ? await handlePersonLookupStatus(req, ctx)
+        : new Response(
+            JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+            { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+          );
+    } else if (pathname.endsWith('/lookup-person')) {
+      response = req.method === 'POST'
+        ? await handlePersonLookup(req, ctx)
+        : new Response(
+            JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+            { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+          );
+    } else if (!id) {
       // Collection routes
       const idsParam = new URL(req.url).searchParams.get('ids');
       if (req.method === 'GET' && idsParam !== null) { response = await handleBatch(req, ctx); }
@@ -462,8 +591,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'POST') { response = await handleCreate(req, ctx); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     } else {
@@ -473,8 +602,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'DELETE') { response = await handleArchive(req, ctx, id); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     }
@@ -485,8 +614,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       stack:  err instanceof Error ? err.stack : undefined,
     });
     response = new Response(
-      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId }),
-      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
     );
   }
 
@@ -494,6 +623,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     method:         req.method,
     path:           new URL(req.url).pathname,
     status:         response.status,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     duration_ms:    Date.now() - startedAt,
   });

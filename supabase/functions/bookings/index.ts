@@ -72,25 +72,25 @@ const ListQuerySchema = z.object({
 const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 function errorResp(ctx: EdgeRequestContext, status: number, code: string, message: string, details?: unknown): Response {
-  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 };
   if (details !== undefined) body['details'] = details;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function successResp<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: number, perPage: number): Response {
   return new Response(
     JSON.stringify({ data, meta: { total, page, per_page: perPage, has_more: page * perPage < total } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -139,7 +139,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   ]);
   const safeSortBy = ALLOWED_SORT_COLUMNS.has(sort_by) ? sort_by : 'starts_at';
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const fromIdx = (page - 1) * per_page;
   const toIdx   = fromIdx + per_page - 1;
 
@@ -178,7 +178,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Verify slot exists and has capacity
   const { data: slot } = await (client as any)
@@ -315,7 +315,8 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     }
 
     logger.info('bookings.credit_consumed', {
-      correlation_id:  ctx.correlationId,
+      request_id:     ctx.requestId,
+      correlation_id: ctx.correlationId,
       org_id:          ctx.organizationId,
       booking_id:      booking.id,
       student_id:      dto.student_id,
@@ -325,6 +326,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   logger.info('Lesson.Created', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     booking_id:     booking.id,
@@ -340,7 +342,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'scheduling:booking:read');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: booking, error } = await (client as any)
     .from('lesson_bookings')
     .select('*')
@@ -364,7 +366,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   const parsed = UpdateBookingSchema.safeParse(body);
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
@@ -427,7 +429,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   const parsed = CancelBookingSchema.safeParse(body);
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
@@ -466,6 +468,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   if (error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to cancel booking');
 
   logger.info('Lesson.Cancelled', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     booking_id:     id,
@@ -509,6 +512,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
 
         if (reverseErr) {
           logger.warn('bookings.credit_reverse_failed', {
+            request_id:     ctx.requestId,
             correlation_id: ctx.correlationId,
             org_id:         ctx.organizationId,
             booking_id:     id,
@@ -517,6 +521,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
           });
         } else {
           logger.info('bookings.credit_reversed', {
+            request_id:     ctx.requestId,
             correlation_id: ctx.correlationId,
             org_id:         ctx.organizationId,
             booking_id:     id,
@@ -542,7 +547,7 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
   const { new_slot_id } = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Fetch old booking
   const { data: oldBooking } = await (client as any)
@@ -627,7 +632,8 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   }
 
   logger.info('Lesson.Rescheduled', {
-    correlation_id:  ctx.correlationId,
+    request_id:     ctx.requestId,
+    correlation_id: ctx.correlationId,
     org_id:          ctx.organizationId,
     old_booking_id:  id,
     new_booking_id:  newBooking.id,
@@ -649,7 +655,7 @@ async function handleAddNote(req: Request, ctx: EdgeRequestContext, id: string):
   const parsed = AddNoteSchema.safeParse(body);
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
@@ -695,7 +701,7 @@ async function handleFeedback(req: Request, ctx: EdgeRequestContext, id: string)
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'At least one of performance_rating or instructor_notes is required');
   }
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
@@ -734,7 +740,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'scheduling:booking:delete');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
@@ -755,7 +761,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
   return new Response(null, {
     status: 204,
-    headers: { 'X-Correlation-ID': ctx.correlationId },
+    headers: { 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -776,6 +782,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   logger.info('request.started', {
     method:         req.method,
     path:           new URL(req.url).pathname,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId ?? 'platform',
     actor_id:       ctx.actorId,
@@ -799,8 +806,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         response = await handleFeedback(req, ctx, id);
       } else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     } else if (id !== null) {
@@ -810,8 +817,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'DELETE') { response = await handleArchive(req, ctx, id); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     } else {
@@ -820,8 +827,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'POST') { response = await handleCreate(req, ctx); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     }
@@ -832,8 +839,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       stack:  err instanceof Error ? err.stack : undefined,
     });
     response = new Response(
-      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId }),
-      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
     );
   }
 
@@ -841,6 +848,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     method:         req.method,
     path:           new URL(req.url).pathname,
     status:         response.status,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     duration_ms:    Date.now() - startedAt,
   });

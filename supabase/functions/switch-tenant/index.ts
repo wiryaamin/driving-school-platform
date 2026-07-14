@@ -10,6 +10,7 @@ import type {
 
 Deno.serve((req: Request) => serveCors(req, async () => {
   const correlationId = crypto.randomUUID();
+  const requestId     = crypto.randomUUID();
 
   if (req.method !== 'POST') {
     return json({ error: 'Method Not Allowed' }, 405);
@@ -18,7 +19,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   // ── 1. Authenticate the caller ──────────────────────────────────────────────
   // Uses the caller's JWT (forwarded by createSupabaseClient) — NOT service role.
   // This ensures auth.uid() resolves and the user is genuinely signed in.
-  const userClient = createSupabaseClient(req, false);
+  const userClient = createSupabaseClient(req, false, { correlationId, requestId });
   const { data: { user }, error: authError } = await userClient.auth.getUser();
 
   if (authError || !user) {

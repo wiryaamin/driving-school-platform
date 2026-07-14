@@ -27,8 +27,12 @@ import type { EdgeRequestContext } from './context.ts';
 /**
  * Ordered from lowest to highest. A tier satisfies itself and all tiers below it.
  * 'enterprise' is the highest; 'trial' is the lowest.
+ *
+ * Must mirror packages/types/src/common.types.ts's SubscriptionTier — this file
+ * cannot import that package (Deno Edge Functions may not import workspace
+ * packages), so the tier list is duplicated by necessity and must be kept in sync.
  */
-export const SUBSCRIPTION_TIERS = ['trial', 'basic', 'professional', 'enterprise'] as const;
+export const SUBSCRIPTION_TIERS = ['trial', 'starter', 'professional', 'enterprise'] as const;
 export type SubscriptionTier = typeof SUBSCRIPTION_TIERS[number];
 
 export function tierSatisfies(
@@ -78,10 +82,10 @@ export function isInGracePeriod(status: string): boolean {
  * Trial orgs can access only unlisted features (no entry = always allowed).
  */
 export const FEATURE_GATES: Record<string, SubscriptionTier> = {
-  // Finance — basic tier
-  'finance:sie4:export':          'basic',
-  'finance:vat:report':           'basic',
-  'finance:ledger:read':          'basic',
+  // Finance — starter tier
+  'finance:sie4:export':          'starter',
+  'finance:vat:report':           'starter',
+  'finance:ledger:read':          'starter',
 
   // Finance — professional tier
   'finance:reconciliation:run':   'professional',
@@ -91,17 +95,17 @@ export const FEATURE_GATES: Record<string, SubscriptionTier> = {
   'finance:fixed-assets:manage':  'professional',
   'finance:fortnox:sync':         'professional',
 
-  // Communication — basic tier
-  'communication:campaigns:send': 'basic',
-  'communication:templates:manage': 'basic',
+  // Communication — starter tier
+  'communication:campaigns:send': 'starter',
+  'communication:templates:manage': 'starter',
 
-  // Reporting — basic tier
-  'reports:standard':             'basic',
+  // Reporting — starter tier
+  'reports:standard':             'starter',
   // Reporting — professional tier
   'reports:advanced':             'professional',
 
-  // Corporate customers — basic tier
-  'corporate:customers:manage':   'basic',
+  // Corporate customers — starter tier
+  'corporate:customers:manage':   'starter',
 
   // Data migration tools — professional tier
   'admin:data-migration:run':     'professional',

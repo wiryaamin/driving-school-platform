@@ -1,5 +1,6 @@
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { recordIdentityEvent } from '../_shared/identity-events.ts';
 import type { AuthHookPayload, AuthHookResponse, CustomClaims } from '../_shared/types.ts';
 
 // Loaded once at cold-start — avoids per-request env lookups.
@@ -191,6 +192,74 @@ Deno.serve(async (req: Request): Promise<Response> => {
         threshold: JWT_SIZE_WARNING_BYTES,
         hint:      'Consider trimming the permissions array or switching to permission groups',
       });
+    }
+
+    // ── 8. Identity & Security Event Store — Phase 2 (ADR-007) ────────────────
+    // Fires only for a genuine password sign-in, never a token refresh —
+    // authentication_method is 'password' only at the moment GoTrue actually
+    // re-authenticates the user with their credentials, distinct from the
+    // value it carries on routine refresh invocations of this same hook.
+    // Best effort, isolated, non-blocking: wrapped independently of claims
+    // building above so a failure here can never affect JWT issuance.
+    //
+    // BankID (Phase 3) deliberately has no branch here. Its JWT is issued via
+    // GoTrue's magic-link verifyOtp() exchange, so authentication_method is
+    // 'otp'/'magiclink', not 'password' — this guard already excludes it by
+    // construction, no BankID-specific check needed. Its login.success /
+    // session.created events are recorded earlier, in bankid-auth/index.ts's
+    // completeLogin(), at the moment BankID itself confirms the order —
+    // the true point of authentication, ahead of this mechanical JWT step.
+    if (authentication_method === 'password') {
+      try {
+        const { count: priorLogins } = await supabase
+          .from('identity_security_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user_id)
+          .eq('event_type', 'login.success');
+
+        const orgId = enriched.organization_id;
+
+        await recordIdentityEvent({
+          eventType:      'login.success',
+          provider:       'password',
+          userId:         user_id,
+          organizationId: orgId,
+          correlationId,
+        });
+
+        await recordIdentityEvent({
+          eventType:      'session.created',
+          provider:       'password',
+          userId:         user_id,
+          organizationId: orgId,
+          correlationId,
+        });
+
+        // Invitation acceptance has no explicit "accept" action in this
+        // platform, and profiles.invited_by is never populated by the live
+        // handleInviteAdmin/handleProvision paths (confirmed by direct query
+        // against a freshly-invited test account, not assumed from schema
+        // intent) — so it cannot be used as the signal. Every account in this
+        // system is created by someone else first (enable_signup = false, no
+        // self-registration exists anywhere), so a user's first-ever
+        // login.success is itself the honest, always-available signal that
+        // an account someone else created has now actually been used.
+        if ((priorLogins ?? 0) === 0) {
+          await recordIdentityEvent({
+            eventType:      'invitation.accepted',
+            provider:       'password',
+            userId:         user_id,
+            organizationId: orgId,
+            correlationId,
+          });
+        }
+      } catch (identityEventErr) {
+        logger.warn('auth-hook: identity event recording failed (non-fatal)', {
+          correlation_id: correlationId,
+          user_id,
+          error: identityEventErr instanceof Error ? identityEventErr.message : String(identityEventErr),
+        });
+      }
     }
 
     return json({ claims: enriched }, 200);

@@ -20,6 +20,7 @@
  */
 
 import { createServiceClient } from '../_shared/supabase.ts';
+import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 
 const UUID_RE  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -425,6 +426,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: PUBLIC_CORS });
   }
+
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const rateLimitGuard = enforceIpRateLimit(req, 'ip_public', correlationId);
+  if (rateLimitGuard) return rateLimitGuard;
 
   const url    = new URL(req.url);
   const orgId  = url.searchParams.get('org_id') ?? '';

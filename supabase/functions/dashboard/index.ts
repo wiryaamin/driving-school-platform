@@ -19,6 +19,7 @@
 
 import { serveCors }        from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger }           from '../_shared/logger.ts';
 
@@ -36,13 +37,29 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   const url       = new URL(req.url);
   const slotsFrom = url.searchParams.get('slots_from') ?? '';
   const slotsTo   = url.searchParams.get('slots_to')   ?? '';
   const monthFrom = url.searchParams.get('month_from') ?? '';
   const today     = url.searchParams.get('today')      ?? new Date().toISOString().slice(0, 10);
 
-  const client = createSupabaseClient(req);
+  logger.info('request.started', {
+    method:         req.method,
+    path:           url.pathname,
+    correlation_id: ctx.correlationId,
+    request_id:     ctx.requestId,
+    org_id:         ctx.organizationId ?? 'platform',
+    actor_id:       ctx.actorId,
+  });
+
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const orgId  = ctx.organizationId;
 
   const canStudents = ctx.isPlatformAdmin || ctx.permissions.includes('students:student:read');
@@ -119,8 +136,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         }
       : null;
 
-    logger.info('dashboard.metrics_fetched', {
+    logger.info('request.completed', {
+      method:         req.method,
+      status:         200,
       correlation_id: ctx.correlationId,
+      request_id:     ctx.requestId,
       org_id:         orgId,
       duration_ms:    Date.now() - startedAt,
     });
@@ -134,7 +154,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           monthly_revenue:      monthlyRevenue,
         },
       }),
-      { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } },
+      { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } },
     );
   } catch (err) {
     logger.error('dashboard.error', {
@@ -143,11 +163,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     });
     return new Response(
       JSON.stringify({
-        code:     'INTERNAL_ERROR',
-        message:  'Failed to fetch dashboard metrics',
-        trace_id: ctx.correlationId,
+        code:       'INTERNAL_ERROR',
+        message:    'Failed to fetch dashboard metrics',
+        trace_id:   ctx.correlationId,
+        request_id: ctx.requestId,
+        version:    1,
       }),
-      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } },
+      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } },
     );
   }
 }));

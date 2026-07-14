@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
@@ -57,25 +58,25 @@ const ListQuerySchema = z.object({
 const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 function errorResp(ctx: EdgeRequestContext, status: number, code: string, message: string, details?: unknown): Response {
-  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 };
   if (details !== undefined) body['details'] = details;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function successResp<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: number, perPage: number): Response {
   return new Response(
     JSON.stringify({ data, meta: { total, page, per_page: perPage, has_more: page * perPage < total } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -104,7 +105,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
 
   const { page, per_page, sort_by = 'starts_at', sort_dir = 'asc', instructor_id, vehicle_id, location_id, lesson_type_id, status, from, to } = parsed.data;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const fromIdx = (page - 1) * per_page;
   const toIdx   = fromIdx + per_page - 1;
 
@@ -144,7 +145,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const hasVehicle = dto.vehicle_id !== undefined && dto.vehicle_id !== null;
 
@@ -170,7 +171,8 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
       };
       const statusLabel = STATUS_LABELS[vehicle.operational_status as string] ?? String(vehicle.operational_status);
       logger.warn('slots.vehicle_unavailable', {
-        correlation_id:     ctx.correlationId,
+        request_id:     ctx.requestId,
+        correlation_id: ctx.correlationId,
         org_id:             ctx.organizationId,
         vehicle_id:         dto.vehicle_id,
         operational_status: vehicle.operational_status,
@@ -217,6 +219,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   logger.info('Lesson.SlotCreated', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     slot_id:        slot.id,
@@ -229,7 +232,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'scheduling:slot:read');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: slot, error } = await (client as any)
     .from('lesson_slots')
     .select('*')
@@ -254,7 +257,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_slots')
@@ -318,7 +321,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   const guard = requirePerm(ctx, 'scheduling:slot:delete');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('lesson_slots')
@@ -366,9 +369,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   logger.info('request.started', {
     method:         req.method,
     path:           new URL(req.url).pathname,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId ?? 'platform',
     actor_id:       ctx.actorId,
@@ -385,8 +396,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'POST') { response = await handleCreate(req, ctx); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     } else {
@@ -395,8 +406,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'DELETE') { response = await handleCancel(req, ctx, id); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     }
@@ -407,8 +418,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       stack:  err instanceof Error ? err.stack : undefined,
     });
     response = new Response(
-      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId }),
-      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
     );
   }
 
@@ -416,6 +427,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     method:         req.method,
     path:           new URL(req.url).pathname,
     status:         response.status,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     duration_ms:    Date.now() - startedAt,
   });

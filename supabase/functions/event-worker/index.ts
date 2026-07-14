@@ -103,55 +103,189 @@ interface WorkerMetrics {
 
 // ─── Outbox event handlers ────────────────────────────────────────────────────
 
-async function handleStudentCreated(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.student_created', {
-    event_id:   event.id,
-    org_id:     event.organization_id,
-    student_id: event.payload['student_id'],
+// Student.Created: queue a welcome internal notification for the student.
+// The communication worker picks it up on the next drain cycle.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleStudentCreated(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId = event.payload['student_id'] as string | undefined;
+  const orgId     = event.organization_id;
+
+  logger.info('handler.student_created', { event_id: event.id, org_id: orgId, student_id: studentId });
+
+  if (studentId === undefined || orgId === null) return { success: true };
+
+  const { error } = await client.from('notifications').insert({
+    organization_id: orgId,
+    recipient_id:    studentId,
+    recipient_type:  'student',
+    channel:         'internal',
+    template_key:    'student.welcome',
+    idempotency_key: `student.welcome:${studentId}`,
+    reference_type:  'student',
+    reference_id:    studentId,
   });
+
+  if (error !== null) {
+    if ((error as { code?: string }).code === '23505') return { success: true }; // idempotency — already queued
+    logger.error('handler.student_created.notification_failed', { event_id: event.id, error: error.message });
+    return { success: false, error: error.message };
+  }
+
   return { success: true };
 }
 
+// Student.Updated: field updates do not have a mandatory cross-domain reaction;
+// specific business rules (e.g. contact-change confirmation) are handled by the UI layer.
 async function handleStudentUpdated(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.student_updated', {
-    event_id:   event.id,
-    student_id: event.payload['student_id'],
-  });
+  logger.info('handler.student_updated', { event_id: event.id, student_id: event.payload['student_id'] });
   return { success: true };
 }
 
-async function handleStudentArchived(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.student_archived', {
-    event_id:   event.id,
-    student_id: event.payload['student_id'],
-  });
+// Student.Archived: cancel all non-terminal bookings for the student.
+// The DB trigger on lesson_bookings will emit Lesson.Cancelled per booking,
+// which then cancels reminders and promotes waitlist entries.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleStudentArchived(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId = event.payload['student_id'] as string | undefined;
+  const orgId     = event.organization_id;
+
+  logger.info('handler.student_archived', { event_id: event.id, student_id: studentId });
+
+  if (studentId === undefined || orgId === null) return { success: true };
+
+  const { error, count } = await client
+    .from('lesson_bookings')
+    .update({ status: 'cancelled' })
+    .eq('student_id', studentId)
+    .eq('organization_id', orgId)
+    .in('status', ['draft', 'reserved', 'confirmed'])
+    .select('id', { count: 'exact', head: true });
+
+  if (error !== null) {
+    logger.error('handler.student_archived.cancel_bookings_failed', {
+      event_id:   event.id,
+      student_id: studentId,
+      error:      error.message,
+    });
+    return { success: false, error: error.message };
+  }
+
+  logger.info('handler.student_archived.bookings_cancelled', { event_id: event.id, student_id: studentId, count: count ?? 0 });
   return { success: true };
 }
 
-async function handleInstructorCreated(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.instructor_created', {
-    event_id:      event.id,
-    instructor_id: event.payload['instructor_id'],
+// Instructor.Created: queue a welcome internal notification for the instructor.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleInstructorCreated(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const instructorId = event.payload['instructor_id'] as string | undefined;
+  const orgId        = event.organization_id;
+
+  logger.info('handler.instructor_created', { event_id: event.id, org_id: orgId, instructor_id: instructorId });
+
+  if (instructorId === undefined || orgId === null) return { success: true };
+
+  const { error } = await client.from('notifications').insert({
+    organization_id: orgId,
+    recipient_id:    instructorId,
+    recipient_type:  'instructor',
+    channel:         'internal',
+    template_key:    'instructor.welcome',
+    idempotency_key: `instructor.welcome:${instructorId}`,
+    reference_type:  'instructor',
+    reference_id:    instructorId,
   });
+
+  if (error !== null) {
+    if ((error as { code?: string }).code === '23505') return { success: true };
+    logger.error('handler.instructor_created.notification_failed', { event_id: event.id, error: error.message });
+    return { success: false, error: error.message };
+  }
+
   return { success: true };
 }
 
+// Instructor.Updated: no mandatory cross-domain reaction.
 async function handleInstructorUpdated(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.instructor_updated', {
+  logger.info('handler.instructor_updated', { event_id: event.id, instructor_id: event.payload['instructor_id'] });
+  return { success: true };
+}
+
+// Instructor.Archived: cancel future open/full slots, then cascade-cancel bookings.
+// Booking cancellations emit Lesson.Cancelled events, which handle reminders + waitlist.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleInstructorArchived(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const instructorId = event.payload['instructor_id'] as string | undefined;
+  const orgId        = event.organization_id;
+
+  logger.info('handler.instructor_archived', { event_id: event.id, instructor_id: instructorId });
+
+  if (instructorId === undefined || orgId === null) return { success: true };
+
+  const now = new Date().toISOString();
+
+  // Fetch future slot IDs to cancel
+  const { data: slots, error: slotFetchErr } = await client
+    .from('lesson_slots')
+    .select('id')
+    .eq('instructor_id', instructorId)
+    .eq('organization_id', orgId)
+    .gt('starts_at', now)
+    .in('status', ['open', 'full']);
+
+  if (slotFetchErr !== null) {
+    logger.error('handler.instructor_archived.fetch_slots_failed', {
+      event_id:      event.id,
+      instructor_id: instructorId,
+      error:         slotFetchErr.message,
+    });
+    return { success: false, error: slotFetchErr.message };
+  }
+
+  if (!slots || slots.length === 0) return { success: true };
+
+  const slotIds = (slots as Array<{ id: string }>).map((s) => s.id);
+
+  // Cancel the slots
+  const { error: slotCancelErr } = await client
+    .from('lesson_slots')
+    .update({ status: 'cancelled' })
+    .in('id', slotIds);
+
+  if (slotCancelErr !== null) {
+    logger.error('handler.instructor_archived.cancel_slots_failed', {
+      event_id:      event.id,
+      instructor_id: instructorId,
+      error:         slotCancelErr.message,
+    });
+    return { success: false, error: slotCancelErr.message };
+  }
+
+  // Cascade-cancel active bookings for those slots
+  const { error: bookingCancelErr } = await client
+    .from('lesson_bookings')
+    .update({ status: 'cancelled' })
+    .in('slot_id', slotIds)
+    .in('status', ['draft', 'reserved', 'confirmed']);
+
+  if (bookingCancelErr !== null) {
+    logger.warn('handler.instructor_archived.cascade_cancel_failed', {
+      event_id:      event.id,
+      instructor_id: instructorId,
+      error:         bookingCancelErr.message,
+    });
+    // Non-fatal: slots are cancelled; booking cascade is best-effort
+  }
+
+  logger.info('handler.instructor_archived.slots_cancelled', {
     event_id:      event.id,
-    instructor_id: event.payload['instructor_id'],
+    instructor_id: instructorId,
+    slots_count:   slotIds.length,
   });
   return { success: true };
 }
 
-async function handleInstructorArchived(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.instructor_archived', {
-    event_id:      event.id,
-    instructor_id: event.payload['instructor_id'],
-  });
-  return { success: true };
-}
-
+// Lesson.SlotCreated: no immediate cross-domain action required.
+// Waitlist notification is handled downstream when a booking is created.
 async function handleLessonSlotCreated(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
   logger.info('handler.lesson_slot_created', {
     event_id:      event.id,
@@ -161,11 +295,36 @@ async function handleLessonSlotCreated(event: OutboxEvent, _client: unknown): Pr
   return { success: true };
 }
 
-async function handleLessonSlotCancelled(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
-  logger.info('handler.lesson_slot_cancelled', {
-    event_id: event.id,
-    slot_id:  event.payload['slot_id'],
-  });
+// Lesson.SlotCancelled: cancel all non-terminal bookings for the slot.
+// Each booking update fires the DB trigger which emits Lesson.Cancelled,
+// triggering reminders cancellation and waitlist promotion per booking.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleLessonSlotCancelled(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const slotId = event.payload['slot_id'] as string | undefined;
+  const orgId  = event.organization_id;
+
+  logger.info('handler.lesson_slot_cancelled', { event_id: event.id, slot_id: slotId });
+
+  if (slotId === undefined || orgId === null) return { success: true };
+
+  const { error, count } = await client
+    .from('lesson_bookings')
+    .update({ status: 'cancelled' })
+    .eq('slot_id', slotId)
+    .eq('organization_id', orgId)
+    .in('status', ['draft', 'reserved', 'confirmed'])
+    .select('id', { count: 'exact', head: true });
+
+  if (error !== null) {
+    logger.error('handler.lesson_slot_cancelled.cancel_bookings_failed', {
+      event_id: event.id,
+      slot_id:  slotId,
+      error:    error.message,
+    });
+    return { success: false, error: error.message };
+  }
+
+  logger.info('handler.lesson_slot_cancelled.bookings_cancelled', { event_id: event.id, slot_id: slotId, count: count ?? 0 });
   return { success: true };
 }
 
@@ -216,32 +375,28 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
         const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
 
         if (slot !== null && student !== null && (student.phone !== null || student.email !== null)) {
-          const startsAt = new Date(slot.starts_at);
-          const datum    = startsAt.toLocaleDateString('sv-SE',  { weekday: 'long', day: 'numeric', month: 'long',  timeZone: 'Europe/Stockholm' });
-          const tid      = startsAt.toLocaleTimeString('sv-SE',  { hour: '2-digit', minute: '2-digit',              timeZone: 'Europe/Stockholm' });
+          const startsAt    = new Date(slot.starts_at);
+          const datum       = startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' });
+          const tid         = startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',             timeZone: 'Europe/Stockholm' });
+          const commPayload: Record<string, string> = {
+            trigger_event:   'booking_confirmed',
+            organization_id: orgId,
+            förnamn:         student.first_name ?? '',
+            datum,
+            tid,
+          };
+          if (student.phone !== null) commPayload['student_phone'] = student.phone;
+          if (student.email !== null) commPayload['student_email'] = student.email;
 
-          const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
-          const workerSecret = Deno.env.get('WORKER_SECRET');
-
-          if (workerSecret !== undefined && workerSecret !== '') {
-            const payload: Record<string, string> = {
-              trigger_event:   'booking_confirmed',
-              organization_id: orgId,
-              förnamn:         student.first_name ?? '',
-              datum,
-              tid,
-            };
-            if (student.phone !== null) payload['student_phone'] = student.phone;
-            if (student.email !== null) payload['student_email'] = student.email;
-
-            await fetch(workerUrl, {
-              method:  'POST',
-              headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
-              body:    JSON.stringify(payload),
-            }).catch((fetchErr: unknown) => {
-              logger.warn('booking_confirmed.dispatch_failed', { event_id: event.id, booking_id: bookingId, error: String(fetchErr) });
-            });
-          }
+          await client.rpc('insert_outbox_event', {
+            p_event_type:      'Communication.Requested',
+            p_channel:         'internal',
+            p_payload:         commPayload,
+            p_organization_id: orgId,
+            p_causation_id:    event.id,
+          }).catch((enqueueErr: unknown) => {
+            logger.warn('booking_confirmed.enqueue_failed', { event_id: event.id, booking_id: bookingId, error: String(enqueueErr) });
+          });
         }
       }
     } catch (notifErr) {
@@ -338,32 +493,28 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
       const slot    = slotRes.data    as { starts_at: string }                                               | null;
 
       if (student !== null && (student.phone !== null || student.email !== null)) {
-        const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
-        const workerSecret = Deno.env.get('WORKER_SECRET');
-
-        if (workerSecret !== undefined && workerSecret !== '') {
-          const startsAt = slot ? new Date(slot.starts_at) : null;
-          const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long',  timeZone: 'Europe/Stockholm' }) : '';
-          const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',              timeZone: 'Europe/Stockholm' }) : '';
-
-          const payload: Record<string, string> = {
+          const startsAt    = slot ? new Date(slot.starts_at) : null;
+          const datum       = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
+          const tid         = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',             timeZone: 'Europe/Stockholm' }) : '';
+          const commPayload: Record<string, string> = {
             trigger_event:   'booking_cancelled',
             organization_id: orgId,
             förnamn:         student.first_name ?? '',
             datum,
             tid,
           };
-          if (student.phone !== null) payload['student_phone'] = student.phone;
-          if (student.email !== null) payload['student_email'] = student.email;
+          if (student.phone !== null) commPayload['student_phone'] = student.phone;
+          if (student.email !== null) commPayload['student_email'] = student.email;
 
-          await fetch(workerUrl, {
-            method:  'POST',
-            headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
-            body:    JSON.stringify(payload),
-          }).catch((fetchErr: unknown) => {
-            logger.warn('booking_cancelled.dispatch_failed', { event_id: event.id, error: String(fetchErr) });
+          await client.rpc('insert_outbox_event', {
+            p_event_type:      'Communication.Requested',
+            p_channel:         'internal',
+            p_payload:         commPayload,
+            p_organization_id: orgId,
+            p_causation_id:    event.id,
+          }).catch((enqueueErr: unknown) => {
+            logger.warn('booking_cancelled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
           });
-        }
       }
     } catch (notifErr) {
       logger.warn('booking_cancelled.notification_error', { event_id: event.id, error: String(notifErr) });
@@ -373,11 +524,12 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
   return { success: true };
 }
 
-// Lesson.Rescheduled: cancel old reminders, schedule new reminders
+// Lesson.Rescheduled: cancel old reminders, schedule new reminders, notify student of new time
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise<HandlerResult> {
   const oldBookingId = event.payload['old_booking_id'] as string | undefined;
   const newBookingId = event.payload['new_booking_id'] as string | undefined;
+  const orgId        = event.organization_id;
 
   if (oldBookingId !== undefined) {
     await client.rpc('cancel_lesson_reminders', { p_booking_id: oldBookingId });
@@ -401,6 +553,55 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
       new_booking_id:      newBookingId,
       reminders_scheduled: count ?? 0,
     });
+
+    // Dispatch booking_rescheduled notification with new lesson time
+    if (orgId !== null) {
+      try {
+        const { data: booking } = await client
+          .from('lesson_bookings')
+          .select('slot_id, student_id')
+          .eq('id', newBookingId)
+          .single();
+
+        const b = booking as { slot_id: string; student_id: string } | null;
+        if (b !== null) {
+          const [slotRes, studentRes] = await Promise.all([
+            client.from('lesson_slots').select('starts_at').eq('id', b.slot_id).single(),
+            client.from('students').select('first_name, phone, email').eq('id', b.student_id).single(),
+          ]);
+
+          const slot    = slotRes.data    as { starts_at: string }                                         | null;
+          const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+
+          if (slot !== null && student !== null && (student.phone !== null || student.email !== null)) {
+            const startsAt = new Date(slot.starts_at);
+            const datum    = startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' });
+            const tid      = startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
+            const commPayload: Record<string, string> = {
+              trigger_event:   'booking_rescheduled',
+              organization_id: orgId,
+              förnamn:         student.first_name ?? '',
+              datum,
+              tid,
+            };
+            if (student.phone !== null) commPayload['student_phone'] = student.phone;
+            if (student.email !== null) commPayload['student_email'] = student.email;
+
+            await client.rpc('insert_outbox_event', {
+              p_event_type:      'Communication.Requested',
+              p_channel:         'internal',
+              p_payload:         commPayload,
+              p_organization_id: orgId,
+              p_causation_id:    event.id,
+            }).catch((enqueueErr: unknown) => {
+              logger.warn('booking_rescheduled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+            });
+          }
+        }
+      } catch (notifErr) {
+        logger.warn('booking_rescheduled.notification_error', { event_id: event.id, error: String(notifErr) });
+      }
+    }
   }
 
   return { success: true };
@@ -408,15 +609,67 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
 
 // ── Phase 3D handlers ─────────────────────────────────────────────────────────
 
-async function handleWaitlistPromoted(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleWaitlistPromoted(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId           = event.payload['student_id']           as string | undefined;
+  const slotId              = event.payload['slot_id']              as string | undefined;
+  const reservationDeadline = event.payload['reservation_deadline'] as string | undefined;
+  const orgId               = event.organization_id;
+
   logger.info('handler.waitlist_promoted', {
     event_id:             event.id,
     waitlist_entry_id:    event.payload['waitlist_entry_id'],
-    student_id:           event.payload['student_id'],
-    slot_id:              event.payload['slot_id'],
-    reservation_deadline: event.payload['reservation_deadline'],
+    student_id:           studentId,
+    slot_id:              slotId,
+    reservation_deadline: reservationDeadline,
   });
-  // TODO Phase 4: dispatch waitlist.promoted notification email/SMS
+
+  if (studentId !== undefined && orgId !== null) {
+    try {
+      const [studentRes, slotRes] = await Promise.all([
+        client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
+        slotId !== undefined
+          ? client.from('lesson_slots').select('starts_at').eq('id', slotId).single()
+          : Promise.resolve({ data: null }),
+      ]);
+
+      const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+      const slot    = slotRes.data    as { starts_at: string }                                               | null;
+
+      if (student !== null && (student.phone !== null || student.email !== null)) {
+        const startsAt = slot ? new Date(slot.starts_at) : null;
+        const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
+        const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }) : '';
+        const commPayload: Record<string, string> = {
+          trigger_event:   'waitlist_promoted',
+          organization_id: orgId,
+          förnamn:         student.first_name ?? '',
+          datum,
+          tid,
+        };
+        if (reservationDeadline !== undefined) commPayload['reservation_deadline'] = reservationDeadline;
+        if (student.phone !== null) commPayload['student_phone'] = student.phone;
+        if (student.email !== null) commPayload['student_email'] = student.email;
+
+        await client.rpc('insert_outbox_event', {
+          p_event_type:      'Communication.Requested',
+          p_channel:         'internal',
+          p_payload:         commPayload,
+          p_organization_id: orgId,
+          p_causation_id:    event.id,
+        }).catch((enqueueErr: unknown) => {
+          logger.warn('waitlist_promoted.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        });
+
+        logger.info('handler.waitlist_promoted.dispatched', { event_id: event.id, student_id: studentId });
+      } else {
+        logger.info('handler.waitlist_promoted.no_contact', { event_id: event.id, student_id: studentId });
+      }
+    } catch (notifErr) {
+      logger.warn('waitlist_promoted.notification_error', { event_id: event.id, error: String(notifErr) });
+    }
+  }
+
   return { success: true };
 }
 
@@ -469,16 +722,57 @@ async function handlePackagePurchased(event: OutboxEvent, _client: unknown): Pro
   return { success: true };
 }
 
-async function handleInvoiceIssued(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleInvoiceIssued(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId     = event.payload['student_id']     as string | undefined;
+  const invoiceNumber = event.payload['invoice_number'] as string | undefined;
+  const totalAmount   = event.payload['total_amount']   as number | undefined;
+  const orgId         = event.organization_id;
+
   logger.info('handler.invoice_issued', {
-    event_id:        event.id,
-    invoice_id:      event.payload['invoice_id'],
-    invoice_number:  event.payload['invoice_number'],
-    student_id:      event.payload['student_id'],
-    total_amount:    event.payload['total_amount'],
-    currency:        event.payload['currency'],
+    event_id:       event.id,
+    invoice_id:     event.payload['invoice_id'],
+    invoice_number: invoiceNumber,
+    student_id:     studentId,
+    total_amount:   totalAmount,
+    currency:       event.payload['currency'],
   });
-  // TODO Phase 4B: send invoice email to student
+
+  if (studentId !== undefined && orgId !== null) {
+    try {
+      const { data: student } = await client
+        .from('students')
+        .select('first_name, phone, email')
+        .eq('id', studentId)
+        .single();
+
+      const s = student as { first_name: string; phone: string | null; email: string | null } | null;
+      if (s !== null && (s.phone !== null || s.email !== null)) {
+        const commPayload: Record<string, string> = {
+          trigger_event:   'invoice_issued',
+          organization_id: orgId,
+          förnamn:         s.first_name ?? '',
+          fakturanummer:   invoiceNumber ?? '',
+          belopp:          totalAmount !== undefined ? String(totalAmount) : '',
+        };
+        if (s.phone !== null) commPayload['student_phone'] = s.phone;
+        if (s.email !== null) commPayload['student_email'] = s.email;
+
+        await client.rpc('insert_outbox_event', {
+          p_event_type:      'Communication.Requested',
+          p_channel:         'internal',
+          p_payload:         commPayload,
+          p_organization_id: orgId,
+          p_causation_id:    event.id,
+        }).catch((enqueueErr: unknown) => {
+          logger.warn('invoice_issued.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        });
+      }
+    } catch (notifErr) {
+      logger.warn('invoice_issued.notification_error', { event_id: event.id, error: String(notifErr) });
+    }
+  }
+
   return { success: true };
 }
 
@@ -608,15 +902,56 @@ async function handleCouponRedeemed(event: OutboxEvent, _client: unknown): Promi
   return { success: true };
 }
 
-async function handleInvoiceOverdue(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleInvoiceOverdue(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId  = event.payload['student_id']  as string | undefined;
+  const daysOverdue = event.payload['days_overdue'] as number | undefined;
+  const dueDate    = event.payload['due_date']     as string | undefined;
+  const orgId      = event.organization_id;
+
   logger.info('handler.invoice_overdue', {
-    event_id:      event.id,
-    invoice_id:    event.payload['invoice_id'],
-    student_id:    event.payload['student_id'],
-    days_overdue:  event.payload['days_overdue'],
-    due_date:      event.payload['due_date'],
+    event_id:     event.id,
+    invoice_id:   event.payload['invoice_id'],
+    student_id:   studentId,
+    days_overdue: daysOverdue,
+    due_date:     dueDate,
   });
-  // TODO: trigger initial overdue notification to student
+
+  if (studentId !== undefined && orgId !== null) {
+    try {
+      const { data: student } = await client
+        .from('students')
+        .select('first_name, phone, email')
+        .eq('id', studentId)
+        .single();
+
+      const s = student as { first_name: string; phone: string | null; email: string | null } | null;
+      if (s !== null && (s.phone !== null || s.email !== null)) {
+        const commPayload: Record<string, string> = {
+          trigger_event:   'invoice_overdue',
+          organization_id: orgId,
+          förnamn:         s.first_name ?? '',
+          dagar_försenad:  daysOverdue !== undefined ? String(daysOverdue) : '',
+          förfallodatum:   dueDate ?? '',
+        };
+        if (s.phone !== null) commPayload['student_phone'] = s.phone;
+        if (s.email !== null) commPayload['student_email'] = s.email;
+
+        await client.rpc('insert_outbox_event', {
+          p_event_type:      'Communication.Requested',
+          p_channel:         'internal',
+          p_payload:         commPayload,
+          p_organization_id: orgId,
+          p_causation_id:    event.id,
+        }).catch((enqueueErr: unknown) => {
+          logger.warn('invoice_overdue.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        });
+      }
+    } catch (notifErr) {
+      logger.warn('invoice_overdue.notification_error', { event_id: event.id, error: String(notifErr) });
+    }
+  }
+
   return { success: true };
 }
 
@@ -632,6 +967,72 @@ async function handleInvoiceReminderSent(event: OutboxEvent, _client: unknown): 
     is_automated:    event.payload['is_automated'],
   });
   // TODO: dispatch email/SMS/both based on action_type
+  return { success: true };
+}
+
+// Communication.Requested: the single point where event-worker calls communication-worker.
+// All domain handlers (booking confirmed, cancelled, reminders) enqueue this event type
+// instead of calling communication-worker/notify directly, preserving the outbox contract.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleCommunicationRequested(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const payload      = event.payload as Record<string, unknown>;
+  const notifId      = payload['_notification_id'] as string | null | undefined;
+  const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+  const workerSecret = Deno.env.get('WORKER_SECRET');
+
+  logger.info('handler.communication_requested', {
+    event_id:      event.id,
+    trigger_event: payload['trigger_event'],
+    org_id:        event.organization_id,
+  });
+
+  if (workerSecret === undefined || workerSecret === '') {
+    logger.warn('handler.communication_requested.no_secret', { event_id: event.id });
+    return { success: true };
+  }
+
+  // Strip internal metadata fields before forwarding to communication-worker
+  const workerPayload: Record<string, unknown> = { ...payload };
+  delete workerPayload['_notification_id'];
+
+  const resp = await fetch(workerUrl, {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(workerPayload),
+  }).catch((err: unknown) => {
+    logger.warn('handler.communication_requested.fetch_failed', { event_id: event.id, error: String(err) });
+    return null;
+  });
+
+  if (resp !== null && !resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    logger.error('handler.communication_requested.non_ok', {
+      event_id:    event.id,
+      http_status: resp.status,
+      body:        errText.slice(0, 200),
+    });
+    return { success: false, error: `HTTP ${resp.status}` };
+  }
+
+  // Mark the associated notification as sent (supplied by processReminder)
+  if (notifId !== null && notifId !== undefined) {
+    await client
+      .from('notifications')
+      .update({ status: 'sent', status_changed_at: new Date().toISOString(), sent_at: new Date().toISOString() })
+      .eq('id', notifId)
+      .catch((e: unknown) => {
+        logger.warn('handler.communication_requested.update_notification_failed', {
+          event_id: event.id,
+          notif_id: notifId,
+          error:    String(e),
+        });
+      });
+  }
+
+  logger.info('handler.communication_requested.dispatched', {
+    event_id:      event.id,
+    trigger_event: payload['trigger_event'],
+  });
   return { success: true };
 }
 
@@ -672,6 +1073,8 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
   'Coupon.Redeemed':         handleCouponRedeemed,
   'Invoice.Overdue':         handleInvoiceOverdue,
   'Invoice.ReminderSent':    handleInvoiceReminderSent,
+  // Cross-domain communication dispatch (single handler for all outbound notifications)
+  'Communication.Requested': handleCommunicationRequested,
 };
 
 // ─── Maintenance tick ─────────────────────────────────────────────────────────
@@ -754,48 +1157,33 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
 
     const notifId = notif?.id ?? null;
 
-    // Route through communication-worker/notify so notification_rules are respected,
-    // templates are rendered, and outbound_messages rows are created for DeliveryLog visibility.
+    // Enqueue Communication.Requested so the dedicated handler dispatches
+    // to communication-worker on the next drain cycle (outbox pattern — no direct HTTP).
     if (!isDuplicate && student !== null && (student.phone !== null || student.email !== null)) {
-      const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
-      const workerSecret = Deno.env.get('WORKER_SECRET');
+      const commPayload: Record<string, string | null> = {
+        trigger_event:     triggerEvent,
+        organization_id:   orgId,
+        förnamn:           student.first_name ?? '',
+        datum,
+        tid,
+        _notification_id:  notifId,
+      };
+      if (student.phone !== null) commPayload['student_phone'] = student.phone;
+      if (student.email !== null) commPayload['student_email'] = student.email;
 
-      if (workerSecret !== undefined && workerSecret !== '') {
-        const payload: Record<string, string> = {
-          trigger_event:   triggerEvent,
-          organization_id: orgId,
-          förnamn:         student.first_name ?? '',
-          datum,
-          tid,
-        };
-        if (student.phone !== null) payload['student_phone'] = student.phone;
-        if (student.email !== null) payload['student_email'] = student.email;
+      await client.rpc('insert_outbox_event', {
+        p_event_type:      'Communication.Requested',
+        p_channel:         'internal',
+        p_payload:         commPayload,
+        p_organization_id: orgId,
+        p_target_id:       reminderId,
+      }).catch((enqueueErr: unknown) => {
+        logger.warn('reminder.enqueue_failed', { worker_id: workerId, reminder_id: reminderId, error: String(enqueueErr) });
+      });
 
-        const dispatchResp = await fetch(workerUrl, {
-          method:  'POST',
-          headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
-          body:    JSON.stringify(payload),
-        }).catch((fetchErr: unknown) => {
-          logger.warn('reminder.dispatch_fetch_failed', { worker_id: workerId, reminder_id: reminderId, error: String(fetchErr) });
-          return null;
-        });
-
-        if (dispatchResp !== null && !dispatchResp.ok) {
-          logger.warn('reminder.dispatch_non_ok', { worker_id: workerId, reminder_id: reminderId, http_status: dispatchResp.status });
-        } else if (dispatchResp !== null) {
-          logger.info('notification.dispatched', { worker_id: workerId, trigger_event: triggerEvent, recipient_id: recipientId, booking_id: bookingId });
-        }
-      }
+      logger.info('notification.enqueued', { worker_id: workerId, trigger_event: triggerEvent, recipient_id: recipientId, booking_id: bookingId });
     } else if (!isDuplicate) {
       logger.info('reminder.no_contact', { worker_id: workerId, reminder_id: reminderId, recipient_id: recipientId });
-    }
-
-    // Mark notification sent
-    if (notifId !== null) {
-      await client
-        .from('notifications')
-        .update({ status: 'sent', status_changed_at: new Date().toISOString(), sent_at: new Date().toISOString() })
-        .eq('id', notifId);
     }
 
     // Mark reminder sent and link notification
@@ -1115,6 +1503,21 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
 
   const client = createServiceClient();
 
+  let workerRunId: string | null = null;
+  try {
+    const { data: runId } = await (client as any).rpc('begin_worker_run', {
+      p_worker_name: 'event-worker',
+      p_metadata:    { worker_id: workerId },
+    });
+    workerRunId = (runId as string | null) ?? null;
+  } catch (runLogErr) {
+    // Monitoring must never block event processing.
+    logger.warn('worker.run_log_begin_failed', {
+      worker_id: workerId,
+      error:     runLogErr instanceof Error ? runLogErr.message : String(runLogErr),
+    });
+  }
+
   // Claim the next batch of 'internal' channel events
   const { data: events, error: claimError } = await (client as any).rpc('outbox_claim_next', {
     p_channel:    'internal',
@@ -1129,6 +1532,13 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
       error:     claimError.message,
     });
     metrics.run_duration_ms = Date.now() - startedAt;
+    if (workerRunId) {
+      await (client as any).rpc('complete_worker_run', {
+        p_run_id:       workerRunId,
+        p_status:       'failed',
+        p_error_summary: claimError.message,
+      }).catch(() => {});
+    }
     return metrics;
   }
 
@@ -1252,6 +1662,28 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
   metrics.run_duration_ms = Date.now() - startedAt;
 
   logger.info('worker.run_complete', { ...metrics });
+
+  if (workerRunId) {
+    const totalFailed  = metrics.events_failed + metrics.reminders_failed;
+    const totalSuccess = metrics.events_delivered + metrics.reminders_processed;
+    const status = totalFailed === 0 ? 'completed' : totalSuccess > 0 ? 'partial' : 'failed';
+
+    await (client as any).rpc('complete_worker_run', {
+      p_run_id:            workerRunId,
+      p_status:            status,
+      p_processed_count:   metrics.events_claimed,
+      p_success_count:     metrics.events_delivered,
+      p_failed_count:      metrics.events_failed,
+      p_retry_count:       0,
+      p_dead_letter_count: metrics.events_dead_lettered,
+      p_metadata:          metrics,
+    }).catch((completeErr: unknown) => {
+      logger.warn('worker.run_log_complete_failed', {
+        worker_id: workerId,
+        error:     completeErr instanceof Error ? completeErr.message : String(completeErr),
+      });
+    });
+  }
 
   return metrics;
 }

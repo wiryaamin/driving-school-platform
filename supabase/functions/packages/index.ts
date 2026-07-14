@@ -14,6 +14,7 @@
 
 import { serveCors }            from '../_shared/cors.ts';
 import { buildEdgeContext }     from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient }  from '../_shared/supabase.ts';
 import { createFunctionLogger }  from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
@@ -27,14 +28,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function ok<T>(ctx: EdgeRequestContext, body: T, status = 200): Response {
   return new Response(JSON.stringify({ data: body }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function fail(ctx: EdgeRequestContext, status: number, code: string, message: string): Response {
-  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId }), {
+  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -93,7 +94,7 @@ async function handleListOfferings(req: Request, ctx: EdgeRequestContext, client
 
   return new Response(
     JSON.stringify({ data: data ?? [], meta: { page, per_page: perPage, total: count ?? 0, has_more: page * perPage < (count ?? 0) } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -270,7 +271,7 @@ async function handleListCatalog(req: Request, ctx: EdgeRequestContext, client: 
   }
   return new Response(
     JSON.stringify({ data: data ?? [] }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -320,11 +321,18 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   log.requestStarted(req, ctx.correlationId, ctx.organizationId, ctx.actorId);
 
   const { id, action } = extractPathParts(req);
   const method = req.method;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   let response: Response;
 

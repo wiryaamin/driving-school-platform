@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 
@@ -114,6 +115,10 @@ async function resolvePortalToken(req: Request): Promise<PortalSession | null> {
 
 Deno.serve((req: Request) =>
   serveCors(req, async () => {
+    const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+    const rateLimitGuard = enforceIpRateLimit(req, 'ip_auth', correlationId);
+    if (rateLimitGuard) return rateLimitGuard;
+
     const url  = new URL(req.url);
     // Supabase may present the URL in different formats depending on deployment flags.
     // Strip any known prefix so we always work with just the sub-path:
@@ -245,308 +250,10 @@ Deno.serve((req: Request) =>
       });
     }
 
-    // ── POST /generate-guardian-token — admin generates guardian portal link ────
-    if (req.method === 'POST' && path === '/generate-guardian-token') {
-      const ctxResult = await buildEdgeContext(req);
-      if (!ctxResult.ok) return ctxResult.response;
-      const { ctx } = ctxResult;
-      if (!ctx.organizationId) return fail(403, 'Organization context required');
-
-      const GuardianTokenSchema = z.object({ guardian_id: z.string().uuid() });
-      const body   = await req.json().catch(() => null);
-      const parsed = GuardianTokenSchema.safeParse(body);
-      if (!parsed.success) return fail(400, 'guardian_id required');
-
-      const svc = createServiceClient();
-      const { data: guardian, error: gErr } = await svc
-        .from('student_guardians')
-        .select('id, first_name, last_name, student_id, email')
-        .eq('id', parsed.data.guardian_id)
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .single();
-
-      if (gErr || !guardian) return fail(404, 'Guardian not found');
-
-      const gToken    = randomToken();
-      const gHash     = await sha256hex(gToken);
-      const gExpires  = new Date(Date.now() + PORTAL_TOKEN_TTL_DAYS * 86_400_000).toISOString();
-
-      await svc
-        .from('guardian_portal_sessions')
-        .update({ revoked_at: new Date().toISOString() })
-        .eq('guardian_id', parsed.data.guardian_id)
-        .eq('organization_id', ctx.organizationId)
-        .is('revoked_at', null);
-
-      const { error: insErr } = await svc
-        .from('guardian_portal_sessions')
-        .insert({
-          organization_id: ctx.organizationId,
-          guardian_id:     (guardian as { id: string }).id,
-          student_id:      (guardian as { student_id: string }).student_id,
-          token_hash:      gHash,
-          expires_at:      gExpires,
-          created_by:      ctx.actorId,
-        });
-
-      if (insErr) return fail(500, 'Failed to generate guardian portal link');
-
-      const appUrl = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
-      return ok({
-        token:         gToken,
-        url:           `${appUrl}/guardian?token=${gToken}`,
-        expires_at:    gExpires,
-        guardian_name: `${(guardian as { first_name: string }).first_name} ${(guardian as { last_name: string }).last_name}`,
-      }, 201);
-    }
-
-    // ── POST /guardians — admin creates a guardian record for a student ────────
-    if (req.method === 'POST' && path === '/guardians') {
-      const ctxResult = await buildEdgeContext(req);
-      if (!ctxResult.ok) return ctxResult.response;
-      const { ctx } = ctxResult;
-      if (!ctx.organizationId) return fail(403, 'Organization context required');
-
-      const CreateGuardianSchema = z.object({
-        student_id:  z.string().uuid(),
-        first_name:  z.string().min(1).max(100),
-        last_name:   z.string().min(1).max(100),
-        email:       z.string().email(),
-        phone:       z.string().max(30).optional(),
-        relation:    z.string().max(50).optional(),
-        can_pay:     z.boolean().default(true),
-      });
-      const body   = await req.json().catch(() => null);
-      const parsed = CreateGuardianSchema.safeParse(body);
-      if (!parsed.success) return fail(400, 'Invalid guardian data');
-
-      const svc = createServiceClient();
-      const { data: guardian, error: insErr } = await svc
-        .from('student_guardians')
-        .insert({
-          organization_id: ctx.organizationId,
-          created_by:      ctx.actorId,
-          ...parsed.data,
-        })
-        .select('id, first_name, last_name, email, phone, relation, can_pay')
-        .single();
-
-      if (insErr || !guardian) {
-        logger.error('student-portal: create guardian failed', { error: insErr?.message });
-        return fail(500, 'Failed to create guardian');
-      }
-      return ok(guardian, 201);
-    }
-
-    // ── GET /guardians?student_id= — list guardians for a student ─────────────
-    if (req.method === 'GET' && path === '/guardians') {
-      const ctxResult = await buildEdgeContext(req);
-      if (!ctxResult.ok) return ctxResult.response;
-      const { ctx } = ctxResult;
-      if (!ctx.organizationId) return fail(403, 'Organization context required');
-
-      const studentId = url.searchParams.get('student_id');
-      if (!studentId) return fail(400, 'student_id required');
-
-      const svc = createServiceClient();
-      const { data: guardians, error } = await svc
-        .from('student_guardians')
-        .select('id, first_name, last_name, email, phone, relation, can_pay, created_at')
-        .eq('student_id', studentId)
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .order('created_at');
-
-      if (error) return fail(500, 'Failed to fetch guardians');
-      return ok(guardians ?? []);
-    }
-
-    // ── DELETE /guardians/:id — soft-delete a guardian ────────────────────────
-    const guardianDeleteMatch = path.match(/^\/guardians\/([0-9a-f-]+)$/);
-    if (req.method === 'DELETE' && guardianDeleteMatch) {
-      const ctxResult = await buildEdgeContext(req);
-      if (!ctxResult.ok) return ctxResult.response;
-      const { ctx } = ctxResult;
-      if (!ctx.organizationId) return fail(403, 'Organization context required');
-
-      const svc = createServiceClient();
-      const { error } = await svc
-        .from('student_guardians')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', guardianDeleteMatch[1]!)
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null);
-
-      if (error) return fail(500, 'Failed to delete guardian');
-      return ok({ success: true });
-    }
-
-    // ── Guardian portal routes (/g/*) — authenticated by guardian token ────────
-    if (path.startsWith('/g/')) {
-      const auth = req.headers.get('Authorization');
-      if (!auth?.startsWith('Bearer ')) return fail(401, 'Guardian authentication required');
-      const gToken = auth.slice(7).trim();
-      const gHash  = await sha256hex(gToken);
-      const svc    = createServiceClient();
-
-      const { data: gSession, error: gSessErr } = await svc
-        .from('guardian_portal_sessions')
-        .select('id, guardian_id, student_id, organization_id')
-        .eq('token_hash', gHash)
-        .is('revoked_at', null)
-        .gt('expires_at', new Date().toISOString())
-        .single();
-
-      if (gSessErr || !gSession) return fail(401, 'Invalid or expired guardian portal link');
-
-      void svc
-        .from('guardian_portal_sessions')
-        .update({ last_used_at: new Date().toISOString() })
-        .eq('id', gSession.id)
-        .then(({ error }) => {
-          if (error) console.warn('guardian-portal: last_used_at update failed', error.message);
-        });
-
-      const gPath         = path.slice(2); // strip /g prefix → /me, /bookings, etc.
-      const gStudentId    = gSession.student_id     as string;
-      const gOrgId        = gSession.organization_id as string;
-      const gGuardianId   = gSession.guardian_id    as string;
-
-      // GET /g/me — guardian identity + student summary
-      if (req.method === 'GET' && gPath === '/me') {
-        const [guardianRes, studentRes, orgRes] = await Promise.all([
-          svc.from('student_guardians')
-            .select('id, first_name, last_name, email, phone, relation, can_pay')
-            .eq('id', gGuardianId)
-            .single(),
-          svc.from('students')
-            .select('id, first_name, last_name, permit_stage, target_licence_category')
-            .eq('id', gStudentId)
-            .single(),
-          svc.from('organizations')
-            .select('id, name')
-            .eq('id', gOrgId)
-            .single(),
-        ]);
-        if (!guardianRes.data || !studentRes.data || !orgRes.data) return fail(500, 'Failed to load guardian session data');
-        return ok({
-          guardian:     guardianRes.data,
-          student:      studentRes.data,
-          organization: orgRes.data,
-        });
-      }
-
-      // GET /g/bookings — upcoming booked lessons for the student
-      if (req.method === 'GET' && gPath === '/bookings') {
-        const now = new Date().toISOString();
-        const { data: bookings, error: bErr } = await svc
-          .from('lesson_bookings')
-          .select('id, status, lesson_slots!slot_id(starts_at, ends_at, notes, lesson_types!lesson_type_id(name), instructors!instructor_id(first_name, last_name))')
-          .eq('student_id', gStudentId)
-          .eq('organization_id', gOrgId)
-          .eq('status', 'booked')
-          .gte('lesson_slots.starts_at', now)
-          .order('lesson_slots.starts_at')
-          .limit(20);
-
-        if (bErr) return fail(500, 'Failed to fetch bookings');
-        return ok(bookings ?? []);
-      }
-
-      // GET /g/balance — student balance + unpaid invoices (only if can_pay)
-      if (req.method === 'GET' && gPath === '/balance') {
-        const { data: guardian } = await svc
-          .from('student_guardians')
-          .select('can_pay')
-          .eq('id', gGuardianId)
-          .single();
-
-        if (!(guardian as { can_pay: boolean } | null)?.can_pay) {
-          return fail(403, 'Payment access not granted for this guardian');
-        }
-
-        const [balRes, invRes] = await Promise.all([
-          svc.from('student_credit_balances')
-            .select('balance_sek, credit_used_sek, total_paid_sek')
-            .eq('student_id', gStudentId)
-            .eq('organization_id', gOrgId)
-            .maybeSingle(),
-          svc.from('invoices')
-            .select('id, invoice_number, amount_sek, due_date, status')
-            .eq('student_id', gStudentId)
-            .eq('organization_id', gOrgId)
-            .in('status', ['issued', 'overdue'])
-            .order('due_date')
-            .limit(10),
-        ]);
-
-        return ok({
-          balance:    balRes.data ?? { balance_sek: 0, credit_used_sek: 0, total_paid_sek: 0 },
-          invoices:   invRes.data ?? [],
-        });
-      }
-
-      // GET /g/progress — student licence progress summary
-      if (req.method === 'GET' && gPath === '/progress') {
-        const [studentRes, statsRes] = await Promise.all([
-          svc.from('students')
-            .select('permit_stage, theory_passed_at, practical_passed_at, risk1_completed_at, risk2_completed_at')
-            .eq('id', gStudentId)
-            .single(),
-          svc.from('lesson_bookings')
-            .select('status')
-            .eq('student_id', gStudentId)
-            .eq('organization_id', gOrgId),
-        ]);
-
-        if (!studentRes.data) return fail(500, 'Failed to load student progress');
-
-        const allBookings = (statsRes.data ?? []) as Array<{ status: string }>;
-        return ok({
-          ...studentRes.data,
-          completed_count: allBookings.filter(b => b.status === 'attended').length,
-          upcoming_count:  allBookings.filter(b => b.status === 'booked').length,
-        });
-      }
-
-      // GET /g/documents — guardian can view student's approved documents
-      if (req.method === 'GET' && gPath === '/documents') {
-        const { data: docs, error: docsErr } = await svc
-          .from('student_documents')
-          .select('id, category, file_name, mime_type, file_size_bytes, description, expires_at, storage_path, storage_bucket, created_at')
-          .eq('student_id', gStudentId)
-          .eq('organization_id', gOrgId)
-          .eq('status', 'approved')
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (docsErr) return fail(500, 'Failed to fetch documents');
-
-        type GDocRow = {
-          id: string; category: string; file_name: string; mime_type: string | null;
-          file_size_bytes: number | null; description: string | null; expires_at: string | null;
-          storage_path: string; storage_bucket: string; created_at: string;
-        };
-
-        const withUrls = await Promise.all(((docs ?? []) as GDocRow[]).map(async (doc) => {
-          const { data: signed } = await svc.storage
-            .from(doc.storage_bucket)
-            .createSignedUrl(doc.storage_path, 3600);
-          return {
-            id: doc.id, category: doc.category, file_name: doc.file_name,
-            mime_type: doc.mime_type, file_size_bytes: doc.file_size_bytes,
-            description: doc.description, expires_at: doc.expires_at,
-            created_at: doc.created_at, download_url: signed?.signedUrl ?? null,
-          };
-        }));
-
-        return ok(withUrls);
-      }
-
-      return fail(404, 'Guardian route not found');
-    }
+    // Guardian portal functionality (token generation, guardian CRUD, guardian-facing
+    // data routes) lives exclusively in supabase/functions/guardian-portal/index.ts —
+    // this file previously carried a second, fully duplicated and already-drifted copy
+    // (removed Production Readiness Sprint 4; confirmed zero frontend callers before removal).
 
     // ── All routes below require a valid portal token ─────────────────────────
     const session = await resolvePortalToken(req);
@@ -559,12 +266,23 @@ Deno.serve((req: Request) =>
     if (req.method === 'GET' && path === '/me') {
       const { data, error } = await supabase
         .from('students')
-        .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at')
+        .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at, date_of_birth, personnummer_last4, address_line1, postal_code, city')
         .eq('id', student_id)
         .single();
 
       if (error || !data) return fail(404, 'Student not found');
-      return ok(data);
+
+      const row = data as typeof data & {
+        date_of_birth: string | null; personnummer_last4: string | null;
+      };
+      // Masked personnummer only — the encrypted/plaintext value is never
+      // decrypted for portal display, matching the same partial-reveal
+      // pattern already used staff-side (personnummer_last4, GDPR Art.5).
+      const personnummer = row.date_of_birth
+        ? `${row.date_of_birth.replace(/-/g, '')}${row.personnummer_last4 ? `-${row.personnummer_last4}` : ''}`
+        : null;
+      const { date_of_birth: _dob, personnummer_last4: _last4, ...rest } = row;
+      return ok({ ...rest, personnummer });
     }
 
     // ── GET /progress — lesson stats + permit milestones ─────────────────────

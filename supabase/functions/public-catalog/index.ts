@@ -17,6 +17,7 @@
  */
 
 import { createServiceClient } from '../_shared/supabase.ts';
+import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -349,6 +350,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: PUBLIC_CORS });
   }
+
+  const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+  const rateLimitGuard = enforceIpRateLimit(req, 'ip_public', correlationId);
+  if (rateLimitGuard) return rateLimitGuard;
 
   if (req.method !== 'GET') {
     return err('Method not allowed', 405, 'METHOD_NOT_ALLOWED');

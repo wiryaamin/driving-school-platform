@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 
@@ -122,6 +123,13 @@ Deno.serve((req: Request) =>
       const ctxResult = await buildEdgeContext(req);
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
+
+      const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+      if (ipGuard) return ipGuard;
+      if (req.method !== 'GET') {
+        const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+        if (writeGuard) return writeGuard;
+      }
 
       if (!ctx.organizationId) return fail(403, 'Organization context required');
 

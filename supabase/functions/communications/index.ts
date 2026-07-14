@@ -42,7 +42,7 @@ import { buildErrorResponse }   from '../_shared/errors.ts';
 
 const CHANNELS   = ['email', 'sms', 'whatsapp', 'push', 'voice'] as const;
 const STATUSES   = ['queued', 'sending', 'sent', 'delivered', 'failed', 'bounced', 'cancelled'] as const;
-const ADMIN_ROLES = new Set(['admin', 'manager', 'owner']);
+const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
 
 type Channel = typeof CHANNELS[number];
 type Status  = typeof STATUSES[number];

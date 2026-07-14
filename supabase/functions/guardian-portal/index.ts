@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 
@@ -42,6 +43,7 @@ interface GuardianSession {
   guardian_id:     string;
   student_id:      string;
   organization_id: string;
+  expires_at:      string;
 }
 
 async function resolveGuardianToken(req: Request): Promise<GuardianSession | null> {
@@ -53,7 +55,7 @@ async function resolveGuardianToken(req: Request): Promise<GuardianSession | nul
 
   const { data, error } = await svc
     .from('guardian_portal_sessions')
-    .select('id, guardian_id, student_id, organization_id')
+    .select('id, guardian_id, student_id, organization_id, expires_at')
     .eq('token_hash', hash)
     .is('revoked_at', null)
     .gt('expires_at', new Date().toISOString())
@@ -89,6 +91,10 @@ const GenerateTokenSchema = z.object({
 
 Deno.serve((req: Request) =>
   serveCors(req, async () => {
+    const correlationId = req.headers.get('X-Correlation-ID') ?? crypto.randomUUID();
+    const rateLimitGuard = enforceIpRateLimit(req, 'ip_auth', correlationId);
+    if (rateLimitGuard) return rateLimitGuard;
+
     const url  = new URL(req.url);
     const path = url.pathname.replace(/^\/guardian-portal/, '') || '/';
 
@@ -262,6 +268,7 @@ Deno.serve((req: Request) =>
           phone: loc?.phone ?? null,
           email: loc?.email ?? null,
         },
+        session: { expires_at: session.expires_at },
       });
     }
 
@@ -273,11 +280,18 @@ Deno.serve((req: Request) =>
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
         .in('status', ['reserved', 'confirmed', 'completed', 'cancelled', 'no_show'])
-        .order('lesson_slots.starts_at', { ascending: false })
         .limit(100);
 
       if (error) return fail(500, 'Failed to fetch bookings');
-      return ok(bookings ?? []);
+
+      // PostgREST cannot order by an embedded/joined table's column via dot
+      // notation (order=lesson_slots.starts_at is rejected — confirmed live,
+      // Production Readiness Sprint 4) — sort client-side instead.
+      type BookingRow = { lesson_slots: { starts_at: string } | null };
+      const sorted = ((bookings ?? []) as unknown as BookingRow[]).sort((a, b) =>
+        (b.lesson_slots?.starts_at ?? '').localeCompare(a.lesson_slots?.starts_at ?? ''));
+
+      return ok(sorted);
     }
 
     // GET /balance — student balance + unpaid invoices (only if guardian has can_pay)

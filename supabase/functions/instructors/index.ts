@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
@@ -35,7 +36,7 @@ const CreateInstructorSchema = z.object({
   adi_valid_until:     z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 
   primary_location_id: z.string().uuid().optional(),
-  languages_spoken:    z.array(z.enum(['sv', 'en'])).min(1).optional(),
+  languages_spoken:    z.array(z.string().min(1).max(50)).optional(),
   max_lessons_per_day: z.number().int().positive().max(20).optional(),
 });
 
@@ -65,18 +66,18 @@ function errorResp(
   message: string,
   details?: unknown
 ): Response {
-  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 };
   if (details !== undefined) body['details'] = details;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function successResp<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -92,7 +93,7 @@ function pagedResp<T>(
       data,
       meta: { total, page, per_page: perPage, has_more: page * perPage < total },
     }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -130,7 +131,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     search, employment_type, teaching_category, location_id,
   } = parsed.data;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const from = (page - 1) * per_page;
   const to   = from + per_page - 1;
 
@@ -147,7 +148,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   if (location_id     !== undefined) q = q.eq('primary_location_id', location_id);
   if (teaching_category !== undefined) q = q.contains('teaching_categories', [teaching_category]);
   if (search !== undefined && search !== '') {
-    q = q.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
+    q = q.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`);
   }
 
   const { data, error, count } = await q;
@@ -177,7 +178,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate check: email (unique per org)
   const { data: emailDup } = await (client as any)
@@ -222,6 +223,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   logger.info('Instructor.Created', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     instructor_id:  instructor.id,
@@ -235,7 +237,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'instructors:instructor:read');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: instructor, error } = await (client as any)
     .from('instructors')
     .select('*')
@@ -272,7 +274,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   const dto = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   if (dto.email !== undefined) {
     const { data: dup } = await (client as any)
@@ -323,6 +325,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   logger.info('Instructor.Updated', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     instructor_id:  id,
@@ -336,7 +339,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'instructors:instructor:delete');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('instructors')
@@ -361,6 +364,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   }
 
   logger.info('Instructor.Archived', {
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     instructor_id:  id,
@@ -369,7 +373,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
   return new Response(null, {
     status: 204,
-    headers: { 'X-Correlation-ID': ctx.correlationId },
+    headers: { 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
@@ -380,9 +384,17 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (!ctxResult.ok) return ctxResult.response;
   const ctx = ctxResult.ctx;
 
+  const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+  if (ipGuard) return ipGuard;
+  if (req.method !== 'GET') {
+    const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+    if (writeGuard) return writeGuard;
+  }
+
   logger.info('request.started', {
     method:         req.method,
     path:           new URL(req.url).pathname,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId ?? 'platform',
     actor_id:       ctx.actorId,
@@ -399,8 +411,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'POST')  { response = await handleCreate(req, ctx); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     } else {
@@ -409,8 +421,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       else if (req.method === 'DELETE') { response = await handleArchive(req, ctx, id); }
       else {
         response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId }),
-          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
     }
@@ -421,8 +433,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       stack:  err instanceof Error ? err.stack : undefined,
     });
     response = new Response(
-      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId }),
-      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+      { status: 500, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
     );
   }
 
@@ -430,6 +442,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     method:         req.method,
     path:           new URL(req.url).pathname,
     status:         response.status,
+    request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     duration_ms:    Date.now() - startedAt,
   });

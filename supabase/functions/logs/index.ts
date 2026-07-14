@@ -1,24 +1,26 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
+import { logger } from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 function errorResp(ctx: EdgeRequestContext, status: number, code: string, message: string, details?: unknown): Response {
-  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId };
+  const body: Record<string, unknown> = { code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 };
   if (details !== undefined) body['details'] = details;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: number, perPage: number): Response {
   return new Response(
     JSON.stringify({ data, meta: { total, page, per_page: perPage, has_more: page * perPage < total } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -133,7 +135,7 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
   const { page, per_page, filter } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('lesson_bookings')
@@ -183,7 +185,7 @@ async function handleCommunications(req: Request, ctx: EdgeRequestContext): Prom
   const { page, per_page, channel, status } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('notifications')
@@ -253,7 +255,7 @@ async function handleActivities(req: Request, ctx: EdgeRequestContext): Promise<
   const { page, per_page } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: logs, count, error } = await (client as any)
     .from('activity_logs')
     .select('id, occurred_at, user_id, user_email, action, description', { count: 'exact' })
@@ -302,7 +304,7 @@ async function handleMissedTraining(req: Request, ctx: EdgeRequestContext): Prom
   const { page, per_page, instructor_id, lesson_type_id } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('lesson_bookings')
@@ -350,7 +352,7 @@ async function handleMissedExams(req: Request, ctx: EdgeRequestContext): Promise
   const { page, per_page, instructor_id, category } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Step 1: get exam-type lesson type IDs for this org
   const examCategories = category === 'all' ? ['risk1', 'risk2', 'assessment'] : [category];
@@ -415,21 +417,51 @@ Deno.serve((req) =>
     if (!result.ok) return result.response;
     const { ctx } = result;
 
+    const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+    if (ipGuard) return ipGuard;
+    if (req.method !== 'GET') {
+      const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+      if (writeGuard) return writeGuard;
+    }
+
     const url      = new URL(req.url);
     const segments = url.pathname.split('/').filter(Boolean);
     const logsIdx  = segments.findLastIndex((s) => s === 'logs');
     const sub      = segments[logsIdx + 1] ?? '';
 
-    if (req.method === 'GET') {
-      if (sub === 'bookings')         return handleBookingLogs(req, ctx);
-      if (sub === 'communications')   return handleCommunications(req, ctx);
-      if (sub === 'activities')       return handleActivities(req, ctx);
-      if (sub === 'missed-training')  return handleMissedTraining(req, ctx);
-      if (sub === 'missed-exams')     return handleMissedExams(req, ctx);
+    logger.info('request.started', {
+      method:         req.method,
+      path:           url.pathname,
+      correlation_id: ctx.correlationId,
+      request_id:     ctx.requestId,
+      org_id:         ctx.organizationId ?? 'platform',
+      actor_id:       ctx.actorId,
+    });
+
+    const startedAt = Date.now();
+    let response: Response;
+
+    if (req.method === 'GET' && sub === 'bookings')         { response = await handleBookingLogs(req, ctx); }
+    else if (req.method === 'GET' && sub === 'communications')  { response = await handleCommunications(req, ctx); }
+    else if (req.method === 'GET' && sub === 'activities')      { response = await handleActivities(req, ctx); }
+    else if (req.method === 'GET' && sub === 'missed-training') { response = await handleMissedTraining(req, ctx); }
+    else if (req.method === 'GET' && sub === 'missed-exams')    { response = await handleMissedExams(req, ctx); }
+    else {
+      response = new Response(
+        JSON.stringify({ code: 'NOT_FOUND', message: 'Unknown logs sub-route', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+        { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } },
+      );
     }
 
-    return new Response(JSON.stringify({ code: 'NOT_FOUND', message: 'Unknown logs sub-route' }), {
-      status: 404, headers: JSON_CT,
+    logger.info('request.completed', {
+      method:         req.method,
+      path:           url.pathname,
+      status:         response.status,
+      correlation_id: ctx.correlationId,
+      request_id:     ctx.requestId,
+      duration_ms:    Date.now() - startedAt,
     });
+
+    return response;
   })
 );

@@ -49,23 +49,23 @@ const ListQuerySchema = z.object({
 const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 function errorResp(ctx: EdgeRequestContext, status: number, code: string, message: string): Response {
-  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId }), {
+  return new Response(JSON.stringify({ code, message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function successResp<T>(ctx: EdgeRequestContext, data: T, status = 200): Response {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId },
+    headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId },
   });
 }
 
 function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: number, perPage: number): Response {
   return new Response(
     JSON.stringify({ data, meta: { total, page, per_page: perPage, has_more: page * perPage < total } }),
-    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId } }
+    { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
   );
 }
 
@@ -99,7 +99,7 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   }
 
   const { page, per_page, sort_by = 'created_at', sort_dir = 'desc', search, status } = parsed.data;
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const from = (page - 1) * per_page;
   const to = from + per_page - 1;
 
@@ -140,7 +140,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed');
   }
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate org_number check within same org
   if (parsed.data.org_number) {
@@ -179,7 +179,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'corporate:customer:read');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: record, error } = await (client as any)
     .from('corporate_customers')
     .select('*')
@@ -212,7 +212,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed');
   }
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: record, error } = await (client as any)
     .from('corporate_customers')
@@ -242,7 +242,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'corporate:customer:delete');
   if (guard) return guard;
 
-  const client = createSupabaseClient(req);
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const { data: existing } = await (client as any)
     .from('corporate_customers')
@@ -272,7 +272,7 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
     record_id: id, actor_id: ctx.actorId,
   });
 
-  return new Response(null, { status: 204, headers: { 'X-Correlation-ID': ctx.correlationId } });
+  return new Response(null, { status: 204, headers: { 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } });
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   logger.info('request.started', {
     method: req.method, path: new URL(req.url).pathname,
-    correlation_id: ctx.correlationId, org_id: ctx.organizationId ?? 'platform',
+    correlation_id: ctx.correlationId, request_id: ctx.requestId, org_id: ctx.organizationId ?? 'platform',
   });
 
   const startedAt = Date.now();
@@ -307,36 +307,28 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       if (req.method === 'GET')  { response = await handleList(req, ctx); }
       else if (req.method === 'POST') { response = await handleCreate(req, ctx); }
       else {
-        response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found' }),
-          { status: 404, headers: JSON_CT }
-        );
+        response = errorResp(ctx, 404, 'NOT_FOUND', 'Route not found');
       }
     } else {
       if (req.method === 'GET')         { response = await handleGetById(req, ctx, id); }
       else if (req.method === 'PATCH')  { response = await handleUpdate(req, ctx, id); }
       else if (req.method === 'DELETE') { response = await handleArchive(req, ctx, id); }
       else {
-        response = new Response(
-          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found' }),
-          { status: 404, headers: JSON_CT }
-        );
+        response = errorResp(ctx, 404, 'NOT_FOUND', 'Route not found');
       }
     }
   } catch (err) {
     logger.error('corp_customers.unhandled_error', {
       correlation_id: ctx.correlationId,
+      request_id: ctx.requestId,
       error: err instanceof Error ? err.message : String(err),
     });
-    response = new Response(
-      JSON.stringify({ code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' }),
-      { status: 500, headers: JSON_CT }
-    );
+    response = errorResp(ctx, 500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
 
   logger.info('request.completed', {
     method: req.method, status: response.status,
-    correlation_id: ctx.correlationId, duration_ms: Date.now() - startedAt,
+    correlation_id: ctx.correlationId, request_id: ctx.requestId, duration_ms: Date.now() - startedAt,
   });
 
   return response;

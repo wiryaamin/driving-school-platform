@@ -1,5 +1,6 @@
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient, createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 
@@ -118,14 +119,30 @@ Deno.serve(async (req) => {
       if (!result.ok) return result.response;
       const { ctx } = result;
 
+      const ipGuard = enforceIpRateLimit(req, 'ip_auth', ctx.correlationId);
+      if (ipGuard) return ipGuard;
+      if (req.method !== 'GET') {
+        const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
+        if (writeGuard) return writeGuard;
+      }
+
+      logger.info('request.started', {
+        method:         req.method,
+        path:           url.pathname,
+        correlation_id: ctx.correlationId,
+        request_id:     ctx.requestId,
+        org_id:         ctx.organizationId ?? 'platform',
+        actor_id:       ctx.actorId,
+      });
+
       if (!ctx.actorId || !ctx.organizationId) {
         return new Response(
-          JSON.stringify({ error: 'Missing session claims' }),
-          { status: 401, headers: { 'Content-Type': 'application/json' } },
+          JSON.stringify({ code: 'UNAUTHORIZED', message: 'Missing session claims', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 401, headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } },
         );
       }
 
-      const db = createSupabaseClient(req, true);
+      const db = createSupabaseClient(req, true, { correlationId: ctx.correlationId, requestId: ctx.requestId });
       const { data: instructor, error } = await db
         .from('instructors')
         .select('id')

@@ -25,6 +25,7 @@ import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { buildErrorResponse } from '../_shared/errors.ts';
+import { requireFeature } from '../_shared/subscription.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -377,6 +378,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     const writeGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'user_write', ctx.correlationId);
     if (writeGuard) return writeGuard;
   }
+
+  const subGuard = requireFeature(ctx, 'finance:accruals:manage');
+  if (subGuard) return subGuard;
 
   const orgId = ctx.organizationId;
   if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG_CONTEXT');
