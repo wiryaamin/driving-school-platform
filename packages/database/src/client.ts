@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient, SupabaseClientOptions } from '@supabase/supabase-js';
 import type { Database } from '@platform/types';
 
 export type TypedSupabaseClient = SupabaseClient<Database>;
@@ -7,17 +7,23 @@ export type TypedSupabaseClient = SupabaseClient<Database>;
 /**
  * Browser client — uses the anon key. RLS enforces all access.
  * Persists the user session to localStorage. Use in React apps.
+ *
+ * Pass `options` to override defaults for app-specific configuration
+ * (e.g. storageKey, detectSessionInUrl, global headers, realtime params).
  */
 export function createBrowserClient(
   supabaseUrl: string,
-  supabaseAnonKey: string
+  supabaseAnonKey: string,
+  options?: SupabaseClientOptions<'public'>
 ): TypedSupabaseClient {
   return createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
       autoRefreshToken: true,
       persistSession: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
+      ...options?.auth,
     },
+    ...options,
   });
 }
 
