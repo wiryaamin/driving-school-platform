@@ -272,3 +272,125 @@ verify_jwt = true
 [functions.logs]
 enabled = true
 verify_jwt = true
+
+# ─── Previously-implicit function configuration (Action 7: Deployment Safety) ─
+#
+# The 22 functions below previously had no [functions.<name>] entry in this
+# file, meaning a plain `supabase functions deploy <name>` (without an
+# explicit --no-verify-jwt flag) would silently apply the platform's default
+# of verify_jwt = true. For functions whose real callers never send a
+# Supabase-signed JWT (public endpoints, worker-to-worker WORKER_SECRET
+# calls, self-service portal tokens, Stripe webhooks, uptime monitors), that
+# default is wrong and rejects the caller with a 401 at the gateway before
+# the function's own code — and its own auth check — ever runs. This is the
+# same regression class discovered and fixed for guardian-portal during
+# Action 2. These entries make every deployed function's approved verify_jwt
+# value explicit so scripts/verify-deployment-config.mjs never has to guess
+# an implicit default.
+
+[functions.guardian-portal]
+enabled = true
+verify_jwt = false
+
+[functions.student-portal]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: self-service instructor portal token routes (GET
+# /validate, GET /me, etc.) authenticate via a portal token in the
+# Authorization header, not a platform JWT — same pattern as
+# guardian-portal/student-portal above.
+[functions.instructor-portal]
+enabled = true
+verify_jwt = false
+
+[functions.identity-events]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: WORKER_SECRET-authenticated worker-to-worker endpoint,
+# same pattern as event-worker.
+[functions.communication-worker]
+enabled = true
+verify_jwt = false
+
+[functions.instructor-ical]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: pre-auth bootstrap flow, authenticated by
+# PLATFORM_BOOTSTRAP_SECRET before any org or user exists.
+[functions.platform-bootstrap]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: unauthenticated uptime-monitor endpoint. Monitors do
+# not send a Supabase JWT.
+[functions.health]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: public, unauthenticated lead-capture / catalog /
+# enrollment endpoints, callable from outside the platform (marketing site,
+# embeddable widgets). External callers do not hold a Supabase JWT.
+[functions.demo-requests]
+enabled = true
+verify_jwt = false
+
+[functions.public-booking]
+enabled = true
+verify_jwt = false
+
+[functions.public-catalog]
+enabled = true
+verify_jwt = false
+
+[functions.public-enrollment]
+enabled = true
+verify_jwt = false
+
+# verify_jwt = false: Stripe delivers webhook events with a Stripe-Signature
+# header, not a Supabase JWT; authenticity is verified via signature inside
+# the function.
+[functions.stripe-webhook]
+enabled = true
+verify_jwt = false
+
+# ─── Standard platform-JWT authenticated functions (implicit default was
+# already correct; made explicit below for manifest completeness) ─────────────
+
+[functions.campaigns]
+enabled = true
+verify_jwt = true
+
+[functions.communications]
+enabled = true
+verify_jwt = true
+
+[functions.corporate-contracts]
+enabled = true
+verify_jwt = true
+
+[functions.data-migration]
+enabled = true
+verify_jwt = true
+
+[functions.enrollments]
+enabled = true
+verify_jwt = true
+
+[functions.orders]
+enabled = true
+verify_jwt = true
+
+[functions.package-consumption]
+enabled = true
+verify_jwt = true
+
+[functions.platform-admin]
+enabled = true
+verify_jwt = true
+
+[functions.tenant-onboarding]
+enabled = true
+verify_jwt = true
