@@ -955,18 +955,79 @@ async function handleInvoiceOverdue(event: OutboxEvent, client: any): Promise<Ha
   return { success: true };
 }
 
-async function handleInvoiceReminderSent(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleInvoiceReminderSent(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const invoiceId  = event.payload['invoice_id'] as string | undefined;
+  const studentId  = event.payload['student_id'] as string | undefined;
   const actionType = event.payload['action_type'] as string | undefined;
+  const orgId      = event.organization_id;
+
   logger.info('handler.invoice_reminder_sent', {
     event_id:        event.id,
-    invoice_id:      event.payload['invoice_id'],
-    student_id:      event.payload['student_id'],
+    invoice_id:      invoiceId,
+    student_id:      studentId,
     stage_number:    event.payload['stage_number'],
     action_type:     actionType,
     reminder_log_id: event.payload['reminder_log_id'],
     is_automated:    event.payload['is_automated'],
   });
-  // TODO: dispatch email/SMS/both based on action_type
+
+  // 'legal' is an internal escalation, not a customer-facing reminder — no
+  // dispatch. email/sms/both all route through the same trigger_event; the
+  // actual channel is decided by the org's own notification_rules config for
+  // 'invoice_overdue' (communication-worker's existing lookup), same as
+  // every other trigger_event in this file — no new channel logic here.
+  if (actionType !== 'email' && actionType !== 'sms' && actionType !== 'both') {
+    return { success: true };
+  }
+  if (invoiceId === undefined || studentId === undefined || orgId === null) {
+    return { success: true };
+  }
+
+  // Mirrors handleInvoiceIssued's exact pattern: enqueue Communication.Requested
+  // rather than calling communication-worker directly, so the single dispatch
+  // point (handleCommunicationRequested) and its existing retry/dead-letter
+  // handling apply here too. Uses the already-seeded 'invoice_overdue'
+  // template (phase_a_notification_templates.sql) — previously unreachable,
+  // since this handler never enqueued anything.
+  try {
+    const [{ data: student }, { data: invoice }] = await Promise.all([
+      client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
+      client.from('invoices').select('invoice_number, outstanding_amount, due_date').eq('id', invoiceId).single(),
+    ]);
+
+    const s   = student as { first_name: string; phone: string | null; email: string | null } | null;
+    const inv = invoice as { invoice_number: string; outstanding_amount: number; due_date: string | null } | null;
+
+    if (s !== null && inv !== null && (s.phone !== null || s.email !== null)) {
+      const commPayload: Record<string, string> = {
+        trigger_event:   'invoice_overdue',
+        organization_id: orgId,
+        förnamn:         s.first_name ?? '',
+        fakturanr:       inv.invoice_number ?? '',
+        belopp:          inv.outstanding_amount !== undefined ? String(inv.outstanding_amount) : '',
+        förfallodatum:   inv.due_date ?? '',
+      };
+      if (s.phone !== null) commPayload['student_phone'] = s.phone;
+      if (s.email !== null) commPayload['student_email'] = s.email;
+
+      const { error: enqueueErr } = await client.rpc('insert_outbox_event', {
+        p_event_type:      'Communication.Requested',
+        p_channel:         'internal',
+        p_payload:         commPayload,
+        p_organization_id: orgId,
+        p_causation_id:    event.id,
+      });
+      if (enqueueErr) {
+        logger.warn('invoice_reminder_sent.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        return { success: false, error: String(enqueueErr) };
+      }
+    }
+  } catch (notifErr) {
+    logger.warn('invoice_reminder_sent.notification_error', { event_id: event.id, error: String(notifErr) });
+    return { success: false, error: String(notifErr) };
+  }
+
   return { success: true };
 }
 
