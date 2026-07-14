@@ -1,4 +1,5 @@
 import React, { type ReactNode } from 'react';
+import { logger } from '@platform/utils';
 import { ErrorFallback } from './ErrorFallback.js';
 
 interface ErrorBoundaryState {
@@ -27,9 +28,10 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   override componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('[ErrorBoundary] Caught error:', error, info);
+    logger.error('[ErrorBoundary] Caught error', error, {
+      componentStack: info.componentStack ?? undefined,
+    });
     this.props.onError?.(error, info);
-    // TODO: Forward to Sentry or monitoring service
   }
 
   handleReset = (): void => {

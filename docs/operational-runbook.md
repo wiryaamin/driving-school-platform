@@ -339,3 +339,36 @@ If a function is stuck in a bad state (cold-start loop):
 supabase functions delete <function-name> --project-ref ulgsndzfksphquqakelq
 supabase functions deploy <function-name> --project-ref ulgsndzfksphquqakelq
 ```
+
+---
+
+## 11. Frontend Error Monitoring
+
+The SPA (`apps/web`) forwards production client-side errors to Sentry through the existing `@platform/utils` logger — there is no separate/parallel reporting path. `logger.error(...)` (already used throughout `apps/web/src`) is the single call site every error goes through; `apps/web/src/core/monitoring/index.ts` registers the Sentry sink that `logger.error()` forwards to.
+
+### What is captured
+- React rendering failures — `apps/web/src/shared/components/errors/ErrorBoundary.tsx` (mounted once, around `AppRouter`) calls `logger.error()` from `componentDidCatch`.
+- Runtime exceptions and unhandled promise rejections — captured automatically by the Sentry SDK's default `GlobalHandlers` integration once `Sentry.init()` runs (no hand-rolled `window.onerror`/`unhandledrejection` listeners were added, to avoid a second, parallel capture path).
+- Bootstrap failures (i18n init) — `apps/web/src/main.tsx`'s top-level `.catch()`, which runs before the React tree exists.
+
+### Enable/disable behavior
+Monitoring is environment-aware and **off by default**:
+- Never initializes in a development build, regardless of configuration (`import.meta.env.PROD` must be true).
+- Never initializes without `VITE_SENTRY_DSN` set. Empty by default in `.env.example`.
+- When disabled, the Sentry SDK is fully dead-code-eliminated from the production bundle (confirmed: ~0.03 kB `monitoring` chunk with no DSN vs. ~86 kB with one set) — there is no runtime or bundle-size cost until activated.
+- Console logging (dev and prod) is unchanged either way — monitoring is additive, not a replacement.
+
+### Activating it (once a Sentry account/project exists)
+1. Create a Sentry project (React platform), EU data region recommended for GDPR alignment with the platform's Sweden-first posture.
+2. Set `VITE_SENTRY_DSN` in the production build environment (CI/hosting provider env vars — never commit a real DSN to `.env.local`).
+3. Optional, for readable production stack traces: set `build.sourcemap` to `'hidden'` in `apps/web/vite.config.ts` and add `@sentry/vite-plugin` with a `SENTRY_AUTH_TOKEN` to upload and strip source maps from the deployed bundle. Not enabled by default — shipping source maps without an upload-and-delete step would expose readable source in `dist/`.
+4. Redeploy the frontend (`pnpm build`, then deploy `dist/` as usual — no Edge Function or backend change is involved).
+5. Verify: trigger a test error (e.g. temporarily throw inside a route component) and confirm the event appears in the Sentry project.
+
+### Privacy / GDPR
+- `sendDefaultPii` is explicitly `false` — no request bodies, cookies, or IP-derived PII are attached by default.
+- Only non-PII operational tags are attached (`organization_id`, `role`, `is_platform_admin`, `subscription_tier`), set from `AuthProvider` via `setMonitoringTags()`. Email, name, and personnummer are never sent — `beforeSend` additionally strips `email`/`ip_address`/`username` defensively if ever present.
+- Performance monitoring and session replay are explicitly disabled (`tracesSampleRate: 0`, `replaysSessionSampleRate: 0`, `replaysOnErrorSampleRate: 0`) — this integration is error monitoring only.
+
+### Finding errors
+Once activated: Sentry project → Issues, filtered by `environment` (`production`/`staging`) and the `organization_id`/`role` tags for tenant-specific triage. Correlate with backend Edge Function logs (Section 5 above) using the timestamp and, where the error originated from an API call, the `X-Correlation-ID`.

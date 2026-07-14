@@ -12,6 +12,7 @@ interface ImportMetaEnv {
   readonly VITE_FEATURE_CORPORATE_PORTAL: string;
   readonly VITE_ENABLE_QUERY_DEVTOOLS: string;
   readonly VITE_ENABLE_DEBUG_LOGGING: string;
+  readonly VITE_SENTRY_DSN: string;
 }
 
 interface ImportMeta {

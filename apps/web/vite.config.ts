@@ -51,6 +51,7 @@ export default defineConfig({
           forms: ['react-hook-form', '@hookform/resolvers', 'zod'],
           i18n: ['i18next', 'react-i18next'],
           utils: ['date-fns', 'date-fns-tz'],
+          monitoring: ['@sentry/react'],
         },
       },
     },

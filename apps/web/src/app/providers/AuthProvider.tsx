@@ -3,6 +3,7 @@ import { supabase } from '@core/api/supabase.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { queryClient } from './QueryProvider.js';
 import { logger } from '@platform/utils';
+import { setMonitoringTags, clearMonitoringTags } from '@core/monitoring/index.js';
 import { parseJwtClaims } from '@/lib/auth/jwt.js';
 import type { AuthUser, JwtClaims, Organization, UserProfile } from '@platform/types';
 import type { Session } from '@supabase/supabase-js';
@@ -51,6 +52,23 @@ async function fetchWithRetry<T>(
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { setSession, clearSession, setLoading } = useSessionStore();
+  const monitoringUser = useSessionStore(state => state.user);
+
+  // Reacts to every setSession/clearSession call site via the store itself
+  // (not instrumented per-call-site) — attaches non-PII org/role context to
+  // error reports, never email or name.
+  useEffect(() => {
+    if (monitoringUser) {
+      setMonitoringTags({
+        organizationId: monitoringUser.organization_id,
+        role: monitoringUser.role,
+        isPlatformAdmin: monitoringUser.is_platform_admin,
+        subscriptionTier: monitoringUser.subscription_tier,
+      });
+    } else {
+      clearMonitoringTags();
+    }
+  }, [monitoringUser]);
 
   // Serializes the JWT-decode → setSession path so concurrent auth events
   // (e.g. SIGNED_IN + USER_UPDATED) don't race on initial session setup.

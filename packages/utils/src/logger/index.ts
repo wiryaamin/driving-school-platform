@@ -1,7 +1,9 @@
 /**
  * Platform logger.
  * In development: rich console output.
- * In production: structured JSON (ready for Sentry / Datadog integration).
+ * In production: structured JSON, plus forwarding to an injected error
+ * reporter (see setErrorReporter) — the platform's single monitoring
+ * integration point, wired by apps/web at startup.
  */
 
 // process may or may not exist (Node vs browser) — declare narrowly so TypeScript
@@ -20,6 +22,20 @@ interface LogEntry {
   context?: LogContext;
   error?: Error | unknown;
   timestamp: string;
+}
+
+/**
+ * Reports error-level log entries to an external monitoring service.
+ * Injected via setErrorReporter — this package stays provider-agnostic
+ * (no monitoring SDK is a dependency of @platform/utils itself).
+ */
+type ErrorReporter = (entry: LogEntry) => void;
+
+let errorReporter: ErrorReporter | null = null;
+
+/** Registers (or clears, via null) the active error reporter. Call once at app startup. */
+export function setErrorReporter(reporter: ErrorReporter | null): void {
+  errorReporter = reporter;
 }
 
 function formatEntry(entry: LogEntry): string {
@@ -82,6 +98,6 @@ export const logger = {
     } else {
       console.error(JSON.stringify({ ...entry, error: String(error) }));
     }
-    // TODO: Forward to Sentry or equivalent monitoring service
+    errorReporter?.(entry);
   },
 };

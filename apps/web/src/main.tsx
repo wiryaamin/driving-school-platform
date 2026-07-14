@@ -3,6 +3,12 @@ import ReactDOM from 'react-dom/client';
 import App from './App.js';
 import './globals.css';
 import { initAdminI18n } from '@platform/i18n';
+import { logger } from '@platform/utils';
+import { initMonitoring } from '@/core/monitoring/index.js';
+
+// Must run before anything else so unhandled exceptions and promise
+// rejections during bootstrap are captured too (Action 8).
+initMonitoring();
 
 // Register service worker for PWA + push notification support
 if ('serviceWorker' in navigator) {
@@ -25,7 +31,7 @@ initAdminI18n().then(() => {
     </React.StrictMode>
   );
 }).catch((err: unknown) => {
-  console.error('[Platform] Bootstrap failed:', err);
+  logger.error('[Platform] Bootstrap failed', err);
   const root = document.getElementById('root');
   if (root) {
     root.innerHTML =
