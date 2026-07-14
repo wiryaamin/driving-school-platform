@@ -13,6 +13,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { formatDate, formatDateTime } from '../lib/financeUtils.js';
 import {
@@ -22,9 +23,14 @@ import {
   useCaptureSnapshot, useRunConsistencyCheck,
   useCreateFiscalYear, useValidateFiscalYear,
   usePostRetainedEarnings, useCloseFiscalYear, useRolloverOpeningBalances,
+  useAssignPeriodToFiscalYear,
   type PeriodReadiness, type FiscalYearOverview, type ValidationResult,
   type PeriodStatus, type FiscalYearStatus,
 } from '../hooks/useFinancialClose.js';
+import {
+  useFinancialPeriods, useCreateFinancialPeriod,
+  type FinancialPeriod,
+} from '../hooks/useReconciliation.js';
 
 // ─── Status badges ────────────────────────────────────────────────────────────
 
@@ -522,6 +528,146 @@ function CreateFiscalYearSheet({ open, onClose }: { open: boolean; onClose: () =
   );
 }
 
+// ─── Create financial period dialog ──────────────────────────────────────────
+
+function CreatePeriodDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const create = useCreateFinancialPeriod();
+  const [name,  setName]  = useState('');
+  const [start, setStart] = useState('');
+  const [end,   setEnd]   = useState('');
+
+  function reset() { setName(''); setStart(''); setEnd(''); }
+
+  async function handleSubmit() {
+    if (!name.trim() || !start || !end) {
+      toast({ title: 'Fyll i alla obligatoriska fält', variant: 'destructive' }); return;
+    }
+    try {
+      await create.mutateAsync({ name: name.trim(), period_start: start, period_end: end });
+      toast({ title: `Period "${name.trim()}" skapad` });
+      reset(); onClose();
+    } catch (e) {
+      toast({ title: 'Fel', description: e instanceof Error ? e.message : 'Okänt fel', variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) { reset(); onClose(); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader className="pb-4">
+          <DialogTitle>Ny bokföringsperiod</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Periodnamn <span className="text-destructive">*</span></Label>
+            <Input
+              value={name} onChange={e => setName(e.target.value)}
+              placeholder="T.ex. Jan 2026 eller Q1 2026"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Periodens start <span className="text-destructive">*</span></Label>
+              <Input type="date" value={start} onChange={e => setStart(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Periodens slut <span className="text-destructive">*</span></Label>
+              <Input type="date" value={end} onChange={e => setEnd(e.target.value)} />
+            </div>
+          </div>
+          <Button
+            onClick={() => void handleSubmit()}
+            disabled={!name.trim() || !start || !end || create.isPending}
+            className="w-full"
+          >
+            {create.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+            Skapa period
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Assign period to fiscal year dialog ──────────────────────────────────────
+
+function AssignPeriodDialog({
+  fy, assignedPeriodIds, onClose,
+}: { fy: FiscalYearOverview; assignedPeriodIds: string[]; onClose: () => void }) {
+  const { data: allPeriods = [] } = useFinancialPeriods();
+  const assign = useAssignPeriodToFiscalYear();
+  const [selectedPeriodId, setSelectedPeriodId] = useState('');
+  const [isYearEnd, setIsYearEnd] = useState(false);
+
+  const unassigned = allPeriods.filter(
+    (p: FinancialPeriod) => !assignedPeriodIds.includes(p.id)
+  );
+
+  async function handleAssign() {
+    if (!selectedPeriodId) { toast({ title: 'Välj en period', variant: 'destructive' }); return; }
+    try {
+      await assign.mutateAsync({ fyId: fy.fiscal_year_id, periodId: selectedPeriodId, isYearEnd });
+      const pname = unassigned.find((p: FinancialPeriod) => p.id === selectedPeriodId)?.name ?? '';
+      toast({ title: `Period "${pname}" tilldelad räkenskapsår ${fy.year_number}` });
+      setSelectedPeriodId(''); setIsYearEnd(false); onClose();
+    } catch (e) {
+      toast({ title: 'Fel', description: e instanceof Error ? e.message : 'Okänt fel', variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={v => { if (!v) { setSelectedPeriodId(''); setIsYearEnd(false); onClose(); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Tilldela period — Räkenskapsår {fy.year_number}</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-1">
+          <p className="text-sm text-muted-foreground">
+            Välj en bokföringsperiod att koppla till detta räkenskapsår.
+          </p>
+          {unassigned.length === 0 ? (
+            <p className="text-sm text-amber-600">
+              Inga otilldelade perioder hittades. Skapa en ny bokföringsperiod i fliken Perioder.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              <Label>Period <span className="text-destructive">*</span></Label>
+              <select
+                value={selectedPeriodId}
+                onChange={e => setSelectedPeriodId(e.target.value)}
+                className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+              >
+                <option value="">Välj period…</option>
+                {unassigned.map((p: FinancialPeriod) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({formatDate(p.period_start)} – {formatDate(p.period_end)})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex items-center gap-2.5">
+            <input
+              id="is-year-end"
+              type="checkbox"
+              checked={isYearEnd}
+              onChange={e => setIsYearEnd(e.target.checked)}
+              className="h-4 w-4 rounded border-input"
+            />
+            <Label htmlFor="is-year-end" className="text-sm cursor-pointer">
+              Markera som bokslutsperiod (sista perioden i räkenskapsåret)
+            </Label>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Avbryt</Button>
+          <Button onClick={() => void handleAssign()} disabled={!selectedPeriodId || assign.isPending || unassigned.length === 0}>
+            {assign.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Tilldela'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Fiscal year row ──────────────────────────────────────────────────────────
 
 function FiscalYearRow({ fy, periods }: { fy: FiscalYearOverview; periods: PeriodReadiness[] }) {
@@ -533,6 +679,7 @@ function FiscalYearRow({ fy, periods }: { fy: FiscalYearOverview; periods: Perio
   const [rolloverPeriod, setRolloverPeriod] = useState('');
   const [rolloverOpen, setRolloverOpen] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [assignOpen, setAssignOpen]     = useState(false);
 
   const isClosed = fy.fiscal_year_status === 'closed';
 
@@ -640,6 +787,10 @@ function FiscalYearRow({ fy, periods }: { fy: FiscalYearOverview; periods: Perio
                 </div>
               )}
 
+              <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)}>
+                <Plus className="w-3.5 h-3.5 mr-1.5" /> Tilldela period
+              </Button>
+
               {isClosed === false && (
                 <Button size="sm" variant="outline" onClick={() => setRolloverOpen(true)}>
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rulla ingångssaldon
@@ -649,6 +800,14 @@ function FiscalYearRow({ fy, periods }: { fy: FiscalYearOverview; periods: Perio
           </PermissionGate>
         )}
       </div>
+
+      {assignOpen && (
+        <AssignPeriodDialog
+          fy={fy}
+          assignedPeriodIds={[]}
+          onClose={() => setAssignOpen(false)}
+        />
+      )}
 
       {/* Rollover dialog */}
       <Dialog open={rolloverOpen} onOpenChange={v => { if (!v) { setRolloverPeriod(''); setRolloverOpen(false); } }}>
@@ -713,6 +872,7 @@ export function FinancialClosePage() {
 
   const [selectedPeriod,   setSelectedPeriod]   = useState<PeriodReadiness | null>(null);
   const [createFYOpen,     setCreateFYOpen]      = useState(false);
+  const [createPeriodOpen, setCreatePeriodOpen]  = useState(false);
 
   const stats = {
     open:   periods.filter(p => p.status === 'open').length,
@@ -728,15 +888,23 @@ export function FinancialClosePage() {
         description="Mjuk- och hårdstängning av bokföringsperioder, räkenskapsårsbokslut"
         breadcrumbs={[{ label: 'Hem' }, { label: 'Ekonomi', href: '/finance' }, { label: 'Periodstängning' }]}
         actions={
-          <PermissionGate permission={Permissions.FINANCE_YEAR_END_MANAGE}>
-            <Button variant="outline" onClick={() => setCreateFYOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Nytt räkenskapsår
-            </Button>
-          </PermissionGate>
+          <div className="flex items-center gap-2">
+            <PermissionGate permission={Permissions.FINANCE_PERIOD_MANAGE}>
+              <Button variant="outline" onClick={() => setCreatePeriodOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Ny period
+              </Button>
+            </PermissionGate>
+            <PermissionGate permission={Permissions.FINANCE_YEAR_END_MANAGE}>
+              <Button variant="outline" onClick={() => setCreateFYOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Nytt räkenskapsår
+              </Button>
+            </PermissionGate>
+          </div>
         }
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:financial-close:run">
         <PermissionGate
           permission={Permissions.FINANCE_CLOSE_READ}
           fallback={
@@ -864,10 +1032,12 @@ export function FinancialClosePage() {
             </TabsContent>
           </Tabs>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
 
       <PeriodDetailSheet period={selectedPeriod} onClose={() => setSelectedPeriod(null)} />
       <CreateFiscalYearSheet open={createFYOpen} onClose={() => setCreateFYOpen(false)} />
+      <CreatePeriodDialog open={createPeriodOpen} onClose={() => setCreatePeriodOpen(false)} />
     </PageLayout>
   );
 }

@@ -1,8 +1,15 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, AlertTriangle, Clock, CheckCircle2 } from 'lucide-react';
+import {
+  TrendingUp, AlertTriangle, Clock, CheckCircle2,
+  BookOpen, Percent, Lock, Download, Landmark, Users, BarChart3, Settings,
+  Plug2, Building2, CalendarClock, ShieldCheck, History,
+  Smartphone, BadgePercent, BellRing, Gift, CircleDollarSign, Wallet,
+} from 'lucide-react';
 import { supabase } from '@core/api/supabase.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { Card, CardContent, CardHeader, CardTitle } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePaymentList, useInvoiceList } from '../hooks/useFinance.js';
@@ -13,10 +20,10 @@ import { formatCurrency, formatDate, formatDateTime } from '../lib/financeUtils.
 // ─── Overview stats query ─────────────────────────────────────────────────────
 
 interface OverviewStats {
-  invoicedThisMonth: number;
-  paidThisMonth:     number;
-  outstanding:       number;
-  overdueCount:      number;
+  totalInvoiced: number;
+  paidThisMonth: number;
+  outstanding:   number;
+  overdueCount:  number;
 }
 
 function useOverviewStats() {
@@ -30,7 +37,7 @@ function useOverviewStats() {
         supabase
           .from('invoices')
           .select('status, total_amount, outstanding_amount')
-          .is('deleted_at', null),
+          .is('void_at', null),
         supabase
           .from('payments')
           .select('amount, status, paid_at, created_at')
@@ -40,7 +47,7 @@ function useOverviewStats() {
       const invoices = (invoicesRes.data ?? []) as Array<{ status: string; total_amount: number | null; outstanding_amount: number | null }>;
       const payments = (paymentsRes.data ?? []) as Array<{ amount: number | null; status: string; paid_at: string | null; created_at: string }>;
 
-      const invoicedThisMonth = invoices
+      const totalInvoiced = invoices
         .reduce((s, i) => s + (i.total_amount ?? 0), 0);
 
       const paidThisMonth = payments
@@ -53,10 +60,74 @@ function useOverviewStats() {
 
       const overdueCount = invoices.filter((i) => i.status === 'overdue').length;
 
-      return { invoicedThisMonth, paidThisMonth, outstanding, overdueCount };
+      return { totalInvoiced, paidThisMonth, outstanding, overdueCount };
     },
     staleTime: 60_000,
   });
+}
+
+// ─── Finance shortcuts section ────────────────────────────────────────────────
+
+interface ShortcutItem {
+  icon:  React.ComponentType<{ className?: string }>;
+  label: string;
+  sub:   string;
+  href:  string;
+}
+
+const FINANCE_SHORTCUTS: ShortcutItem[] = [
+  { icon: BookOpen,     label: 'Journalboken',           sub: 'Dubbelbokhållning & verifikat',  href: '/finance/ledger' },
+  { icon: Percent,      label: 'Momsperioder',           sub: 'Momsredovisning & låsning',      href: '/finance/vat' },
+  { icon: Lock,         label: 'Periodstängning',        sub: 'Mjuk/hård stängning & bokslut',  href: '/finance/close' },
+  { icon: Download,     label: 'SIE4-exportfiler',       sub: 'Bokföringsfiler (SHA-256)',      href: '/finance/sie4' },
+  { icon: Landmark,     label: 'Bankavstämning',         sub: 'Importera kontoutdrag',          href: '/finance/reconciliation' },
+  { icon: Users,        label: 'Lönehantering',          sub: 'Löner & arbetsgivaravgift',      href: '/finance/payroll' },
+  { icon: BarChart3,    label: 'Rapporter',              sub: 'Finansiella rapporter & BAS',    href: '/finance/financial-reports' },
+  { icon: Settings,     label: 'Inställningar',          sub: 'Svenska kontoinst. & OCR-ref.',  href: '/finance/settings' },
+  { icon: Plug2,        label: 'Fortnox',                sub: 'Bokföringsintegration',          href: '/finance/fortnox' },
+  { icon: Building2,    label: 'Anläggningstillgångar',  sub: 'Avskrivningar & inventarier',    href: '/finance/assets' },
+  { icon: CalendarClock,label: 'Periodiseringar',        sub: 'Förutbetalda & upplupna poster', href: '/finance/accruals' },
+  { icon: ShieldCheck,  label: 'Myndighetsexporter',     sub: 'Regulatoriska exportfiler',      href: '/finance/regulatory' },
+  { icon: History,      label: 'Journalreplay',          sub: 'Verifiera bokföringshistorik',   href: '/finance/replay' },
+];
+
+const PAYMENT_SHORTCUTS: ShortcutItem[] = [
+  { icon: Smartphone,       label: 'Betalningsbegäran', sub: 'Swish- & betalningsförfrågningar', href: '/finance/requests' },
+  { icon: BadgePercent,     label: 'Rabatter',          sub: 'Rabattkoder & kampanjer',           href: '/finance/discounts' },
+  { icon: BellRing,         label: 'Påminnelser',       sub: 'Betalningspåminnelser & inkasso',   href: '/finance/dunning' },
+  { icon: Gift,             label: 'Presentkort',       sub: 'Sälj & hantera presentkort',        href: '/finance/gift-cards' },
+  { icon: CircleDollarSign, label: 'Kundekonomi',       sub: 'Kundsaldon & reskontra',             href: '/finance/kundekonomi' },
+  { icon: Wallet,           label: 'Plånbok',           sub: 'Elevernas tillgodohavanden',         href: '/finance/wallet' },
+];
+
+function FinanceShortcutsSection({ title, items }: { title: string; items: ShortcutItem[] }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+        {title}
+      </p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {items.map((s) => {
+          const Icon = s.icon;
+          return (
+            <Link
+              key={s.href}
+              to={s.href}
+              className="flex items-center gap-3 rounded-lg border border-border bg-card p-4 hover:bg-accent/50 hover:border-primary/30 transition-colors group"
+            >
+              <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center shrink-0 group-hover:bg-primary/10 transition-colors">
+                <Icon className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground leading-tight">{s.label}</p>
+                <p className="text-xs text-muted-foreground mt-0.5 leading-tight">{s.sub}</p>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ─── KPI card ─────────────────────────────────────────────────────────────────
@@ -283,129 +354,12 @@ export function FinanceOverviewPage() {
   }, []);
 
   return (
+    <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
     <PageLayout>
       <PageHeader
         title="Ekonomiöversikt"
-        description={`Översikt för ${monthLabel}`}
+        description={`Ekonomi och bokföring — ${monthLabel}`}
         breadcrumbs={[{ label: 'Hem' }, { label: 'Ekonomi' }]}
-        actions={
-          <div className="flex items-center gap-2">
-            <Link
-              to="/finance/invoices"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Fakturor
-            </Link>
-            <Link
-              to="/finance/payments"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Betalningar
-            </Link>
-            <Link
-              to="/finance/reconciliation"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Bankavstämning
-            </Link>
-            <Link
-              to="/finance/payroll"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Lönehantering
-            </Link>
-            <Link
-              to="/finance/refunds"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Återbetalningar
-            </Link>
-            <Link
-              to="/finance/discounts"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Rabatter
-            </Link>
-            <Link
-              to="/finance/close"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Periodstängning
-            </Link>
-            <Link
-              to="/finance/dunning"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Inkasso
-            </Link>
-            <Link
-              to="/finance/assets"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Anläggningstillgångar
-            </Link>
-            <Link
-              to="/finance/vat"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Momsperioder
-            </Link>
-            <Link
-              to="/finance/ledger"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Journalboken
-            </Link>
-            <Link
-              to="/finance/accruals"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Periodiseringar
-            </Link>
-            <Link
-              to="/finance/settings"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Inställningar
-            </Link>
-            <Link
-              to="/finance/packages"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Paketkatalog
-            </Link>
-            <Link
-              to="/finance/regulatory"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Regulatoriska exporter
-            </Link>
-            <Link
-              to="/finance/financial-reports"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Finansiella rapporter
-            </Link>
-            <Link
-              to="/finance/sie4"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              SIE4-exportfiler
-            </Link>
-            <Link
-              to="/finance/wallet"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Plånbok
-            </Link>
-            <Link
-              to="/finance/replay"
-              className="inline-flex items-center justify-center h-9 px-4 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Ledger Replay
-            </Link>
-          </div>
-        }
       />
 
       <PageContent>
@@ -415,7 +369,7 @@ export function FinanceOverviewPage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
               title="Fakturerat totalt"
-              value={formatCurrency(stats?.invoicedThisMonth ?? 0)}
+              value={formatCurrency(stats?.totalInvoiced ?? 0)}
               sub="Alla fakturor (exkl. makulerade)"
               icon={TrendingUp}
               iconClass="text-blue-500"
@@ -449,6 +403,10 @@ export function FinanceOverviewPage() {
             />
           </div>
 
+          {/* Finance shortcuts */}
+          <FinanceShortcutsSection title="Bokföring & Redovisning" items={FINANCE_SHORTCUTS} />
+          <FinanceShortcutsSection title="Betalningar & Kundhantering" items={PAYMENT_SHORTCUTS} />
+
           {/* Overdue alert — only shown when there are overdue invoices */}
           <OverdueSection />
 
@@ -461,5 +419,6 @@ export function FinanceOverviewPage() {
         </div>
       </PageContent>
     </PageLayout>
+    </PermissionGate>
   );
 }

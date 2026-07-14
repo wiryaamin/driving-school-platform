@@ -1,32 +1,45 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { ChevronRight, HeartHandshake, Gift, Share2, Trophy } from 'lucide-react';
-import { Button } from '@platform/ui';
-import { cn } from '@/lib/utils.js';
+import { Button, Skeleton } from '@platform/ui';
+import {
+  useCampaigns, type Campaign, type CampaignStatus,
+} from '@modules/campaigns/hooks/useCampaigns.js';
 
-interface Campaign {
-  id:      number;
-  name:    string;
-  reward:  string;
-  active:  boolean;
-  uses:    number;
+function rewardLabel(c: Campaign): string {
+  if (c.bonus_lessons != null) return `${c.bonus_lessons} gratislektioner`;
+  if (c.discount_value != null) {
+    if (c.discount_is_pct) return `${(c.discount_value * 100).toFixed(0)}% rabatt`;
+    return `${c.discount_value} kr rabatt`;
+  }
+  return '—';
 }
 
-const EXAMPLE_CAMPAIGNS: Campaign[] = [
-  { id: 1, name: 'Vänkampanj vår 2025', reward: '500 kr rabatt',     active: true,  uses: 12 },
-  { id: 2, name: 'Sommarkampanj 2024',   reward: '1 gratis lektion', active: false, uses: 8  },
-];
+function statusLabel(s: CampaignStatus): string {
+  const map: Record<CampaignStatus, string> = {
+    draft: 'Utkast', scheduled: 'Planerad', active: 'Aktiv',
+    paused: 'Pausad', expired: 'Utgången', archived: 'Arkiverad',
+  };
+  return map[s];
+}
+
+function statusColor(s: CampaignStatus): string {
+  const map: Record<CampaignStatus, string> = {
+    active:    'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+    scheduled: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+    paused:    'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+    draft:     'bg-muted text-muted-foreground',
+    expired:   'bg-muted text-muted-foreground',
+    archived:  'bg-muted text-muted-foreground',
+  };
+  return map[s];
+}
 
 // ─── VärvaEnVänPage ───────────────────────────────────────────────────────────
 
 export function VärvaEnVänPage() {
-  const [campaigns, setCampaigns] = useState<Campaign[]>(EXAMPLE_CAMPAIGNS);
-
-  function toggle(id: number) {
-    setCampaigns(prev =>
-      prev.map(c => c.id === id ? { ...c, active: !c.active } : c),
-    );
-  }
+  const navigate = useNavigate();
+  const { data, isLoading } = useCampaigns({ per_page: 50 });
+  const campaigns = (data?.data ?? []).filter((c) => c.status !== 'archived');
 
   return (
     <div className="max-w-xl space-y-4">
@@ -41,8 +54,8 @@ export function VärvaEnVänPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Ny kampanj
+          <Button size="sm" onClick={() => navigate('/campaigns')}>
+            Hantera kampanjer
           </Button>
         </div>
       </div>
@@ -84,37 +97,42 @@ export function VärvaEnVänPage() {
       </div>
 
       {/* Campaign list */}
-      {campaigns.length === 0 ? (
+      {isLoading ? (
+        <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+          {[1, 2].map((i) => <Skeleton key={i} className="h-11 w-full" />)}
+        </div>
+      ) : campaigns.length === 0 ? (
         <div className="rounded-xl border border-border bg-card py-12 flex flex-col items-center gap-3 text-center">
           <HeartHandshake className="w-8 h-8 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">Inga kampanjer skapade ännu.</p>
-          <Button size="sm" variant="outline">Skapa din första kampanj</Button>
+          <Button size="sm" variant="outline" onClick={() => navigate('/campaigns')}>
+            Skapa din första kampanj
+          </Button>
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
           <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-2.5 bg-muted/30">
             <span className="text-xs font-semibold text-muted-foreground">Kampanj</span>
             <span className="text-xs font-semibold text-muted-foreground">Belöning</span>
-            <span className="text-xs font-semibold text-muted-foreground">Användningar</span>
             <span className="text-xs font-semibold text-muted-foreground">Status</span>
+            <span />
           </div>
-          {campaigns.map(c => (
-            <div key={c.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-3.5 hover:bg-accent/20 transition-colors">
+          {campaigns.map((c) => (
+            <div
+              key={c.id}
+              className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-3.5 hover:bg-accent/20 transition-colors"
+            >
               <span className="text-sm font-medium text-foreground">{c.name}</span>
-              <span className="text-sm text-muted-foreground">{c.reward}</span>
-              <span className="text-sm text-muted-foreground text-center">{c.uses}</span>
-              <button
-                type="button"
-                onClick={() => toggle(c.id)}
-                className={cn(
-                  'text-xs font-semibold px-3 py-1 rounded-full transition-colors',
-                  c.active
-                    ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/40 dark:text-green-300'
-                    : 'bg-muted text-muted-foreground hover:bg-muted/80',
-                )}
+              <span className="text-sm text-muted-foreground">{rewardLabel(c)}</span>
+              <span className={`text-xs font-semibold px-3 py-1 rounded-full ${statusColor(c.status)}`}>
+                {statusLabel(c.status)}
+              </span>
+              <Link
+                to={`/campaigns/${c.id}`}
+                className="text-xs text-primary hover:underline whitespace-nowrap"
               >
-                {c.active ? 'Aktiv' : 'Inaktiv'}
-              </button>
+                Visa →
+              </Link>
             </div>
           ))}
         </div>

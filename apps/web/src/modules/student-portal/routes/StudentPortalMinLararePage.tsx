@@ -9,7 +9,7 @@ import {
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
@@ -212,7 +212,7 @@ export function StudentPortalMinLararePage() {
           {/* Upcoming lessons together */}
           {upcomingWithInstructor.length > 0 && (
             <div>
-              <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide mb-2">
+              <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-2">
                 Kommande lektioner med {instructor.first}
               </p>
               <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm divide-y divide-gray-50">

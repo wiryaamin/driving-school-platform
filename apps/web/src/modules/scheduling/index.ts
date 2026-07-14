@@ -23,7 +23,7 @@ export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBooki
 export type { LessonBooking, BookingListResponse, BookingListMeta } from './hooks/useBookings.js';
 
 // ─── Waitlist query hooks + keys ──────────────────────────────────────────────
-export { useWaitlistForSlot, useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, waitlistKeys } from './hooks/useWaitlist.js';
+export { useWaitlistForSlot, useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, useRemoveFromWaitlist, waitlistKeys } from './hooks/useWaitlist.js';
 export type {
   WaitlistEntry, WaitlistStatus, WaitlistTab,
   WaitlistEntryRich, WaitlistStudentRef, WaitlistListParams, WaitlistListResponse,

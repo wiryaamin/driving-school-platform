@@ -3,6 +3,9 @@ import { useNavigate, Link } from 'react-router-dom';
 import { ChevronRight, Send, Calendar, Phone, Mail } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useSendMessage, useCommTemplates, useChannelConfigs } from '../hooks/useCommunication.js';
 import { ChannelIcon, CHANNEL_META } from '../components/ChannelIcon.js';
 import type { CommChannel } from '../hooks/useCommunication.js';
@@ -75,6 +78,8 @@ export function ComposeMessagePage() {
         <span className="text-foreground">Nytt meddelande</span>
       </div>
 
+      <SubscriptionGate feature="communication:templates:manage">
+
       {/* Channel selector */}
       <div className="rounded-xl border border-border bg-card p-5 space-y-3">
         <h2 className="text-sm font-semibold text-foreground">Välj kanal</h2>
@@ -111,7 +116,7 @@ export function ComposeMessagePage() {
             <span>⚠</span>
             <span>
               {CHANNEL_META[channel].label} är inte aktiverat.{' '}
-              <Link to={`/communication/channels/${channel}`} className="underline">Konfigurera kanalen</Link> för att skicka.
+              <Link to="/communication/settings" className="underline">Konfigurera kanalen</Link> för att skicka.
             </span>
           </div>
         )}
@@ -231,25 +236,30 @@ export function ComposeMessagePage() {
       {/* Actions */}
       <div className="flex items-center gap-3 justify-end">
         <Button variant="outline" onClick={() => navigate('/communication')}>Avbryt</Button>
-        {scheduled && (
-          <Button
-            variant="outline"
-            onClick={() => handleSend(new Date(scheduled).toISOString())}
-            disabled={send.isPending}
-          >
-            <Calendar className="w-4 h-4 mr-1.5" />
-            Schemalägg
-          </Button>
-        )}
-        <Button
-          className="bg-green-500 hover:bg-green-600 text-white"
-          onClick={() => handleSend()}
-          disabled={send.isPending}
-        >
-          <Send className="w-4 h-4 mr-1.5" />
-          {send.isPending ? 'Skickar…' : 'Skicka nu'}
-        </Button>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <>
+            {scheduled && (
+              <Button
+                variant="outline"
+                onClick={() => handleSend(new Date(scheduled).toISOString())}
+                disabled={send.isPending}
+              >
+                <Calendar className="w-4 h-4 mr-1.5" />
+                Schemalägg
+              </Button>
+            )}
+            <Button
+              className="bg-green-500 hover:bg-green-600 text-white"
+              onClick={() => handleSend()}
+              disabled={send.isPending}
+            >
+              <Send className="w-4 h-4 mr-1.5" />
+              {send.isPending ? 'Skickar…' : 'Skicka nu'}
+            </Button>
+          </>
+        </PermissionGate>
       </div>
+      </SubscriptionGate>
     </div>
   );
 }

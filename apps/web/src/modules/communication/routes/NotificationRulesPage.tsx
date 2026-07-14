@@ -3,6 +3,9 @@ import { Plus, Pencil, Trash2, X, Check, Info, ToggleLeft, ToggleRight, CheckCir
 import { cn } from '@/lib/utils.js';
 import { Button, toast, Skeleton } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useNotificationRules,
   useCommTemplates,
@@ -27,7 +30,8 @@ const TRIGGER_EVENTS = [
   { value: 'booking_reminder_24h',       label: 'Lektionspåminnelse (24 tim)' },
   { value: 'booking_reminder_same_day',  label: 'Lektionspåminnelse (samma dag)' },
   { value: 'instructor_schedule_daily',  label: 'Instruktörens dagsprogram' },
-  { value: 'invoice_created',            label: 'Faktura skapad' },
+  { value: 'waitlist_promoted',          label: 'Väntelistepromovering' },
+  { value: 'invoice_issued',             label: 'Faktura skapad' },
   { value: 'invoice_due',                label: 'Faktura förfaller' },
   { value: 'invoice_overdue',            label: 'Faktura försenad' },
   { value: 'student_created',            label: 'Ny elev registrerad' },
@@ -159,9 +163,11 @@ function RuleForm({
         <Button variant="outline" size="sm" onClick={onCancel}>
           <X className="w-3.5 h-3.5 mr-1" />Avbryt
         </Button>
-        <Button size="sm" onClick={handleSubmit}>
-          <Check className="w-3.5 h-3.5 mr-1" />Spara regel
-        </Button>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <Button size="sm" onClick={handleSubmit}>
+            <Check className="w-3.5 h-3.5 mr-1" />Spara regel
+          </Button>
+        </PermissionGate>
       </div>
     </div>
   );
@@ -200,37 +206,51 @@ function RuleRow({
         <span className="text-xs text-muted-foreground">{recipientLabel}</span>
       </td>
       <td className="px-4 py-3">
-        <button
-          type="button"
-          onClick={() => onToggle(rule.id, !rule.enabled)}
-          className="flex items-center gap-1.5 text-xs"
-          title={rule.enabled ? 'Inaktivera' : 'Aktivera'}
+        <PermissionGate
+          permission={Permissions.COMMUNICATIONS_CREATE}
+          fallback={
+            <span className={cn('flex items-center gap-1.5 text-xs', rule.enabled ? 'text-primary' : 'text-muted-foreground')}>
+              {rule.enabled
+                ? <ToggleRight className="w-4 h-4 text-primary" />
+                : <ToggleLeft  className="w-4 h-4 text-muted-foreground" />}
+              {rule.enabled ? 'Aktiv' : 'Inaktiv'}
+            </span>
+          }
         >
-          {rule.enabled
-            ? <ToggleRight className="w-4 h-4 text-primary" />
-            : <ToggleLeft  className="w-4 h-4 text-muted-foreground" />}
-          <span className={rule.enabled ? 'text-primary' : 'text-muted-foreground'}>
-            {rule.enabled ? 'Aktiv' : 'Inaktiv'}
-          </span>
-        </button>
+          <button
+            type="button"
+            onClick={() => onToggle(rule.id, !rule.enabled)}
+            className="flex items-center gap-1.5 text-xs"
+            title={rule.enabled ? 'Inaktivera' : 'Aktivera'}
+          >
+            {rule.enabled
+              ? <ToggleRight className="w-4 h-4 text-primary" />
+              : <ToggleLeft  className="w-4 h-4 text-muted-foreground" />}
+            <span className={rule.enabled ? 'text-primary' : 'text-muted-foreground'}>
+              {rule.enabled ? 'Aktiv' : 'Inaktiv'}
+            </span>
+          </button>
+        </PermissionGate>
       </td>
       <td className="px-4 py-3 whitespace-nowrap">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => onEdit(rule)}
-            className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-            title="Redigera"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => onDelete(rule.id)}
-            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-            title="Ta bort"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onEdit(rule)}
+              className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+              title="Redigera"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => onDelete(rule.id)}
+              className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              title="Ta bort"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </PermissionGate>
       </td>
     </tr>
   );
@@ -460,12 +480,14 @@ function SnabbstartBanner({ onSeeded }: { onSeeded: () => void }) {
         </div>
       </div>
       <div className="flex items-center gap-3 pt-1">
-        <Button size="sm" onClick={handleSeed} disabled={seedDefaults.isPending}>
-          {seedDefaults.isPending
-            ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-            : <Zap className="w-3.5 h-3.5 mr-1.5" />}
-          {seedDefaults.isPending ? 'Skapar…' : 'Skapa standardregler'}
-        </Button>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <Button size="sm" onClick={handleSeed} disabled={seedDefaults.isPending}>
+            {seedDefaults.isPending
+              ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              : <Zap className="w-3.5 h-3.5 mr-1.5" />}
+            {seedDefaults.isPending ? 'Skapar…' : 'Skapa standardregler'}
+          </Button>
+        </PermissionGate>
         <p className="text-[10px] text-muted-foreground">Idempotent — säkert att köra flera gånger</p>
       </div>
     </div>
@@ -526,6 +548,7 @@ export function NotificationRulesPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* Reminder health banner */}
         <ReminderHealthBanner rules={rules} />
@@ -550,13 +573,15 @@ export function NotificationRulesPage() {
           <p className="text-xs text-muted-foreground">
             {rules.length} regler konfigurerade
           </p>
-          <Button
-            size="sm"
-            onClick={() => { setEditing({}); setIsNew(true); }}
-          >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Lägg till regel
-          </Button>
+          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+            <Button
+              size="sm"
+              onClick={() => { setEditing({}); setIsNew(true); }}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              Lägg till regel
+            </Button>
+          </PermissionGate>
         </div>
 
         {/* Table */}
@@ -622,6 +647,7 @@ export function NotificationRulesPage() {
           <ReminderPreviewPanel rules={rules} />
         </div>
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

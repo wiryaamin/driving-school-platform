@@ -7,7 +7,7 @@ import {
 import { useGuardianBookings, type GuardianBooking } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 function formatDateFull(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE', {

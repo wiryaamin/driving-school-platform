@@ -33,7 +33,6 @@ import { KommunikationConfigPage }   from './KommunikationConfigPage.js';
 import { GemensammaFraserPage }      from './GemensammaFraserPage.js';
 import { MeddelandemallarPage }      from './MeddelandemallarPage.js';
 import { AutomatiseringsReglerPage } from './AutomatiseringsReglerPage.js';
-import { UndervisningsplanPage }    from './UndervisningsplanPage.js';
 import { MaterialsSettingsPage }   from './MaterialsSettingsPage.js';
 import { UtbildningsbehörigheterPage } from './UtbildningsbehörigheterPage.js';
 import { WebbplatsAllmäntPage }    from './WebbplatsAllmäntPage.js';
@@ -43,6 +42,7 @@ import { EnkäterPage }             from './EnkäterPage.js';
 import { SkillsterPage }           from './SkillsterPage.js';
 import { TeoricentralenPage }      from './TeoricentralenPage.js';
 import { SysteminställningarPage } from './SysteminställningarPage.js';
+import { ExternalServicesPage }    from './ExternalServicesPage.js';
 import { LeadsSettingsPage }       from '@modules/leads/index.js';
 
 // ─── Sub-page map (segment → component) ──────────────────────────────────────
@@ -83,12 +83,12 @@ const PAGE_MAP: Record<string, ComponentType> = {
   'website/brand':                  VarumärkePage,
   'theory-center':                  TeoricentralenPage,
   'system':                         SysteminställningarPage,
+  'external-services':              ExternalServicesPage,
   'communication/config':            KommunikationConfigPage,
   'communication/phrases':           GemensammaFraserPage,
   'communication/templates':         MeddelandemallarPage,
   'communication/automation':        AutomatiseringsReglerPage,
   'education/licenses':             UtbildningsbehörigheterPage,
-  'education/curriculum':           UndervisningsplanPage,
   'education/materials':            MaterialsSettingsPage,
   'customers/leads':                LeadsSettingsPage,
 };

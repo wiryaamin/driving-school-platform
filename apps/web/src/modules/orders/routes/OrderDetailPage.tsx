@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, XCircle, Clock, RefreshCcw, Package, Receipt } from 'lucide-react';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useOrderDetail,
   useCancelOrder,
@@ -111,6 +113,7 @@ export function OrderDetailPage() {
   const canMarkPaid = PAYABLE.includes(order.status);
 
   return (
+    <PermissionGate permission={Permissions.ORDERS_READ}>
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
       {/* Back nav */}
       <Link to="/orders" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
@@ -135,31 +138,35 @@ export function OrderDetailPage() {
 
           {/* Actions */}
           <div className="flex gap-2 flex-wrap">
-            {canConfirm && (
-              <button
-                onClick={() => void handleConfirm()}
-                disabled={updateMutation.isPending}
-                className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
-              >
-                Bekräfta order
-              </button>
-            )}
-            {canMarkPaid && (
-              <button
-                onClick={() => void handleMarkPaid()}
-                disabled={updateMutation.isPending}
-                className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 disabled:opacity-50"
-              >
-                Markera betald
-              </button>
-            )}
+            <PermissionGate permission={Permissions.ORDERS_UPDATE}>
+              {canConfirm && (
+                <button
+                  onClick={() => void handleConfirm()}
+                  disabled={updateMutation.isPending}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Bekräfta order
+                </button>
+              )}
+              {canMarkPaid && (
+                <button
+                  onClick={() => void handleMarkPaid()}
+                  disabled={updateMutation.isPending}
+                  className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 disabled:opacity-50"
+                >
+                  Markera betald
+                </button>
+              )}
+            </PermissionGate>
             {canCancel && (
-              <button
-                onClick={() => setShowCancel(true)}
-                className="px-3 py-1.5 text-sm rounded-lg border border-red-200 text-red-600 font-medium hover:bg-red-50"
-              >
-                Avboka
-              </button>
+              <PermissionGate permission={Permissions.ORDERS_CANCEL}>
+                <button
+                  onClick={() => setShowCancel(true)}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-red-200 text-red-600 font-medium hover:bg-red-50"
+                >
+                  Avboka
+                </button>
+              </PermissionGate>
             )}
           </div>
         </div>
@@ -369,5 +376,6 @@ export function OrderDetailPage() {
         </div>
       </div>
     </div>
+    </PermissionGate>
   );
 }

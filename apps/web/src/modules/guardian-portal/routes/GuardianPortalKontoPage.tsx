@@ -4,7 +4,7 @@ import { useGuardianMe, useUpdateGuardianMe, clearGuardianSession } from '../hoo
 import { useGuardianSession } from './GuardianPortalLayout.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 // ─── GuardianPortalKontoPage ──────────────────────────────────────────────────
 

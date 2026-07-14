@@ -22,6 +22,26 @@ import {
 import { InstructorQuickActions } from '../components/InstructorQuickActions.js';
 import { InstructorForm } from '../components/InstructorForm.js';
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const LIST_CATEGORIES: { key: string; label: string }[] = [
+  { key: 'B',       label: 'B – Personbil' },
+  { key: 'A',       label: 'A – Motorcykel' },
+  { key: 'A1',      label: 'A1' },
+  { key: 'A2',      label: 'A2' },
+  { key: 'AM',      label: 'AM – Moped' },
+  { key: 'B96',     label: 'B96' },
+  { key: 'BE',      label: 'BE' },
+  { key: 'C',       label: 'C – Tung lastbil' },
+  { key: 'C1',      label: 'C1' },
+  { key: 'CE',      label: 'CE' },
+  { key: 'D',       label: 'D – Buss' },
+  { key: 'DE',      label: 'DE' },
+  { key: 'Traktor', label: 'Traktor' },
+  { key: 'YKB-C',   label: 'YKB-C' },
+  { key: 'YKB-D',   label: 'YKB-D' },
+];
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const ACTIVE_TYPES: InstructorEmploymentType[] = ['employed', 'contractor', 'external'];
@@ -333,10 +353,12 @@ function buildColumns(onEdit: (i: Instructor) => void): ColumnDef<Instructor>[] 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
 
 interface ToolbarProps {
-  search:               string;
-  onSearchChange:       (v: string) => void;
-  statusFilter:         InstructorEmploymentType | undefined;
-  onStatusFilterChange: (v: InstructorEmploymentType | undefined) => void;
+  search:                 string;
+  onSearchChange:         (v: string) => void;
+  statusFilter:           InstructorEmploymentType | undefined;
+  onStatusFilterChange:   (v: InstructorEmploymentType | undefined) => void;
+  categoryFilter:         string | undefined;
+  onCategoryFilterChange: (v: string | undefined) => void;
 }
 
 function InstructorTableToolbar({
@@ -344,13 +366,15 @@ function InstructorTableToolbar({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
+  categoryFilter,
+  onCategoryFilterChange,
 }: ToolbarProps) {
   return (
     <div className="flex items-center gap-2 flex-wrap w-full">
       <div className="relative flex-1 min-w-[200px] max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         <Input
-          placeholder="Sök på namn eller e-post..."
+          placeholder="Sök på namn, e-post eller telefon..."
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
           className="pl-9 pr-8"
@@ -372,7 +396,7 @@ function InstructorTableToolbar({
           onStatusFilterChange(v === 'all' ? undefined : (v as InstructorEmploymentType))
         }
       >
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="w-[160px]">
           <SelectValue placeholder="Alla statusar" />
         </SelectTrigger>
         <SelectContent>
@@ -380,6 +404,23 @@ function InstructorTableToolbar({
           {INSTRUCTOR_STATUS_OPTIONS.map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
               {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={categoryFilter ?? 'all'}
+        onValueChange={(v) => onCategoryFilterChange(v === 'all' ? undefined : v)}
+      >
+        <SelectTrigger className="w-[150px]">
+          <SelectValue placeholder="Alla kategorier" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Alla kategorier</SelectItem>
+          {LIST_CATEGORIES.map((cat) => (
+            <SelectItem key={cat.key} value={cat.key}>
+              {cat.label}
             </SelectItem>
           ))}
         </SelectContent>
@@ -393,21 +434,23 @@ function InstructorTableToolbar({
 export function InstructorListPage() {
   const navigate = useNavigate();
 
-  const [search,          setSearch]         = useState('');
+  const [search,          setSearch]          = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [statusFilter,    setStatusFilter]   = useState<InstructorEmploymentType | undefined>();
-  const [formOpen,        setFormOpen]       = useState(false);
-  const [editInstructor,  setEditInstructor] = useState<Instructor | null>(null);
+  const [statusFilter,    setStatusFilter]    = useState<InstructorEmploymentType | undefined>();
+  const [categoryFilter,  setCategoryFilter]  = useState<string | undefined>();
+  const [formOpen,        setFormOpen]        = useState(false);
+  const [editInstructor,  setEditInstructor]  = useState<Instructor | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(t);
   }, [search]);
 
-  // Paginated table query — respects search + status filter
+  // Paginated table query — respects search + status filter + category filter
   const { data, isLoading, error } = useInstructorList({
-    ...(debouncedSearch ? { search: debouncedSearch }       : {}),
-    ...(statusFilter    ? { employment_type: statusFilter } : {}),
+    ...(debouncedSearch  ? { search: debouncedSearch }           : {}),
+    ...(statusFilter     ? { employment_type: statusFilter }     : {}),
+    ...(categoryFilter   ? { teaching_category: categoryFilter } : {}),
   });
 
   // Coordination query — unfiltered, wider fetch for overview + panels
@@ -528,6 +571,8 @@ export function InstructorListPage() {
                     onSearchChange={setSearch}
                     statusFilter={statusFilter}
                     onStatusFilterChange={setStatusFilter}
+                    categoryFilter={categoryFilter}
+                    onCategoryFilterChange={setCategoryFilter}
                   />
                 }
               />

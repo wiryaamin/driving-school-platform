@@ -13,6 +13,7 @@ export { StudentPortalDokumentPage }         from './routes/StudentPortalDokumen
 export { StudentPortalKorkortsresaPage }     from './routes/StudentPortalKorkortsresaPage.js';
 export { StudentPortalUtbildningskortPage }  from './routes/StudentPortalUtbildningskortPage.js';
 export { StudentPortalMeddelandenPage }      from './routes/StudentPortalMeddelandenPage.js';
+export { StudentPortalSupportPage }          from './routes/StudentPortalSupportPage.js';
 export {
   useGeneratePortalToken,
   getStoredPortalSession,

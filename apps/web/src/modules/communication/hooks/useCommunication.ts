@@ -7,16 +7,16 @@ export type CommChannel = 'email' | 'sms' | 'whatsapp' | 'push' | 'voice';
 export type MsgStatus   = 'queued' | 'sending' | 'sent' | 'delivered' | 'failed' | 'bounced' | 'cancelled';
 
 export interface ChannelConfig {
-  id:              string;
-  organization_id: string;
-  channel:         CommChannel;
-  enabled:         boolean;
-  provider:        string | null;
-  from_address:    string | null;
-  display_name:    string | null;
-  daily_limit:     number;
-  created_at:      string;
-  updated_at:      string;
+  id:                    string;
+  organization_id:       string;
+  channel:               CommChannel;
+  enabled:               boolean;
+  provider:              string | null;
+  from_address:          string | null;
+  display_name:          string | null;
+  daily_limit:           number;
+  created_at:            string;
+  updated_at:            string;
 }
 
 export interface OutboundMessage {
@@ -154,16 +154,64 @@ export interface QueueHealth {
   by_channel:       QueueHealthChannel[];
 }
 
+export interface OutboxHealthEventType {
+  event_type:        string;
+  pending_count:      number;
+  processing_count:   number;
+  dead_letter_count:  number;
+  failed_count:       number;
+  oldest_pending_at:  string | null;
+}
+
+export interface OutboxHealth {
+  total_pending:     number;
+  total_processing:  number;
+  total_dead_letter: number;
+  oldest_pending_at: string | null;
+  by_event_type:     OutboxHealthEventType[];
+}
+
+export interface TemplateUsage {
+  template_id:    string;
+  template_key:   string | null;
+  channel:        CommChannel;
+  total:          number;
+  sent:           number;
+  failed:         number;
+  delivery_rate:  number;
+}
+
+export interface LatencyByChannel {
+  channel:              CommChannel;
+  avg_latency_seconds:  number | null;
+  delivered_count:      number;
+}
+
+export interface LatencyDaily {
+  channel:              string;
+  stat_date:            string;
+  avg_latency_seconds:  number | null;
+  delivered_count:      number;
+}
+
+export interface LatencyStats {
+  per_channel: LatencyByChannel[];
+  daily:       LatencyDaily[];
+}
+
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 export const commKeys = {
-  all:         ['communications'] as const,
-  channels:    () => [...commKeys.all, 'channels'] as const,
-  templates:   (channel?: string) => [...commKeys.all, 'templates', channel ?? 'all'] as const,
-  messages:    (params: MessageListParams) => [...commKeys.all, 'messages', params] as const,
-  rules:       () => [...commKeys.all, 'rules'] as const,
-  analytics:   (days: number) => [...commKeys.all, 'analytics', days] as const,
-  queueHealth: () => [...commKeys.all, 'queue-health'] as const,
+  all:           ['communications'] as const,
+  channels:      () => [...commKeys.all, 'channels'] as const,
+  templates:     (channel?: string) => [...commKeys.all, 'templates', channel ?? 'all'] as const,
+  messages:      (params: MessageListParams) => [...commKeys.all, 'messages', params] as const,
+  rules:         () => [...commKeys.all, 'rules'] as const,
+  analytics:     (days: number) => [...commKeys.all, 'analytics', days] as const,
+  queueHealth:   () => [...commKeys.all, 'queue-health'] as const,
+  outboxHealth:  () => [...commKeys.all, 'outbox-health'] as const,
+  templateUsage: (days: number) => [...commKeys.all, 'template-usage', days] as const,
+  latency:       (days: number) => [...commKeys.all, 'latency', days] as const,
 };
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -196,6 +244,7 @@ export function useUpdateChannelConfig() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: commKeys.channels() }),
   });
 }
+
 
 // ─── Template hooks ───────────────────────────────────────────────────────────
 
@@ -388,6 +437,39 @@ export function useQueueHealth(options?: { enabled?: boolean }) {
     queryKey: commKeys.queueHealth(),
     queryFn:  () => invoke<{ data: QueueHealth }>('communications/queue-health', { method: 'GET' }).then((r) => r.data),
     enabled:   options?.enabled ?? true,
+    staleTime: 25_000,
+    refetchInterval: options?.enabled === false ? false : 30_000,
+  });
+}
+
+export function useOutboxHealth(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: commKeys.outboxHealth(),
+    queryFn:  () => invoke<{ data: OutboxHealth }>('communications/outbox-health', { method: 'GET' }).then((r) => r.data),
+    enabled:   options?.enabled ?? true,
+    staleTime: 25_000,
+    refetchInterval: options?.enabled === false ? false : 30_000,
+  });
+}
+
+export function useTemplateUsage(days = 30) {
+  return useQuery({
+    queryKey: commKeys.templateUsage(days),
+    queryFn:  () => invoke<{ data: TemplateUsage[]; days: number }>(
+      `communications/analytics?days=${days}&format=templates`,
+      { method: 'GET' },
+    ).then((r) => r.data),
+    staleTime: 60_000,
+  });
+}
+
+export function useDeliveryLatency(days = 7) {
+  return useQuery({
+    queryKey: commKeys.latency(days),
+    queryFn:  () => invoke<{ data: LatencyStats; days: number }>(
+      `communications/analytics?days=${days}&format=latency`,
+      { method: 'GET' },
+    ).then((r) => r.data),
     staleTime: 60_000,
   });
 }

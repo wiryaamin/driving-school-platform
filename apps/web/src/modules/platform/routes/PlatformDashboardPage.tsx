@@ -1,15 +1,45 @@
 import { useState } from 'react';
 import {
   Building2, CheckCircle, AlertCircle, Clock, CreditCard,
-  AlertTriangle, Users, ShieldCheck, Plus, TrendingUp,
+  AlertTriangle, Users, ShieldCheck, Plus, TrendingUp, Cpu,
 } from 'lucide-react';
 import { Skeleton, Button, Badge } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePlatformOrganizations } from '../hooks/usePlatformOrganizations.js';
 import { usePlatformDashboardStats } from '../hooks/usePlatformDashboard.js';
+import { useWorkerRunSummary } from '../hooks/usePlatformOpsCenter.js';
 import { CreateOrgDialog } from '../components/CreateOrgDialog.js';
+import { SUBSCRIPTION_TIERS } from '@platform/types';
+import type { SubscriptionTier } from '@platform/types';
 import type { LucideIcon } from 'lucide-react';
+import { TIER_LABEL } from '../lib/tierDisplay.js';
+
+// ─── Worker health (Epic 7.4) ─────────────────────────────────────────────────
+
+const RUN_STATUS_BADGE: Record<string, string> = {
+  completed: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  partial:   'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  failed:    'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  running:   'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+};
+
+const RUN_STATUS_LABEL: Record<string, string> = {
+  completed: 'OK',
+  partial:   'Delvis',
+  failed:    'Misslyckad',
+  running:   'Pågår',
+};
+
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins   = Math.round(diffMs / 60_000);
+  if (mins < 1)   return 'nyss';
+  if (mins < 60)  return `${mins} min sedan`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} tim sedan`;
+  return `${Math.round(hours / 24)} dagar sedan`;
+}
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 
@@ -48,18 +78,11 @@ function KpiCard({ label, value, icon: Icon, loading, accent = 'default' }: KpiC
 
 // ─── Tier pill ────────────────────────────────────────────────────────────────
 
-const TIER_COLORS: Record<string, string> = {
+const TIER_COLORS: Record<SubscriptionTier, string> = {
   trial:        'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   starter:      'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
   professional: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   enterprise:   'bg-primary/10 text-primary',
-};
-
-const TIER_LABEL: Record<string, string> = {
-  trial:        'Trial',
-  starter:      'Starter',
-  professional: 'Professional',
-  enterprise:   'Enterprise',
 };
 
 // ─── Org status display ───────────────────────────────────────────────────────
@@ -83,6 +106,7 @@ export function PlatformDashboardPage() {
 
   const { data: stats, isLoading: statsLoading, isError: statsError } = usePlatformDashboardStats();
   const { data: orgs,  isLoading: orgsLoading }  = usePlatformOrganizations();
+  const { data: workerRuns, isLoading: workerRunsLoading } = useWorkerRunSummary();
 
   const recentOrgs     = (orgs ?? []).slice(0, 8);
   const expiringTrials = (orgs ?? [])
@@ -147,7 +171,7 @@ export function PlatformDashboardPage() {
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {(['trial', 'starter', 'professional', 'enterprise'] as const).map(tier => {
+            {SUBSCRIPTION_TIERS.map(tier => {
               const count = stats?.[`tier_${tier}` as keyof typeof stats] as number ?? 0;
               return (
                 <div key={tier} className={cn('flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium', TIER_COLORS[tier])}>
@@ -156,6 +180,75 @@ export function PlatformDashboardPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Worker health (Epic 7.4) */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-muted-foreground" />
+          <p className="text-sm font-semibold text-foreground">Worker-hälsa</p>
+          <p className="text-xs text-muted-foreground ml-1">(event-worker &amp; communication-worker)</p>
+        </div>
+
+        {workerRunsLoading && (
+          <div className="px-4 py-4 space-y-3">
+            {[1, 2].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
+        )}
+
+        {!workerRunsLoading && (workerRuns ?? []).length === 0 && (
+          <div className="px-4 py-8 text-center">
+            <Cpu className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+            <p className="text-xs text-muted-foreground">Ingen worker-körning har registrerats ännu</p>
+          </div>
+        )}
+
+        {!workerRunsLoading && (workerRuns ?? []).length > 0 && (
+          <div className="divide-y divide-border">
+            {(workerRuns ?? []).map(w => (
+              <div key={w.worker_name} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-foreground font-mono">{w.worker_name}</p>
+                    <span className={cn(
+                      'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold',
+                      RUN_STATUS_BADGE[w.last_run_status] ?? 'bg-muted text-muted-foreground',
+                    )}>
+                      {RUN_STATUS_LABEL[w.last_run_status] ?? w.last_run_status}
+                    </span>
+                    {w.stuck_count > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                        {w.stuck_count} fastnad
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Senaste körning: {relativeTime(w.last_started_at)}
+                    {w.last_error_summary && ` — ${w.last_error_summary}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-4 text-right shrink-0">
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">24h körningar</p>
+                    <p className="text-sm font-semibold text-foreground">{w.runs_24h}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Fel (24h)</p>
+                    <p className={cn('text-sm font-semibold', w.failed_24h > 0 ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>
+                      {w.failed_24h}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Snitt tid</p>
+                    <p className="text-sm font-semibold text-foreground">
+                      {w.avg_duration_ms_24h != null ? `${Math.round(w.avg_duration_ms_24h)} ms` : '—'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -298,7 +391,7 @@ export function PlatformDashboardPage() {
         </div>
       </div>
 
-      {showCreate && <CreateOrgDialog onClose={() => setShowCreate(false)} />}
+      <CreateOrgDialog open={showCreate} onClose={() => setShowCreate(false)} />
     </PageLayout>
   );
 }

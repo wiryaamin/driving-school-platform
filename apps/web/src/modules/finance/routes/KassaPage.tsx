@@ -5,6 +5,8 @@ import {
   Banknote, CreditCard, Wallet, ShoppingBag, Info,
 } from 'lucide-react';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { Button, Skeleton, toast } from '@platform/ui';
 import { useLessonTypes } from '../../scheduling/hooks/useLessonTypes.js';
 import { useStudentList } from '../../students/hooks/useStudents.js';
@@ -211,6 +213,7 @@ export function KassaPage() {
   }
 
   return (
+    <PermissionGate allOf={[Permissions.FINANCE_INVOICE_CREATE, Permissions.FINANCE_PAYMENT_CREATE]}>
     <PageLayout>
       <PageHeader title="Kassa" breadcrumbs={[{ label: 'Kassa' }]} />
 
@@ -529,6 +532,7 @@ export function KassaPage() {
         </div>
       </div>
     </PageLayout>
+    </PermissionGate>
   );
 }
 

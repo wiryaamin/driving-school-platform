@@ -65,8 +65,11 @@ function buildQueryString(params: StudentListQueryInput): string {
   if (params.status !== undefined)   sp.set('status', params.status);
   if (params.instructor_id !== undefined) sp.set('instructor_id', params.instructor_id);
   if (params.permit_stage !== undefined)  sp.set('permit_stage', params.permit_stage);
-  if (params.licence_category !== undefined) sp.set('licence_category', params.licence_category);
+  if (params.licence_category !== undefined)     sp.set('licence_category',     params.licence_category);
+  if (params.not_licence_category !== undefined) sp.set('not_licence_category', params.not_licence_category);
   if (params.corporate_customer_id !== undefined) sp.set('corporate_customer_id', params.corporate_customer_id);
+  if (params.age_from !== undefined) sp.set('age_from', String(params.age_from));
+  if (params.age_to   !== undefined) sp.set('age_to',   String(params.age_to));
   return sp.toString();
 }
 
@@ -199,9 +202,23 @@ export function useArchiveStudent() {
 // ─── Student tag types ────────────────────────────────────────────────────────
 
 export interface StudentTag {
-  id: string;
-  name: string;
-  color: string | null;
+  id:           string;
+  name:         string;
+  color:        string | null;
+  description?: string | null;
+}
+
+export interface CreateTagInput {
+  name:         string;
+  color?:       string | null;
+  description?: string | null;
+}
+
+export interface UpdateTagInput {
+  id:           string;
+  name?:        string;
+  color?:       string | null;
+  description?: string | null;
 }
 
 // ─── Student tag hooks ────────────────────────────────────────────────────────
@@ -210,9 +227,10 @@ export function useOrgStudentTags() {
   return useQuery<StudentTag[]>({
     queryKey: ['student-tags', 'org'],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
         .from('student_tags')
-        .select('id, name, color')
+        .select('id, name, color, description')
         .order('name');
       if (error) throw new Error(error.message);
       return (data ?? []) as StudentTag[];
@@ -228,7 +246,7 @@ export function useStudentTagAssignments(studentId: string) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as unknown as any)
         .from('student_tag_assignments')
-        .select('student_tags(id, name, color)')
+        .select('student_tags(id, name, color, description)')
         .eq('student_id', studentId);
       if (error) throw new Error(error.message);
       return ((data ?? [])
@@ -241,13 +259,17 @@ export function useStudentTagAssignments(studentId: string) {
 }
 
 export function useAssignStudentTag(studentId: string) {
+  const { user } = useSession();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (tagId: string) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase as unknown as any)
         .from('student_tag_assignments')
-        .upsert({ student_id: studentId, tag_id: tagId }, { onConflict: 'student_id,tag_id' });
+        .upsert(
+          { student_id: studentId, tag_id: tagId, assigned_by: user?.id ?? null },
+          { onConflict: 'student_id,tag_id' },
+        );
       if (error) throw new Error(error.message);
     },
     onSuccess: () => {
@@ -271,6 +293,91 @@ export function useRemoveStudentTag(studentId: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['student-tags', 'assignments', studentId] });
     },
+  });
+}
+
+export function useCreateTag() {
+  const { organization, user } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: CreateTagInput): Promise<StudentTag> => {
+      const orgId = organization?.id;
+      if (!orgId) throw new Error('Ingen organisation');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_tags')
+        .insert({
+          organization_id: orgId,
+          name:            input.name.trim(),
+          color:           input.color ?? null,
+          description:     input.description ?? null,
+          created_by:      user?.id ?? null,
+        })
+        .select('id, name, color, description')
+        .single();
+      if (error) throw new Error(error.message);
+      return data as StudentTag;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['student-tags', 'org'] });
+    },
+  });
+}
+
+export function useUpdateTag() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: UpdateTagInput): Promise<void> => {
+      const patch: Record<string, unknown> = {};
+      if (input.name        !== undefined) patch.name        = input.name.trim();
+      if (input.color       !== undefined) patch.color       = input.color;
+      if (input.description !== undefined) patch.description = input.description;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_tags')
+        .update(patch)
+        .eq('id', input.id);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['student-tags', 'org'] });
+      void queryClient.invalidateQueries({ queryKey: ['student-tags', 'assignments'] });
+    },
+  });
+}
+
+export function useDeleteTag() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (tagId: string): Promise<void> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_tags')
+        .delete()
+        .eq('id', tagId);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['student-tags', 'org'] });
+      void queryClient.invalidateQueries({ queryKey: ['student-tags', 'assignments'] });
+    },
+  });
+}
+
+export function useStudentIdsByTag(tagId: string | null) {
+  return useQuery<string[]>({
+    queryKey: ['student-tags', 'by-tag', tagId],
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_tag_assignments')
+        .select('student_id')
+        .eq('tag_id', tagId);
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as { student_id: string }[]).map((r) => r.student_id);
+    },
+    enabled: !!tagId,
+    staleTime: 2 * 60_000,
   });
 }
 

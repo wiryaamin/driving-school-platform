@@ -4,7 +4,7 @@ import { supabase } from '@core/api/supabase.js';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type NotificationStatus  = 'pending' | 'sent' | 'delivered' | 'failed' | 'cancelled';
-export type NotificationChannel = 'email' | 'sms' | 'push' | 'in_app';
+export type NotificationChannel = 'email' | 'sms' | 'push' | 'internal';
 export type RecipientType       = 'student' | 'instructor' | 'admin' | 'profile';
 
 export interface Notification {

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, ShoppingCart, ChevronLeft, ChevronRight } from 'lucide-react';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useOrderList,
   orderStatusLabel,
@@ -63,6 +65,7 @@ export function OrderListPage() {
   }
 
   return (
+    <PermissionGate permission={Permissions.ORDERS_READ}>
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
@@ -221,5 +224,6 @@ export function OrderListPage() {
         </>
       )}
     </div>
+    </PermissionGate>
   );
 }

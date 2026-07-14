@@ -59,7 +59,22 @@ async function fetchAllMetrics(
       `dashboard?${qs}`,
       { method: 'GET', signal: controller.signal },
     );
-    if (error) throw error;
+    if (error) {
+      // supabase.functions.invoke() catches the fetch-level AbortError and re-wraps it
+      // as FunctionsFetchError (name: 'FunctionsFetchError', context: <AbortError>).
+      // Re-throw as a plain DOMException so the React Query retry predicate below can
+      // detect the timeout without needing to import the SDK error class.
+      if (error.name === 'FunctionsFetchError') {
+        const ctx = (error as unknown as { context?: unknown }).context;
+        if (
+          (ctx instanceof DOMException || ctx instanceof Error) &&
+          ctx.name === 'AbortError'
+        ) {
+          throw new DOMException('Dashboard metrics fetch timed out after 15 s', 'AbortError');
+        }
+      }
+      throw error;
+    }
     if (!data?.data) throw new Error('Empty response from dashboard endpoint');
     return data.data;
   } finally {
@@ -84,11 +99,12 @@ export function useDashboardMetrics(options?: { enabled?: boolean }) {
     staleTime:       2 * 60 * 1000,
     gcTime:          30 * 60 * 1000,
     placeholderData: keepPreviousData,
-    // Don't auto-retry on timeout (AbortError) — the Edge Function is still cold;
-    // retry once on other transient errors (network blip, 5xx).
+    // Don't retry on timeout — fetchAllMetrics re-throws the SDK's FunctionsFetchError
+    // as a plain DOMException('AbortError') so the check here stays simple.
+    // Retry once on other transient errors (network blip, 5xx).
     retry: (failureCount, error) => {
       if (error instanceof DOMException && error.name === 'AbortError') return false;
-      if (error instanceof Error && error.name === 'AbortError')         return false;
+      if (error instanceof Error        && error.name === 'AbortError') return false;
       return failureCount < 1;
     },
     retryDelay: 3_000,

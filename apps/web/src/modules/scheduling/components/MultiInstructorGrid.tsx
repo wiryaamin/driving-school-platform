@@ -228,6 +228,7 @@ export interface MultiInstructorGridProps {
   isLoading:       boolean;
   lessonTypeMap?:  Record<string, string>;
   onSlotClick:     (slot: LessonSlot) => void;
+  groupByDay?:     boolean;
 }
 
 // ─── WeekBlock ────────────────────────────────────────────────────────────────
@@ -244,6 +245,7 @@ function WeekBlock({
   onCellHover,
   onCellHoverEnd,
   showInstructorHeaders,
+  groupByDay,
 }: {
   weekStart:             Date;
   instructors:           Instructor[];
@@ -256,12 +258,24 @@ function WeekBlock({
   onCellHover:           (slot: LessonSlot, instructorName: string, lessonTypeName: string, rect: DOMRect) => void;
   onCellHoverEnd:        () => void;
   showInstructorHeaders: boolean;
+  groupByDay?:           boolean;
 }) {
   const days      = getWeekDays(weekStart, showWeekends);
   const weekNum   = getWeekNumber(weekStart);
   const todayStr  = isoDate(new Date());
   const totalH    = TOTAL_HOURS * hourHeight;
   const timeAxisW = 44;
+
+  // Flat ordered list of {instr, day} pairs for colgroup + body cells.
+  // groupByDay=false (default): instructors × days — each instructor owns a column group per week
+  // groupByDay=true:            days × instructors — each day owns a column group per instructor
+  const columnPairs = useMemo(
+    () => groupByDay
+      ? days.flatMap(day => instructors.map(instr => ({ day, instr })))
+      : instructors.flatMap(instr => days.map(day => ({ day, instr }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groupByDay, instructors, showWeekends, weekStart],
+  );
 
   return (
     <div className="overflow-x-auto">
@@ -271,68 +285,124 @@ function WeekBlock({
       >
         <colgroup>
           <col style={{ width: `${timeAxisW}px`, minWidth: `${timeAxisW}px` }} />
-          {instructors.flatMap((_, ii) =>
-            days.map((_, di) => (
-              <col key={`${ii}-${di}`} style={{ width: `${colWidth}px`, minWidth: `${colWidth}px` }} />
-            ))
-          )}
+          {columnPairs.map(({ day, instr }) => (
+            <col
+              key={`col-${instr.id}-${isoDate(day)}`}
+              style={{ width: `${colWidth}px`, minWidth: `${colWidth}px` }}
+            />
+          ))}
         </colgroup>
 
         <thead className="sticky top-0 z-20">
-          {/* Instructor name headers (first week only) */}
+          {/* Group headers row — instructor names (default) or day labels (groupByDay) */}
           {showInstructorHeaders && (
             <tr className="bg-card">
               <th className="border border-border bg-muted/40 py-1.5 text-center align-middle">
                 <span className="text-[10px] font-bold text-muted-foreground">v.{weekNum}</span>
               </th>
-              {instructors.map(instr => (
-                <th
-                  key={instr.id}
-                  colSpan={days.length}
-                  className="border border-border bg-card py-1.5 text-center font-semibold"
-                >
-                  <span className="text-xs text-foreground">{instr.first_name} {instr.last_name}</span>
-                </th>
-              ))}
+              {groupByDay
+                ? days.map(day => {
+                    const weekend = day.getDay() === 0 || day.getDay() === 6;
+                    const today   = isoDate(day) === todayStr;
+                    return (
+                      <th
+                        key={`grp-${isoDate(day)}`}
+                        colSpan={instructors.length}
+                        className={cn(
+                          'border border-border py-1.5 text-center font-semibold',
+                          weekend && 'bg-amber-50/70 dark:bg-amber-950/20',
+                          today   && 'bg-primary/10',
+                        )}
+                      >
+                        <div className={cn(
+                          'text-[10px] font-bold uppercase leading-none',
+                          today ? 'text-primary' : 'text-muted-foreground',
+                        )}>
+                          {SV_DAYS[(day.getDay() + 6) % 7]}
+                        </div>
+                        <div className={cn(
+                          'text-[10px] leading-tight mt-0.5',
+                          today ? 'text-primary font-bold' : 'text-muted-foreground/70',
+                        )}>
+                          {day.getDate()}/{day.getMonth() + 1}
+                        </div>
+                      </th>
+                    );
+                  })
+                : instructors.map(instr => (
+                    <th
+                      key={`grp-${instr.id}`}
+                      colSpan={days.length}
+                      className="border border-border bg-card py-1.5 text-center font-semibold"
+                    >
+                      <span className="text-xs text-foreground">{instr.first_name} {instr.last_name}</span>
+                    </th>
+                  ))
+              }
             </tr>
           )}
 
-          {/* Day + date headers */}
+          {/* Sub-headers row — day labels (default) or instructor initials (groupByDay) */}
           <tr className="bg-card">
             <th className="border border-border bg-muted/40 py-1 text-center align-middle">
               {!showInstructorHeaders && (
                 <span className="text-[10px] font-bold text-muted-foreground">v.{weekNum}</span>
               )}
             </th>
-            {instructors.flatMap(instr =>
-              days.map(day => {
-                const weekend = day.getDay() === 0 || day.getDay() === 6;
-                const today   = isoDate(day) === todayStr;
-                return (
-                  <th
-                    key={`${instr.id}-${isoDate(day)}`}
-                    className={cn(
-                      'border border-border py-1 text-center align-middle',
-                      weekend && 'bg-amber-50/70 dark:bg-amber-950/20',
-                      today   && 'bg-primary/10',
-                    )}
-                  >
-                    <div className={cn(
-                      'text-[10px] font-semibold uppercase leading-none',
-                      today ? 'text-primary' : 'text-muted-foreground',
-                    )}>
-                      {SV_DAYS[(day.getDay() + 6) % 7]}
-                    </div>
-                    <div className={cn(
-                      'text-[10px] leading-tight mt-0.5',
-                      today ? 'text-primary font-bold' : 'text-muted-foreground/70',
-                    )}>
-                      {day.getDate()}/{day.getMonth() + 1}
-                    </div>
-                  </th>
-                );
-              })
-            )}
+            {groupByDay
+              ? columnPairs.map(({ day, instr }) => {
+                  const weekend = day.getDay() === 0 || day.getDay() === 6;
+                  const today   = isoDate(day) === todayStr;
+                  const initials = (instr.first_name.charAt(0) + instr.last_name.charAt(0)).toUpperCase();
+                  return (
+                    <th
+                      key={`sub-${isoDate(day)}-${instr.id}`}
+                      title={`${instr.first_name} ${instr.last_name}`}
+                      className={cn(
+                        'border border-border py-1 text-center align-middle',
+                        weekend && 'bg-amber-50/70 dark:bg-amber-950/20',
+                        today   && 'bg-primary/10',
+                      )}
+                    >
+                      <div className={cn(
+                        'text-[9px] font-bold leading-none',
+                        today ? 'text-primary' : 'text-muted-foreground',
+                      )}>
+                        {initials}
+                      </div>
+                    </th>
+                  );
+                })
+              : instructors.flatMap(instr =>
+                  days.map(day => {
+                    const weekend = day.getDay() === 0 || day.getDay() === 6;
+                    const today   = isoDate(day) === todayStr;
+                    return (
+                      <th
+                        key={`sub-${instr.id}-${isoDate(day)}`}
+                        className={cn(
+                          'border border-border py-1 text-center align-middle',
+                          weekend && 'bg-amber-50/70 dark:bg-amber-950/20',
+                          today   && 'bg-primary/10',
+                        )}
+                      >
+                        <div className={cn(
+                          'text-[10px] font-semibold uppercase leading-none',
+                          today ? 'text-primary' : 'text-muted-foreground',
+                        )}>
+                          {SV_DAYS[(day.getDay() + 6) % 7]}
+                        </div>
+                        <div className={cn(
+                          'text-[10px] leading-tight mt-0.5',
+                          today ? 'text-primary font-bold' : 'text-muted-foreground/70',
+                        )}>
+                          {day.getDate()}/{day.getMonth() + 1}
+                        </div>
+                      </th>
+                    );
+                  })
+                )
+            }
           </tr>
         </thead>
 
@@ -356,94 +426,92 @@ function WeekBlock({
               </div>
             </td>
 
-            {/* Instructor × day columns — proportional time layout */}
-            {instructors.flatMap(instr =>
-              days.map(day => {
-                const dateStr  = isoDate(day);
-                const daySlots = slotMap[instr.id]?.[dateStr] ?? [];
-                const weekend  = day.getDay() === 0 || day.getDay() === 6;
-                const today    = dateStr === todayStr;
+            {/* Columns — proportional time layout, order determined by groupByDay */}
+            {columnPairs.map(({ day, instr }) => {
+              const dateStr  = isoDate(day);
+              const daySlots = slotMap[instr.id]?.[dateStr] ?? [];
+              const weekend  = day.getDay() === 0 || day.getDay() === 6;
+              const today    = dateStr === todayStr;
 
-                return (
-                  <td
-                    key={`${instr.id}-${dateStr}`}
-                    className={cn(
-                      'border border-border p-0 align-top',
-                      weekend && 'bg-amber-50/40 dark:bg-amber-950/15',
-                      today && !daySlots.length && 'bg-primary/5',
-                    )}
-                    style={{ height: totalH }}
-                  >
-                    <div className="relative" style={{ height: totalH }}>
+              return (
+                <td
+                  key={`cell-${instr.id}-${dateStr}`}
+                  className={cn(
+                    'border border-border p-0 align-top',
+                    weekend && 'bg-amber-50/40 dark:bg-amber-950/15',
+                    today && !daySlots.length && 'bg-primary/5',
+                  )}
+                  style={{ height: totalH }}
+                >
+                  <div className="relative" style={{ height: totalH }}>
 
-                      {/* Horizontal hour grid lines */}
-                      {HOUR_LABELS.map((_, i) => (
-                        <div
-                          key={i}
+                    {/* Horizontal hour grid lines */}
+                    {HOUR_LABELS.map((_, i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          'absolute left-0 right-0',
+                          i === 0 ? 'border-t-0' : 'border-t border-border/30',
+                        )}
+                        style={{ top: i * hourHeight }}
+                      />
+                    ))}
+
+                    {/* Slot cards — absolutely positioned by time */}
+                    {daySlots.map(slot => {
+                      const top      = slotTopPx(slot, hourHeight);
+                      const height   = slotHeightPx(slot, hourHeight);
+                      const startStr = toHHMM(slot.starts_at);
+                      const endStr   = toHHMM(slot.ends_at);
+                      const typeName = lessonTypeMap[slot.lesson_type_id] ?? '';
+
+                      return (
+                        <button
+                          key={slot.id}
+                          style={{
+                            position: 'absolute',
+                            top:    top + 1,
+                            height: Math.max(height - 2, 14),
+                            left:   1,
+                            right:  1,
+                          }}
+                          onClick={() => onSlotClick(slot)}
+                          onMouseEnter={(e) => {
+                            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            onCellHover(
+                              slot,
+                              `${instr.first_name} ${instr.last_name}`,
+                              typeName || 'Vanlig körlektion',
+                              rect,
+                            );
+                          }}
+                          onMouseLeave={onCellHoverEnd}
+                          title={`${startStr} – ${endStr} · ${typeName || 'Körlektion'} · ${slot.current_bookings}/${slot.max_bookings}`}
                           className={cn(
-                            'absolute left-0 right-0',
-                            i === 0 ? 'border-t-0' : 'border-t border-border/30',
+                            'rounded text-left overflow-hidden transition-colors',
+                            slotCls(slot),
                           )}
-                          style={{ top: i * hourHeight }}
-                        />
-                      ))}
-
-                      {/* Slot cards — absolutely positioned by time */}
-                      {daySlots.map(slot => {
-                        const top      = slotTopPx(slot, hourHeight);
-                        const height   = slotHeightPx(slot, hourHeight);
-                        const startStr = toHHMM(slot.starts_at);
-                        const endStr   = toHHMM(slot.ends_at);
-                        const typeName = lessonTypeMap[slot.lesson_type_id] ?? '';
-
-                        return (
-                          <button
-                            key={slot.id}
-                            style={{
-                              position: 'absolute',
-                              top:    top + 1,
-                              height: Math.max(height - 2, 14),
-                              left:   1,
-                              right:  1,
-                            }}
-                            onClick={() => onSlotClick(slot)}
-                            onMouseEnter={(e) => {
-                              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                              onCellHover(
-                                slot,
-                                `${instr.first_name} ${instr.last_name}`,
-                                typeName || 'Vanlig körlektion',
-                                rect,
-                              );
-                            }}
-                            onMouseLeave={onCellHoverEnd}
-                            title={`${startStr} – ${endStr} · ${typeName || 'Körlektion'} · ${slot.current_bookings}/${slot.max_bookings}`}
-                            className={cn(
-                              'rounded text-left overflow-hidden transition-colors',
-                              slotCls(slot),
-                            )}
-                          >
-                            <div className="px-1 pt-0.5 h-full overflow-hidden flex flex-col">
-                              {/* Time range */}
-                              <span className="block text-[9px] font-bold leading-tight whitespace-nowrap">
-                                {startStr} –
+                        >
+                          <div className="px-1 pt-0.5 h-full overflow-hidden flex flex-col">
+                            {/* Time range */}
+                            <span className="block text-[9px] font-bold leading-tight whitespace-nowrap">
+                              {startStr} –
+                            </span>
+                            {/* Lesson type (only when card is tall enough) */}
+                            {height >= 26 && (
+                              <span className="block text-[8px] leading-tight truncate opacity-90">
+                                {typeName || `${slot.current_bookings}/${slot.max_bookings}`}
                               </span>
-                              {/* Lesson type (only when card is tall enough) */}
-                              {height >= 26 && (
-                                <span className="block text-[8px] leading-tight truncate opacity-90">
-                                  {typeName || `${slot.current_bookings}/${slot.max_bookings}`}
-                                </span>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
 
-                    </div>
-                  </td>
-                );
-              })
-            )}
+                  </div>
+                </td>
+              );
+            })}
           </tr>
         </tbody>
       </table>
@@ -462,6 +530,7 @@ export function MultiInstructorGrid({
   isLoading,
   lessonTypeMap = {},
   onSlotClick,
+  groupByDay = false,
 }: MultiInstructorGridProps) {
   const slotMap = useMemo(() => buildSlotMap(slots), [slots]);
 
@@ -549,6 +618,7 @@ export function MultiInstructorGrid({
           onCellHover={handleCellHover}
           onCellHoverEnd={handleCellHoverEnd}
           showInstructorHeaders={idx === 0}
+          groupByDay={groupByDay}
         />
       ))}
 

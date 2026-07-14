@@ -33,6 +33,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import {
   useAssetClasses,
@@ -826,6 +827,7 @@ export function FixedAssetsPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:fixed-assets:manage">
         <PermissionGate permission={Permissions.FINANCE_ASSETS_READ}>
           <div className="space-y-6">
             {/* Stats */}
@@ -923,6 +925,7 @@ export function FixedAssetsPage() {
             </Card>
           </div>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
 
       {registering && <RegisterAssetSheet onClose={() => setRegistering(false)} />}

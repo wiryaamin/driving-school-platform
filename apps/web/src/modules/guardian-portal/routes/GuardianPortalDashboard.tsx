@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   CalendarDays, TrendingUp, CreditCard, Route, ShieldCheck,
   MessageSquare, ChevronRight, CheckCircle2, AlertCircle,
-  MapPin, Info, Bell,
+  MapPin, Info,
 } from 'lucide-react';
 import { useGuardianSession } from './GuardianPortalLayout.js';
 import {
@@ -15,8 +15,8 @@ import { cn } from '@/lib/utils.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const BRAND   = '#1055C9'; // mobile
-const PRIMARY = '#4F46E5'; // desktop
+const BRAND   = '#2D5BE3'; // mobile
+const PRIMARY = '#2D5BE3'; // desktop
 
 const STAGE_ORDER = [
   'not_started', 'theory_study', 'risk1_booked', 'risk1_completed',
@@ -360,7 +360,7 @@ const DEMO_ACTIVITIES: Array<{ id: string; title: string; sub: string; time: str
 ];
 
 function iconForType(type: ActivityIconType) {
-  if (type === 'calendar') return { Icon: CalendarDays, bg: '#EEF2FF', color: '#4F46E5' };
+  if (type === 'calendar') return { Icon: CalendarDays, bg: '#EEF2FF', color: '#2D5BE3' };
   if (type === 'shield')   return { Icon: ShieldCheck,  bg: '#ECFDF5', color: '#10B981' };
   if (type === 'payment')  return { Icon: CreditCard,   bg: '#F5F3FF', color: '#8B5CF6' };
   return                          { Icon: Info,         bg: '#EFF6FF', color: '#3B82F6' };
@@ -370,7 +370,7 @@ function iconForType(type: ActivityIconType) {
 
 function MobileSnabblänkar() {
   const items = [
-    { to: '/guardian/schema',        Icon: CalendarDays,  label: 'Schema',        bg: '#EEF2FF', color: '#4F46E5' },
+    { to: '/guardian/schema',        Icon: CalendarDays,  label: 'Schema',        bg: '#EEF2FF', color: '#2D5BE3' },
     { to: '/guardian/framsteg',      Icon: TrendingUp,    label: 'Framsteg',      bg: '#ECFDF5', color: '#10B981' },
     { to: '/guardian/riskutbildning',Icon: ShieldCheck,   label: 'Riskutbildning',bg: '#F0FDFA', color: '#0D9488' },
     { to: '/guardian/ekonomi',       Icon: CreditCard,    label: 'Ekonomi',       bg: '#FFF1F2', color: '#F43F5E' },
@@ -495,19 +495,13 @@ function DesktopTopBar() {
         </p>
       </div>
       <div className="flex items-center gap-3 mt-1">
-        <button className="relative p-2.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors">
-          <Bell className="w-5 h-5 text-gray-600" strokeWidth={1.75} />
-          <span className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full text-[10px] font-bold text-white flex items-center justify-center bg-red-500">
-            2
-          </span>
-        </button>
         <Link
-          to="/guardian/schema"
+          to="/guardian/framsteg"
           className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold text-white shadow-sm hover:opacity-90 transition-opacity"
           style={{ background: PRIMARY }}
         >
-          <CalendarDays className="w-4 h-4" strokeWidth={2} />
-          Schema
+          <TrendingUp className="w-4 h-4" strokeWidth={2} />
+          Se framsteg
         </Link>
       </div>
     </div>
@@ -664,7 +658,7 @@ function DesktopProgressSection() {
             width: `${Math.max(stagePct, 4)}%`,
             background: stagePct === 100
               ? 'linear-gradient(to right, #10B981, #34D399)'
-              : 'linear-gradient(to right, #4F46E5, #7C3AED)',
+              : 'linear-gradient(to right, #2D5BE3, #7C3AED)',
           }}
         />
       </div>
@@ -679,7 +673,7 @@ function DesktopProgressSection() {
 
 function DesktopSnabblänkar() {
   const items = [
-    { to: '/guardian/schema',        Icon: CalendarDays, label: 'Schema',       bg: '#EEF2FF', color: '#4F46E5' },
+    { to: '/guardian/schema',        Icon: CalendarDays, label: 'Schema',       bg: '#EEF2FF', color: '#2D5BE3' },
     { to: '/guardian/framsteg',      Icon: TrendingUp,   label: 'Framsteg',     bg: '#ECFDF5', color: '#10B981' },
     { to: '/guardian/riskutbildning',Icon: ShieldCheck,  label: 'Riskutbildning',bg: '#F0FDFA', color: '#0D9488' },
     { to: '/guardian/ekonomi',       Icon: CreditCard,   label: 'Ekonomi',      bg: '#FFF1F2', color: '#F43F5E' },
@@ -709,12 +703,12 @@ function DesktopSnabblänkar() {
 
 function DesktopNavigera() {
   const items = [
-    { to: '/guardian/schema',        Icon: CalendarDays, title: 'Schema',           sub: 'Kommande och historiska lektioner', bg: '#EEF2FF', color: '#4F46E5' },
+    { to: '/guardian/schema',        Icon: CalendarDays, title: 'Schema',           sub: 'Kommande och historiska lektioner', bg: '#EEF2FF', color: '#2D5BE3' },
     { to: '/guardian/framsteg',      Icon: TrendingUp,   title: 'Elevens Framsteg', sub: 'Kompetenser och utbildningssteg',   bg: '#F5F3FF', color: '#8B5CF6' },
     { to: '/guardian/korkortsresa',  Icon: Route,        title: 'Körkortsresa',     sub: 'Vägen från tillstånd till körkort', bg: '#FFF7ED', color: '#F97316' },
     { to: '/guardian/riskutbildning',Icon: ShieldCheck,  title: 'Riskutbildning',   sub: 'Risk 1 och Risk 2 status',          bg: '#F0FDFA', color: '#0D9488' },
     { to: '/guardian/ekonomi',       Icon: CreditCard,   title: 'Ekonomi',          sub: 'Fakturor och betalningar',          bg: '#FFF1F2', color: '#F43F5E' },
-    { to: '/guardian/meddelanden',   Icon: MessageSquare,title: 'Meddelanden',      sub: 'Lektionspåminnelser och nyheter',   bg: '#EEF2FF', color: '#4F46E5' },
+    { to: '/guardian/meddelanden',   Icon: MessageSquare,title: 'Meddelanden',      sub: 'Lektionspåminnelser och nyheter',   bg: '#EEF2FF', color: '#2D5BE3' },
   ];
 
   return (

@@ -1,13 +1,17 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Building2, Users, BookOpen, Car, Package, BarChart3,
   Clock, User, History, ChevronLeft, Calendar, ShieldCheck,
-  AlertCircle,
+  AlertCircle, UserPlus, MoreHorizontal,
 } from 'lucide-react';
 import {
   Skeleton, Badge, Tabs, TabsList, TabsTrigger, TabsContent,
   Avatar, AvatarFallback,
   Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
+  Button, toast,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
@@ -20,6 +24,10 @@ import {
 import { useOrgAuditHistory } from '../hooks/usePlatformOrganizations.js';
 import type { PlatformOrgTimelineEvent, PlatformOrgAdmin } from '../hooks/usePlatformOrgDetail.js';
 import type { AuditLogEntry } from '../hooks/usePlatformOrganizations.js';
+import { useDisableAdmin, useReactivateAdmin, useTransferOwnership, useResendInvitation, useCancelInvitation } from '../hooks/usePlatformOrgMutations.js';
+import { InviteAdminDialog } from '../components/InviteAdminDialog.js';
+import { ChangeAdminRoleDialog } from '../components/ChangeAdminRoleDialog.js';
+import { TIER_LABEL } from '../lib/tierDisplay.js';
 
 // ─── Display maps ─────────────────────────────────────────────────────────────
 
@@ -33,13 +41,6 @@ const STATUS_LABEL: Record<string, string> = {
   active:    'Aktiv',
   suspended: 'Suspenderad',
   terminated:'Avslutad',
-};
-
-const TIER_LABEL: Record<string, string> = {
-  trial:        'Trial',
-  starter:      'Starter',
-  professional: 'Professional',
-  enterprise:   'Enterprise',
 };
 
 const SUB_STATUS_LABEL: Record<string, string> = {
@@ -56,6 +57,16 @@ const ROLE_LABEL: Record<string, string> = {
   org_manager: 'Chef',
 };
 
+const INVITATION_STATUS_LABEL: Record<string, string> = {
+  pending:  'Väntande',
+  accepted: 'Accepterad',
+};
+
+const INVITATION_STATUS_CLASS: Record<string, string> = {
+  pending:  'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  accepted: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+};
+
 // ─── Timeline event label ─────────────────────────────────────────────────────
 
 function timelineEventLabel(e: PlatformOrgTimelineEvent): string {
@@ -68,6 +79,13 @@ function timelineEventLabel(e: PlatformOrgTimelineEvent): string {
     case 'trial_ended':    return 'Testperiod avslutad';
     case 'trial_extended': return 'Testperiod förlängd';
     case 'tier_changed':   return 'Prenumerationsnivå ändrad';
+    case 'admin_invited': {
+      const email = (e.new_values?.['admin_email'] as string | undefined);
+      return email ? `Administratör inbjuden (${email})` : 'Administratör inbjuden';
+    }
+    case 'admin_invitation_resent':    return 'Inbjudan skickad igen';
+    case 'admin_invitation_accepted':  return 'Inbjudan accepterad';
+    case 'admin_invitation_cancelled': return 'Inbjudan avbruten';
     default:               return 'Organisation uppdaterad';
   }
 }
@@ -82,6 +100,10 @@ const TIMELINE_EVENT_COLOR: Record<string, string> = {
   trial_extended: 'bg-amber-300',
   tier_changed:   'bg-blue-400',
   org_updated:    'bg-muted-foreground',
+  admin_invited:             'bg-indigo-400',
+  admin_invitation_resent:   'bg-indigo-300',
+  admin_invitation_accepted: 'bg-emerald-500',
+  admin_invitation_cancelled:'bg-destructive',
 };
 
 // ─── Audit event label ────────────────────────────────────────────────────────
@@ -165,6 +187,84 @@ function SkeletonRows({ count = 3 }: { count?: number }) {
   );
 }
 
+// ─── Confirm dialog ───────────────────────────────────────────────────────────
+// Same local pattern as PlatformOrganizationsPage.tsx's ConfirmDialog — this
+// codebase's established convention for a gated, auditable admin action.
+// Always mounted by the caller; only `open` toggles (Platform UI Stability
+// Hardening Sprint).
+
+function ConfirmDialog({
+  open, title, description, confirmLabel, confirmVariant = 'destructive', loading, onConfirm, onCancel,
+}: {
+  open: boolean; title: string; description: string; confirmLabel: string;
+  confirmVariant?: 'default' | 'destructive'; loading: boolean;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={open => { if (!open) onCancel(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">{description}</p>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={onCancel} disabled={loading}>Avbryt</Button>
+          <Button variant={confirmVariant} onClick={onConfirm} disabled={loading}>
+            {loading ? 'Vänta…' : confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Administrator row actions ────────────────────────────────────────────────
+
+type AdminModal =
+  | null
+  | { type: 'invite' }
+  | { type: 'change-role';        admin: PlatformOrgAdmin }
+  | { type: 'disable';            admin: PlatformOrgAdmin }
+  | { type: 'reactivate';         admin: PlatformOrgAdmin }
+  | { type: 'transfer-ownership'; admin: PlatformOrgAdmin }
+  | { type: 'resend-invitation';  admin: PlatformOrgAdmin }
+  | { type: 'cancel-invitation';  admin: PlatformOrgAdmin };
+
+function AdminRowActions({ admin, onAction }: { admin: PlatformOrgAdmin; onAction: (modal: AdminModal) => void }) {
+  const isPending = admin.invitation_status === 'pending';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          aria-label="Fler alternativ"
+        >
+          <MoreHorizontal className="w-3.5 h-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        {isPending && (
+          <DropdownMenuItem onClick={() => onAction({ type: 'resend-invitation', admin })}>Skicka inbjudan igen</DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={() => onAction({ type: 'change-role', admin })}>Ändra roll</DropdownMenuItem>
+        {admin.role !== 'org_owner' && (
+          <DropdownMenuItem onClick={() => onAction({ type: 'transfer-ownership', admin })}>Gör till ägare</DropdownMenuItem>
+        )}
+        {isPending ? (
+          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'cancel-invitation', admin })}>
+            Avbryt inbjudan
+          </DropdownMenuItem>
+        ) : admin.membership_status === 'active' ? (
+          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'disable', admin })}>
+            Inaktivera
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem onClick={() => onAction({ type: 'reactivate', admin })}>Återaktivera</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function PlatformOrganizationDetailPage() {
@@ -176,6 +276,63 @@ export function PlatformOrganizationDetailPage() {
   const { data: admins,   isLoading: adminsLoading,   error: adminsError }   = usePlatformOrgAdmins(id);
   const { data: timeline, isLoading: timelineLoading, error: timelineError } = usePlatformOrgTimeline(id);
   const { data: audit,    isLoading: auditLoading,    error: auditError }    = useOrgAuditHistory(id ?? null);
+
+  const [adminModal, setAdminModal] = useState<AdminModal>(null);
+  const closeAdminModal = () => setAdminModal(null);
+  const disableAdmin    = useDisableAdmin(id ?? '');
+  const reactivateAdmin = useReactivateAdmin(id ?? '');
+  const transferOwnership = useTransferOwnership(id ?? '');
+  const resendInvitation  = useResendInvitation(id ?? '');
+  const cancelInvitation  = useCancelInvitation(id ?? '');
+
+  function adminDisplayName(admin: PlatformOrgAdmin): string {
+    return [admin.first_name, admin.last_name].filter(Boolean).join(' ') || admin.email || admin.user_id.substring(0, 8);
+  }
+
+  function handleDisableAdmin() {
+    if (adminModal?.type !== 'disable') return;
+    const { admin } = adminModal;
+    disableAdmin.mutate(admin.user_id, {
+      onSuccess: () => { toast({ title: 'Inaktiverad', description: `${adminDisplayName(admin)} har inaktiverats` }); closeAdminModal(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleReactivateAdmin() {
+    if (adminModal?.type !== 'reactivate') return;
+    const { admin } = adminModal;
+    reactivateAdmin.mutate(admin.user_id, {
+      onSuccess: () => { toast({ title: 'Återaktiverad', description: `${adminDisplayName(admin)} har återaktiverats` }); closeAdminModal(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleTransferOwnership() {
+    if (adminModal?.type !== 'transfer-ownership') return;
+    const { admin } = adminModal;
+    transferOwnership.mutate(admin.user_id, {
+      onSuccess: () => { toast({ title: 'Ägarskap överfört', description: `${adminDisplayName(admin)} är nu ägare` }); closeAdminModal(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleResendInvitation() {
+    if (adminModal?.type !== 'resend-invitation') return;
+    const { admin } = adminModal;
+    resendInvitation.mutate(admin.user_id, {
+      onSuccess: () => { toast({ title: 'Inbjudan skickad igen', description: `En ny inbjudan har skapats för ${adminDisplayName(admin)}` }); closeAdminModal(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleCancelInvitation() {
+    if (adminModal?.type !== 'cancel-invitation') return;
+    const { admin } = adminModal;
+    cancelInvitation.mutate(admin.user_id, {
+      onSuccess: () => { toast({ title: 'Inbjudan avbruten', description: `Inbjudan till ${adminDisplayName(admin)} har avbrutits` }); closeAdminModal(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
 
   // ── Org not found / load error ─────────────────────────────────────────────
   if (!orgLoading && orgError) {
@@ -315,6 +472,8 @@ export function PlatformOrganizationDetailPage() {
                   <InfoRow label="Prenumerationsnivå"   value={TIER_LABEL[org.subscription_tier] ?? org.subscription_tier} />
                   <InfoRow label="Prenumerationsstatus" value={SUB_STATUS_LABEL[org.subscription_status] ?? org.subscription_status} />
                   <InfoRow label="Organisationsstatus"  value={STATUS_LABEL[org.status] ?? org.status} />
+                  <InfoRow label="Max antal användare"  value={String(org.max_users)} />
+                  <InfoRow label="Max antal filialer"   value={String(org.max_locations)} />
                   {org.trial_ends_at && (
                     <InfoRow
                       label="Testperiod slutar"
@@ -333,6 +492,10 @@ export function PlatformOrganizationDetailPage() {
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
               <Users className="w-4 h-4 text-muted-foreground" />
               <p className="text-sm font-semibold text-foreground">Organisationsadministratörer</p>
+              <Button size="sm" className="ml-auto" onClick={() => setAdminModal({ type: 'invite' })}>
+                <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+                Bjud in administratör
+              </Button>
             </div>
 
             {adminsError && <div className="p-4"><SectionError message="Kunde inte hämta administratörer" /></div>}
@@ -351,16 +514,19 @@ export function PlatformOrganizationDetailPage() {
                   <TableRow className="hover:bg-transparent">
                     <TableHead>Namn</TableHead>
                     <TableHead>Roll</TableHead>
+                    <TableHead className="hidden lg:table-cell">Inbjudan</TableHead>
                     <TableHead className="hidden md:table-cell">Senaste inloggning</TableHead>
                     <TableHead className="hidden sm:table-cell">Tilldelad</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="w-10" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(admins as PlatformOrgAdmin[]).map(admin => {
                     const initials = [admin.first_name?.[0], admin.last_name?.[0]]
                       .filter(Boolean).join('').toUpperCase() || '?';
-                    const displayName = [admin.first_name, admin.last_name].filter(Boolean).join(' ') || admin.email || admin.user_id.substring(0, 8);
+                    const displayName = adminDisplayName(admin);
+                    const isActive = admin.membership_status === 'active';
                     return (
                       <TableRow key={admin.user_id}>
                         <TableCell>
@@ -379,6 +545,14 @@ export function PlatformOrganizationDetailPage() {
                             {ROLE_LABEL[admin.role] ?? admin.role_display ?? admin.role}
                           </Badge>
                         </TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          <span className={cn(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold',
+                            INVITATION_STATUS_CLASS[admin.invitation_status] ?? 'bg-muted text-muted-foreground',
+                          )}>
+                            {INVITATION_STATUS_LABEL[admin.invitation_status] ?? admin.invitation_status}
+                          </span>
+                        </TableCell>
                         <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
                           {admin.last_sign_in_at
                             ? new Date(admin.last_sign_in_at).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })
@@ -390,12 +564,15 @@ export function PlatformOrganizationDetailPage() {
                         <TableCell>
                           <span className={cn(
                             'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold',
-                            admin.is_active
+                            isActive
                               ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                               : 'bg-gray-100 text-gray-500 dark:bg-gray-800/40 dark:text-gray-400',
                           )}>
-                            {admin.is_active ? 'Aktiv' : 'Inaktiv'}
+                            {isActive ? 'Aktiv' : 'Inaktiverad'}
                           </span>
+                        </TableCell>
+                        <TableCell>
+                          <AdminRowActions admin={admin} onAction={setAdminModal} />
                         </TableCell>
                       </TableRow>
                     );
@@ -556,6 +733,71 @@ export function PlatformOrganizationDetailPage() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* ── Administrator management modals ── */}
+      {/* Always mounted; only `open` toggles (Platform UI Stability Hardening
+          Sprint) — see PlatformOrganizationsPage.tsx's ConfirmDialog for the
+          reference implementation of this pattern. */}
+      <InviteAdminDialog
+        open={adminModal?.type === 'invite' && !!org}
+        orgId={org?.id ?? ''} orgName={org?.name ?? ''}
+        onClose={closeAdminModal}
+      />
+      <ChangeAdminRoleDialog
+        open={adminModal?.type === 'change-role' && !!org}
+        orgId={org?.id ?? ''}
+        admin={adminModal?.type === 'change-role' ? adminModal.admin : null}
+        onClose={closeAdminModal}
+      />
+      <ConfirmDialog
+        open={
+          adminModal?.type === 'disable' || adminModal?.type === 'reactivate' ||
+          adminModal?.type === 'transfer-ownership' || adminModal?.type === 'resend-invitation' ||
+          adminModal?.type === 'cancel-invitation'
+        }
+        title={
+          adminModal?.type === 'disable'            ? 'Inaktivera administratör' :
+          adminModal?.type === 'reactivate'          ? 'Återaktivera administratör' :
+          adminModal?.type === 'transfer-ownership'  ? 'Överför ägarskap' :
+          adminModal?.type === 'resend-invitation'   ? 'Skicka inbjudan igen' :
+          adminModal?.type === 'cancel-invitation'   ? 'Avbryt inbjudan' : ''
+        }
+        description={
+          adminModal?.type === 'disable'
+            ? `${adminDisplayName(adminModal.admin)} förlorar omedelbart åtkomst till organisationen. Kan återaktiveras när som helst.`
+          : adminModal?.type === 'reactivate'
+            ? `${adminDisplayName(adminModal.admin)} får åter åtkomst till organisationen.`
+          : adminModal?.type === 'transfer-ownership'
+            ? `${adminDisplayName(adminModal.admin)} blir organisationens nya ägare. Den nuvarande ägaren behåller admin-åtkomst.`
+          : adminModal?.type === 'resend-invitation'
+            ? `Ett nytt konto-lösenord skapas för ${adminDisplayName(adminModal.admin)} och en ny inbjudan köas. Den tidigare inbjudan avbryts.`
+          : adminModal?.type === 'cancel-invitation'
+            ? `Inbjudan till ${adminDisplayName(adminModal.admin)} avbryts och kontot tas bort permanent. Detta kan inte ångras.`
+          : ''
+        }
+        confirmLabel={
+          adminModal?.type === 'disable'            ? 'Inaktivera' :
+          adminModal?.type === 'reactivate'          ? 'Återaktivera' :
+          adminModal?.type === 'transfer-ownership'  ? 'Överför ägarskap' :
+          adminModal?.type === 'resend-invitation'   ? 'Skicka igen' :
+          adminModal?.type === 'cancel-invitation'   ? 'Avbryt inbjudan' : ''
+        }
+        confirmVariant={
+          adminModal?.type === 'reactivate' || adminModal?.type === 'resend-invitation' ? 'default' : 'destructive'
+        }
+        loading={
+          disableAdmin.isPending || reactivateAdmin.isPending || transferOwnership.isPending ||
+          resendInvitation.isPending || cancelInvitation.isPending
+        }
+        onConfirm={
+          adminModal?.type === 'disable'            ? handleDisableAdmin :
+          adminModal?.type === 'reactivate'          ? handleReactivateAdmin :
+          adminModal?.type === 'transfer-ownership'  ? handleTransferOwnership :
+          adminModal?.type === 'resend-invitation'   ? handleResendInvitation :
+          adminModal?.type === 'cancel-invitation'   ? handleCancelInvitation : closeAdminModal
+        }
+        onCancel={closeAdminModal}
+      />
     </PageLayout>
   );
 }

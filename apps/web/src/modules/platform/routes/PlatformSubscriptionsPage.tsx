@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePlatformSubscriptions } from '../hooks/usePlatformSubscriptions.js';
 import type { PlatformSubscription } from '../hooks/usePlatformSubscriptions.js';
+import { TIER_LABEL } from '../lib/tierDisplay.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,13 +41,6 @@ const SUB_STATUS_FILTERS = [
 ];
 
 // ─── Display maps ─────────────────────────────────────────────────────────────
-
-const TIER_LABEL: Record<string, string> = {
-  trial:        'Trial',
-  starter:      'Starter',
-  professional: 'Professional',
-  enterprise:   'Enterprise',
-};
 
 const TIER_CLASS: Record<string, string> = {
   trial:        'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',

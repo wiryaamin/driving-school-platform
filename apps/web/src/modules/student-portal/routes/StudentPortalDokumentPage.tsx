@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils.js';
 import { usePortalDocuments } from '../hooks/useStudentPortal.js';
 import type { PortalDocument } from '../hooks/useStudentPortal.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 // ─── Category helpers ─────────────────────────────────────────────────────────
 
@@ -157,7 +157,7 @@ export function StudentPortalDokumentPage() {
       {/* Document list */}
       {!isLoading && !error && documents && documents.length > 0 && (
         <div>
-          <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide mb-2">
+          <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-2">
             Dina dokument ({documents.length})
           </p>
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">

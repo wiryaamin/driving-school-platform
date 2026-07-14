@@ -2,9 +2,11 @@ import { useState, useMemo } from 'react';
 import { Clock, Plus, Loader2, CalendarCheck, Bell, CheckCircle2 } from 'lucide-react';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, Skeleton, toast, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, Label, Input, Textarea } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useInstructorList } from '@modules/instructors/index.js';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
-import { useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, useAddToWaitlist } from '../hooks/useWaitlist.js';
+import { useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, useAddToWaitlist, useRemoveFromWaitlist } from '../hooks/useWaitlist.js';
 import type { WaitlistTab, WaitlistEntryRich } from '../hooks/useWaitlist.js';
 import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
@@ -137,6 +139,57 @@ function NotifyWaitlistBtn({ entry, slotDateLabel }: { entry: WaitlistEntryRich;
           ? <CheckCircle2 className="w-3 h-3" />
           : <Bell className="w-3 h-3" />}
       {alreadyNotified ? 'Notifierad' : 'Meddela'}
+    </button>
+  );
+}
+
+// ─── Cancel (remove) from waitlist ────────────────────────────────────────────
+
+function CancelWaitlistBtn({ entry }: { entry: WaitlistEntryRich }) {
+  const [confirming, setConfirming] = useState(false);
+  const remove = useRemoveFromWaitlist();
+
+  function handleConfirm() {
+    remove.mutate(entry.id, {
+      onSuccess: () => {
+        toast({ title: 'Borttagen från väntelistan' });
+        setConfirming(false);
+      },
+      onError: () => {
+        toast({ title: 'Kunde inte ta bort från väntelistan', variant: 'destructive' });
+        setConfirming(false);
+      },
+    });
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1">
+        <button
+          onClick={handleConfirm}
+          disabled={remove.isPending}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {remove.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+          Bekräfta
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          disabled={remove.isPending}
+          className="px-2 py-1 rounded text-xs border border-border text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+        >
+          Avbryt
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
+    >
+      Ta bort
     </button>
   );
 }
@@ -400,15 +453,18 @@ export function WaitlistPage() {
   }
 
   return (
+    <PermissionGate permission={Permissions.SCHEDULING_READ}>
     <PageLayout>
       <PageHeader
         title="Väntelista"
         breadcrumbs={[{ label: 'Väntelista' }]}
         actions={
-          <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
-            <Plus className="w-3.5 h-3.5" />
-            Skapa ny
-          </Button>
+          <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+            <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>
+              <Plus className="w-3.5 h-3.5" />
+              Skapa ny
+            </Button>
+          </PermissionGate>
         }
       />
 
@@ -525,8 +581,13 @@ export function WaitlistPage() {
                       {tab === 'aktiva' && (
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">
-                            <PromoteBtn entry={entry} />
-                            <NotifyWaitlistBtn entry={entry} slotDateLabel={slotDate} />
+                            <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                              <PromoteBtn entry={entry} />
+                            </PermissionGate>
+                            <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
+                              <NotifyWaitlistBtn entry={entry} slotDateLabel={slotDate} />
+                              <CancelWaitlistBtn entry={entry} />
+                            </PermissionGate>
                           </div>
                         </td>
                       )}
@@ -565,5 +626,6 @@ export function WaitlistPage() {
       </div>
       <CreateWaitlistEntryDialog open={createOpen} onOpenChange={setCreateOpen} />
     </PageLayout>
+    </PermissionGate>
   );
 }

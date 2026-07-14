@@ -12,7 +12,7 @@ import {
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -186,7 +186,7 @@ function UpcomingSection({ bookings }: {
 
   return (
     <div className="space-y-3">
-      <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide">Kommande lektioner</p>
+      <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide">Kommande lektioner</p>
       {upcoming.map(b => {
         const prep = getLessonPrep(b.lesson_type_name);
         return (
@@ -249,7 +249,7 @@ function NotesFeed({ items }: { items: HistoryItem[] }) {
 
   return (
     <div className="space-y-3">
-      <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide">
+      <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide">
         Lärarkommentarer ({items.length})
       </p>
       <div className="space-y-3">
@@ -345,7 +345,7 @@ export function StudentPortalMeddelandenPage() {
           {/* System notifications */}
           {notifications.length > 0 && (
             <div className="space-y-2">
-              <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide">
+              <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide">
                 Notiser ({notifications.length})
               </p>
               <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">

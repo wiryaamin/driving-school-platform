@@ -17,6 +17,8 @@ import {
 import { cn } from '@/lib/utils.js';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -494,6 +496,7 @@ export function RolesSettingsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
+    <PermissionGate permission={Permissions.ADMIN_ROLE_READ}>
     <div className="max-w-4xl space-y-5">
 
       {/* Breadcrumb + action */}
@@ -939,6 +942,7 @@ export function RolesSettingsPage() {
       </Dialog>
 
     </div>
+    </PermissionGate>
   );
 }
 

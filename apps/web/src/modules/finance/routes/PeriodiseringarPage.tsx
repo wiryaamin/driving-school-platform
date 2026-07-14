@@ -39,6 +39,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useFinancialPeriods } from '../hooks/useReconciliation.js';
 import {
@@ -1024,6 +1025,7 @@ export function PeriodiseringarPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:accruals:manage">
         <PermissionGate permission={Permissions.FINANCE_ACCRUALS_READ}>
           <Tabs defaultValue="accruals">
             <TabsList>
@@ -1042,6 +1044,7 @@ export function PeriodiseringarPage() {
             </TabsContent>
           </Tabs>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

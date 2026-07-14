@@ -3,6 +3,9 @@ import { RefreshCw, RotateCcw, X, AlertCircle, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useMessageList,
   useRetryMessage,
@@ -113,28 +116,30 @@ function MessageRow({
           {relativeTime(msg.created_at)}
         </td>
         <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center gap-1">
-            {canRetry && (
-              <button
-                onClick={handleRetry}
-                disabled={retry.isPending}
-                className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                title="Försök igen"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {canCancel && (
-              <button
-                onClick={handleCancel}
-                disabled={cancel.isPending}
-                className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                title="Avbryt"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+            <div className="flex items-center gap-1">
+              {canRetry && (
+                <button
+                  onClick={handleRetry}
+                  disabled={retry.isPending}
+                  className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  title="Försök igen"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {canCancel && (
+                <button
+                  onClick={handleCancel}
+                  disabled={cancel.isPending}
+                  className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                  title="Avbryt"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </PermissionGate>
         </td>
       </tr>
 
@@ -206,6 +211,7 @@ export function ActivityCenterPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* Filters + refresh */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -323,6 +329,7 @@ export function ActivityCenterPage() {
           </div>
         )}
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

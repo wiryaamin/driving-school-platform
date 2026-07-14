@@ -6,6 +6,8 @@ import {
   Button, DataTable,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useClassList, useLicenceCategories } from '../hooks/useClassList.js';
 import type { ClassListEntry } from '../hooks/useClassList.js';
 import { cn } from '@/lib/utils.js';
@@ -230,6 +232,7 @@ export function ClassListPage() {
   }
 
   return (
+    <PermissionGate permission={Permissions.STUDENTS_PROGRESS_READ}>
     <div className="max-w-screen-2xl mx-auto">
 
       {/* Breadcrumb */}
@@ -341,5 +344,6 @@ export function ClassListPage() {
         </>
       )}
     </div>
+    </PermissionGate>
   );
 }

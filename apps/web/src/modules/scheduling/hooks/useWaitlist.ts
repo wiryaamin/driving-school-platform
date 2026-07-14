@@ -104,7 +104,11 @@ async function apiFetchWaitlistList(params: WaitlistListParams): Promise<Waitlis
   const rangeTo   = rangeFrom + per_page - 1;
   const statuses  = TAB_STATUSES[params.tab ?? 'aktiva'];
 
-  const { data, count, error } = await supabase
+  // Active waitlist entries are shown in queue order (priority asc, then oldest first).
+  // Historical tabs (utgångna / raderade) show most-recent activity first.
+  const isQueueTab = (params.tab ?? 'aktiva') === 'aktiva';
+
+  let q = supabase
     .from('waitlist_entries')
     .select(
       `id, organization_id, slot_id, student_id, priority, status,
@@ -114,9 +118,15 @@ async function apiFetchWaitlistList(params: WaitlistListParams): Promise<Waitlis
        lesson_slots ( id, starts_at, ends_at, instructor_id, lesson_type_id )`,
       { count: 'exact' }
     )
-    .in('status', statuses)
-    .order('created_at', { ascending: false })
-    .range(rangeFrom, rangeTo);
+    .in('status', statuses);
+
+  if (isQueueTab) {
+    q = q.order('priority', { ascending: true }).order('created_at', { ascending: true });
+  } else {
+    q = q.order('created_at', { ascending: false });
+  }
+
+  const { data, count, error } = await q.range(rangeFrom, rangeTo);
 
   if (error) throw new Error(error.message);
   return {
@@ -213,6 +223,26 @@ export function useAddToWaitlist() {
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.all });
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });
     },
+  });
+}
+
+// ─── Remove / cancel a waitlist entry ────────────────────────────────────────
+
+async function apiRemoveFromWaitlist(entryId: string): Promise<WaitlistEntry> {
+  const { data, error } = await supabase.functions.invoke<WaitlistEntry>(
+    `waitlist/${entryId}`,
+    { method: 'DELETE' }
+  );
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data;
+}
+
+export function useRemoveFromWaitlist() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiRemoveFromWaitlist,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: waitlistKeys.all }),
   });
 }
 

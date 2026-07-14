@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import { useSessionStore } from '@core/store/session.store.js';
-import { generateUniqueSlug } from '../lib/slugify.js';
 import type { PlatformOrganization } from './usePlatformOrganizations.js';
+import { extractFunctionErrorMessage, type ProvisioningResult } from '../lib/provisioningSchema.js';
 
 // ─── Input Types ──────────────────────────────────────────────────────────────
 
@@ -10,9 +10,11 @@ export interface CreateOrgInput {
   name:              string;
   legal_name:        string;
   org_number:        string | null;
-  contact_email:     string | null;
   subscription_tier: string;
   trial_days:        number;
+  admin_first_name:  string;
+  admin_last_name:   string;
+  admin_email:       string;
 }
 
 export interface UpdateOrgInput {
@@ -22,7 +24,19 @@ export interface UpdateOrgInput {
   org_number:        string | null;
   contact_email:     string | null;
   subscription_tier: string;
+  max_users:         number;
+  max_locations:     number;
   existingSettings:  Record<string, unknown>;
+}
+
+export type AdminRole = 'org_owner' | 'org_admin' | 'org_manager';
+
+export interface InviteAdminInput {
+  orgId:      string;
+  firstName:  string;
+  lastName:   string;
+  email:      string;
+  role:       AdminRole;
 }
 
 // ─── DB access helper ─────────────────────────────────────────────────────────
@@ -36,7 +50,7 @@ export interface UpdateOrgInput {
 function orgs() { return (supabase as any).from('organizations'); }
 
 const ORG_RETURN =
-  'id, slug, name, legal_name, org_number, status, subscription_tier, subscription_status, trial_ends_at, settings, created_at';
+  'id, slug, name, legal_name, org_number, status, subscription_tier, subscription_status, trial_ends_at, max_users, max_locations, settings, created_at';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -53,38 +67,40 @@ function asOrg(raw: unknown): PlatformOrganization {
   return raw as PlatformOrganization;
 }
 
-// ─── Create Organization ──────────────────────────────────────────────────────
+// ─── Create Organization (Automated Customer Provisioning) ────────────────────
+//
+// Calls POST /provision instead of inserting the organizations row directly —
+// that bare insert (the previous implementation) is exactly the gap the
+// Customer Provisioning & Tenant Onboarding Architecture (Section 7) closes:
+// it produced an organization with no location, no admin, no membership, no
+// role. The Edge Function performs the full sequence atomically, with
+// rollback on partial failure. See supabase/functions/platform-admin/index.ts
+// (handleProvision) for the implementation.
 
 export function useCreateOrg() {
-  const actorId    = useActorId();
   const invalidate = useInvalidatePlatform();
 
   return useMutation({
-    mutationFn: async (input: CreateOrgInput): Promise<PlatformOrganization> => {
-      const slug = await generateUniqueSlug(input.name);
-      const isTrial = input.subscription_tier === 'trial';
-
-      const { data, error } = await orgs()
-        .insert({
-          slug,
-          name:                input.name.trim(),
-          legal_name:          input.legal_name.trim(),
-          org_number:          input.org_number || null,
-          status:              'active',
-          subscription_tier:   input.subscription_tier,
-          subscription_status: isTrial ? 'trialing' : 'active',
-          trial_ends_at:       isTrial
-            ? new Date(Date.now() + input.trial_days * 86_400_000).toISOString()
-            : null,
-          settings:   input.contact_email ? { contact_email: input.contact_email } : {},
-          created_by: actorId,
-          updated_by: actorId,
-        })
-        .select(ORG_RETURN)
-        .single();
-
-      if (error) throw new Error((error as { message: string }).message);
-      return asOrg(data);
+    mutationFn: async (input: CreateOrgInput): Promise<ProvisioningResult> => {
+      const { data, error } = await supabase.functions.invoke<{ data: ProvisioningResult }>(
+        'platform-admin/provision',
+        {
+          method: 'POST',
+          body: {
+            name:              input.name.trim(),
+            legal_name:        input.legal_name.trim(),
+            org_number:        input.org_number || null,
+            subscription_tier: input.subscription_tier,
+            trial_days:        input.trial_days,
+            admin_first_name:  input.admin_first_name.trim(),
+            admin_last_name:   input.admin_last_name.trim(),
+            admin_email:       input.admin_email.trim(),
+          },
+        },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skapa organisationen'));
+      if (!data?.data) throw new Error('Inget svar från provisioneringstjänsten');
+      return data.data;
     },
     onSuccess: invalidate,
   });
@@ -109,6 +125,8 @@ export function useUpdateOrg() {
           legal_name:        input.legal_name.trim(),
           org_number:        input.org_number || null,
           subscription_tier: input.subscription_tier,
+          max_users:         input.max_users,
+          max_locations:     input.max_locations,
           settings:          newSettings,
           updated_by:        actorId,
         })
@@ -150,6 +168,31 @@ export function useReactivateOrg() {
     mutationFn: async (orgId: string): Promise<void> => {
       const { error } = await orgs()
         .update({ status: 'active', updated_by: actorId })
+        .eq('id', orgId);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Terminate Organization ───────────────────────────────────────────────────
+//
+// Reuses the exact same direct-RLS-write mechanism as Suspend/Reactivate
+// (organizations_update_platform policy) — Organization Lifecycle Stage 2
+// implements the existing `terminated` status value, already modeled and
+// displayed everywhere, using the architecture that already exists for the
+// other two status transitions rather than a new mechanism. Reactivating a
+// terminated organization reuses the existing useReactivateOrg unchanged
+// (it already writes status: 'active' unconditionally, from any prior status).
+
+export function useTerminateOrg() {
+  const actorId    = useActorId();
+  const invalidate = useInvalidatePlatform();
+
+  return useMutation({
+    mutationFn: async (orgId: string): Promise<void> => {
+      const { error } = await orgs()
+        .update({ status: 'terminated', updated_by: actorId })
         .eq('id', orgId);
       if (error) throw new Error((error as { message: string }).message);
     },
@@ -220,6 +263,145 @@ export function useEndTrial() {
         })
         .eq('id', orgId);
       if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Administrator Management ─────────────────────────────────────────────────
+//
+// All five actions go through platform-admin (not a direct RLS write) because
+// Invite Administrator requires the Supabase Auth Admin API, which only a
+// service-role Edge Function can call — the same reason handleProvision is an
+// Edge Function rather than a client-side insert. The other four are grouped
+// alongside it for one consistent administrator-management surface, and
+// because each enforces a multi-row invariant (exactly one active admin-tier
+// role per person, never zero active administrators) that's safer to
+// evaluate server-side than as a bare RLS-gated update.
+
+function useInvalidateOrgAdmins(orgId: string) {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ['platform', 'org', orgId, 'admins'] });
+    void queryClient.invalidateQueries({ queryKey: ['platform', 'org', orgId, 'timeline'] });
+  };
+}
+
+export function useInviteAdmin(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (input: Omit<InviteAdminInput, 'orgId'>): Promise<{ user_id: string; membership_id: string; role: AdminRole }> => {
+      const { data, error } = await supabase.functions.invoke<{ data: { user_id: string; membership_id: string; role: AdminRole } }>(
+        `platform-admin/orgs/${orgId}/admins`,
+        {
+          method: 'POST',
+          body: {
+            first_name: input.firstName.trim(),
+            last_name:  input.lastName.trim(),
+            email:      input.email.trim(),
+            role:       input.role,
+          },
+        },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte bjuda in administratören'));
+      if (!data?.data) throw new Error('Inget svar från servern');
+      return data.data;
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useChangeAdminRole(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: AdminRole }): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/role`,
+        { method: 'POST', body: { role } },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte ändra rollen'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useDisableAdmin(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/disable`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte inaktivera administratören'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useReactivateAdmin(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/reactivate`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte återaktivera administratören'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useTransferOwnership(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/transfer-ownership`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte överföra ägarskapet'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Administrator Invitation Lifecycle (Phase 4) ─────────────────────────────
+// Both are scoped server-side to invitation_status = 'pending' only — see
+// platform-admin/index.ts's own comment on why an already-accepted
+// administrator uses Disable Administrator instead.
+
+export function useResendInvitation(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/resend-invitation`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skicka inbjudan igen'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useCancelInvitation(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/cancel-invitation`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte avbryta inbjudan'));
     },
     onSuccess: invalidate,
   });

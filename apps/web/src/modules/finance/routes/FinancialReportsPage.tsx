@@ -1,14 +1,16 @@
 ﻿import { useState } from 'react';
 import {
   AlertTriangle,
-  ChartBar,
+  BarChart2,
   BookOpen,
+  ChartBar,
   CheckCircle2,
   Clock,
   Download,
   FileText,
   Plus,
   RefreshCcw,
+  Scale,
   TrendingUp,
   Wallet,
 } from 'lucide-react';
@@ -53,6 +55,8 @@ import {
   type ExportRunFormat,
 } from '../hooks/useFinancialReports.js';
 import { formatCurrency, formatDate } from '../lib/financeUtils.js';
+import { useAccountBalances, type AccountBalance } from '../hooks/useLedger.js';
+import { useFinancialPeriods } from '../hooks/useReconciliation.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -710,6 +714,324 @@ function ChartTab() {
   );
 }
 
+// ─── Balansräkning (Balance Sheet) ───────────────────────────────────────────
+
+function BsSection({ title, accounts, flip = false }: {
+  title:    string;
+  accounts: AccountBalance[];
+  flip?:    boolean;
+}) {
+  if (accounts.length === 0) return null;
+  const total = accounts.reduce((s, a) => s + (flip ? -a.net_balance : a.net_balance), 0);
+  return (
+    <>
+      <tr>
+        <td colSpan={4} className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted/20">
+          {title}
+        </td>
+      </tr>
+      {accounts.map((a) => {
+        const display = flip ? -a.net_balance : a.net_balance;
+        return (
+          <tr key={a.account_code} className="hover:bg-muted/20">
+            <td className="px-4 py-1.5">
+              <span className="font-mono text-xs font-semibold">{a.account_code}</span>
+              {a.account_name && <span className="text-xs text-muted-foreground ml-2">{a.account_name}</span>}
+            </td>
+            <td className="px-4 py-1.5 text-right font-mono text-xs text-muted-foreground">
+              {a.debit_movement > 0 ? SEK(a.debit_movement) : ''}
+            </td>
+            <td className="px-4 py-1.5 text-right font-mono text-xs text-muted-foreground">
+              {a.credit_movement > 0 ? SEK(a.credit_movement) : ''}
+            </td>
+            <td className={`px-4 py-1.5 text-right font-mono text-xs font-semibold ${
+              display > 0 ? 'text-foreground' : display < 0 ? 'text-destructive' : 'text-muted-foreground'
+            }`}>
+              {SEK(display)}
+            </td>
+          </tr>
+        );
+      })}
+      <tr className="border-t border-border/50 bg-muted/10">
+        <td colSpan={3} className="px-4 py-2 text-right text-xs text-muted-foreground font-semibold">
+          Summa {title}
+        </td>
+        <td className={`px-4 py-2 text-right font-mono text-xs font-bold ${
+          total > 0 ? 'text-foreground' : total < 0 ? 'text-destructive' : 'text-muted-foreground'
+        }`}>
+          {SEK(total)}
+        </td>
+      </tr>
+    </>
+  );
+}
+
+function BalansrakningTab() {
+  const { data: periods = [], isLoading: periodsLoading } = useFinancialPeriods();
+  const [selectedPeriodId, setSelectedPeriodId] = useState('');
+  const { data: accounts = [], isLoading } = useAccountBalances(selectedPeriodId || null);
+
+  const assets = accounts.filter((a) => a.account_code.startsWith('1'));
+  const liabEq = accounts.filter((a) => a.account_code.startsWith('2'));
+
+  const totalAssets = assets.reduce((s, a) => s + a.net_balance, 0);
+  const totalLiabEq = liabEq.reduce((s, a) => s + (-a.net_balance), 0);
+  const isBalanced  = accounts.length > 0 && Math.abs(totalAssets - totalLiabEq) < 1;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        {periodsLoading ? (
+          <div className="h-9 w-56 bg-muted rounded animate-pulse" />
+        ) : (
+          <select
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[240px]"
+            value={selectedPeriodId}
+            onChange={(e) => setSelectedPeriodId(e.target.value)}
+          >
+            <option value="">Välj period…</option>
+            {periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({formatDate(p.period_start)} – {formatDate(p.period_end)})
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {!selectedPeriodId ? (
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          Välj en period ovan för att visa balansräkning.
+        </div>
+      ) : isLoading ? (
+        <div className="space-y-2">
+          {[1,2,3,4,5,6].map((i) => <div key={i} className="h-9 bg-muted rounded animate-pulse" />)}
+        </div>
+      ) : accounts.length === 0 ? (
+        <div className="py-12 text-center space-y-1">
+          <Scale className="w-7 h-7 text-muted-foreground mx-auto" />
+          <p className="text-sm font-medium">Inga kontosaldon</p>
+          <p className="text-xs text-muted-foreground">Perioden har inga bokförda transaktioner.</p>
+        </div>
+      ) : (
+        <>
+          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${
+            isBalanced
+              ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900/50 text-green-700 dark:text-green-400'
+              : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-400'
+          }`}>
+            {isBalanced
+              ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+              : <AlertTriangle className="w-4 h-4 shrink-0" />}
+            {isBalanced
+              ? 'Balansräkningen balanserar för perioden'
+              : 'Perioden kan ha obalans — öppningsbalanser kanske saknas eller period är partiell'}
+          </div>
+
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-muted/30">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Konto</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Debet</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Kredit</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    <BsSection title="Tillgångar (1xxx)" accounts={assets} />
+                    <BsSection title="Eget kapital och skulder (2xxx)" accounts={liabEq} flip />
+                  </tbody>
+                  <tfoot className="border-t-2 bg-muted/30 font-bold">
+                    <tr>
+                      <td colSpan={3} className="px-4 py-2.5 text-sm">Summa tillgångar</td>
+                      <td className="px-4 py-2.5 text-right font-mono text-sm">{SEK(totalAssets)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={3} className="px-4 py-1.5 pb-2.5 text-sm">Summa eget kapital och skulder</td>
+                      <td className="px-4 py-1.5 pb-2.5 text-right font-mono text-sm">{SEK(totalLiabEq)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <p className="text-xs text-muted-foreground">
+            Visar rörelserna inom vald räkenskapsperiod. Ingångssaldon från föregående år inkluderas om de bokförts via periodrollover (BAS-konto 2099).
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Resultaträkning (P&L) ────────────────────────────────────────────────────
+
+function PlSection({ title, accounts, asIncome = false }: {
+  title:     string;
+  accounts:  AccountBalance[];
+  asIncome?: boolean;
+}) {
+  if (accounts.length === 0) return null;
+  const total = accounts.reduce((s, a) => s + (asIncome ? -a.net_balance : a.net_balance), 0);
+  return (
+    <>
+      <tr>
+        <td colSpan={2} className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground bg-muted/20">
+          {title}
+        </td>
+      </tr>
+      {accounts.map((a) => {
+        const display = asIncome ? -a.net_balance : a.net_balance;
+        return (
+          <tr key={a.account_code} className="hover:bg-muted/20">
+            <td className="px-4 py-1.5">
+              <span className="font-mono text-xs font-semibold">{a.account_code}</span>
+              {a.account_name && <span className="text-xs text-muted-foreground ml-2">{a.account_name}</span>}
+            </td>
+            <td className={`px-4 py-1.5 text-right font-mono text-xs ${
+              display > 0 ? 'text-foreground' : display < 0 ? 'text-destructive' : 'text-muted-foreground'
+            }`}>
+              {SEK(display)}
+            </td>
+          </tr>
+        );
+      })}
+      <tr className="border-t border-border/50 bg-muted/10">
+        <td className="px-4 py-2 text-right text-xs text-muted-foreground font-semibold">Summa {title}</td>
+        <td className={`px-4 py-2 text-right font-mono text-xs font-bold ${
+          total > 0 ? 'text-foreground' : total < 0 ? 'text-destructive' : 'text-muted-foreground'
+        }`}>
+          {SEK(total)}
+        </td>
+      </tr>
+    </>
+  );
+}
+
+function ResultatrakningTab() {
+  const { data: periods = [], isLoading: periodsLoading } = useFinancialPeriods();
+  const [selectedPeriodId, setSelectedPeriodId] = useState('');
+  const { data: accounts = [], isLoading } = useAccountBalances(selectedPeriodId || null);
+
+  const revenue   = accounts.filter((a) => a.account_code.startsWith('3'));
+  const cogs      = accounts.filter((a) => a.account_code.startsWith('4'));
+  const operating = accounts.filter((a) =>
+    a.account_code.startsWith('5') || a.account_code.startsWith('6') || a.account_code.startsWith('7')
+  );
+  const financial = accounts.filter((a) => a.account_code.startsWith('8'));
+
+  const totalRevenue = revenue.reduce((s, a) => s + (-a.net_balance), 0);
+  const totalCogs    = cogs.reduce((s, a) => s + a.net_balance, 0);
+  const grossProfit  = totalRevenue - totalCogs;
+  const totalOper    = operating.reduce((s, a) => s + a.net_balance, 0);
+  const ebit         = grossProfit - totalOper;
+  const totalFin     = financial.reduce((s, a) => s + a.net_balance, 0);
+  const netResult    = ebit - totalFin;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        {periodsLoading ? (
+          <div className="h-9 w-56 bg-muted rounded animate-pulse" />
+        ) : (
+          <select
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[240px]"
+            value={selectedPeriodId}
+            onChange={(e) => setSelectedPeriodId(e.target.value)}
+          >
+            <option value="">Välj period…</option>
+            {periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({formatDate(p.period_start)} – {formatDate(p.period_end)})
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {!selectedPeriodId ? (
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          Välj en period ovan för att visa resultaträkning.
+        </div>
+      ) : isLoading ? (
+        <div className="space-y-2">
+          {[1,2,3,4,5,6].map((i) => <div key={i} className="h-9 bg-muted rounded animate-pulse" />)}
+        </div>
+      ) : accounts.length === 0 ? (
+        <div className="py-12 text-center space-y-1">
+          <BarChart2 className="w-7 h-7 text-muted-foreground mx-auto" />
+          <p className="text-sm font-medium">Inga kontosaldon</p>
+          <p className="text-xs text-muted-foreground">Perioden har inga bokförda transaktioner.</p>
+        </div>
+      ) : (
+        <>
+          <div className={`flex items-center justify-between px-4 py-3 rounded-lg border font-semibold ${
+            netResult >= 0
+              ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900/50 text-green-700 dark:text-green-400'
+              : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/50 text-destructive'
+          }`}>
+            <span className="text-sm">{netResult >= 0 ? 'Periodens vinst' : 'Periodens förlust'}</span>
+            <span className="font-mono text-lg">{SEK(Math.abs(netResult))}</span>
+          </div>
+
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-muted/30">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Konto</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Belopp</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    <PlSection title="Nettoomsättning (3xxx)" accounts={revenue} asIncome />
+                    <PlSection title="Direkta kostnader (4xxx)" accounts={cogs} />
+                    {(revenue.length > 0 || cogs.length > 0) && (
+                      <tr className="bg-blue-50/50 dark:bg-blue-950/10 border-y border-blue-200/50 dark:border-blue-900/30">
+                        <td className="px-4 py-2 text-sm font-semibold text-blue-700 dark:text-blue-400">Bruttoresultat</td>
+                        <td className={`px-4 py-2 text-right font-mono text-sm font-bold ${grossProfit >= 0 ? 'text-blue-700 dark:text-blue-400' : 'text-destructive'}`}>
+                          {SEK(grossProfit)}
+                        </td>
+                      </tr>
+                    )}
+                    <PlSection title="Rörelsekostnader (5xxx–7xxx)" accounts={operating} />
+                    {(revenue.length > 0 || operating.length > 0) && (
+                      <tr className="bg-blue-50/50 dark:bg-blue-950/10 border-y border-blue-200/50 dark:border-blue-900/30">
+                        <td className="px-4 py-2 text-sm font-semibold text-blue-700 dark:text-blue-400">Rörelseresultat (EBIT)</td>
+                        <td className={`px-4 py-2 text-right font-mono text-sm font-bold ${ebit >= 0 ? 'text-blue-700 dark:text-blue-400' : 'text-destructive'}`}>
+                          {SEK(ebit)}
+                        </td>
+                      </tr>
+                    )}
+                    <PlSection title="Finansiella poster (8xxx)" accounts={financial} />
+                  </tbody>
+                  <tfoot className="border-t-2 bg-muted/30">
+                    <tr>
+                      <td className="px-4 py-2.5 text-sm font-bold">
+                        {netResult >= 0 ? 'Periodens vinst' : 'Periodens förlust'}
+                      </td>
+                      <td className={`px-4 py-2.5 text-right font-mono text-sm font-bold ${
+                        netResult >= 0 ? 'text-green-700 dark:text-green-400' : 'text-destructive'
+                      }`}>
+                        {SEK(Math.abs(netResult))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Warning banner for overdue ───────────────────────────────────────────────
 
 function OverdueBanner() {
@@ -775,6 +1097,14 @@ export function FinancialReportsPage() {
                   <BookOpen className="w-3.5 h-3.5 mr-1.5" />
                   Kontoplan
                 </TabsTrigger>
+                <TabsTrigger value="balansrakning">
+                  <Scale className="w-3.5 h-3.5 mr-1.5" />
+                  Balansräkning
+                </TabsTrigger>
+                <TabsTrigger value="resultatrakning">
+                  <BarChart2 className="w-3.5 h-3.5 mr-1.5" />
+                  Resultaträkning
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="revenue" className="mt-5"><RevenueTab /></TabsContent>
@@ -782,7 +1112,9 @@ export function FinancialReportsPage() {
               <TabsContent value="aging"   className="mt-5"><AgingTab /></TabsContent>
               <TabsContent value="wallet"  className="mt-5"><WalletTab /></TabsContent>
               <TabsContent value="exports" className="mt-5"><ExportsTab /></TabsContent>
-              <TabsContent value="chart"   className="mt-5"><ChartTab /></TabsContent>
+              <TabsContent value="chart"          className="mt-5"><ChartTab /></TabsContent>
+              <TabsContent value="balansrakning"  className="mt-5"><BalansrakningTab /></TabsContent>
+              <TabsContent value="resultatrakning" className="mt-5"><ResultatrakningTab /></TabsContent>
             </Tabs>
           </div>
         </PermissionGate>

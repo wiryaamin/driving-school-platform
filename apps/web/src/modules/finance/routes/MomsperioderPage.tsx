@@ -32,6 +32,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import {
   useVatPeriods,
@@ -566,6 +567,7 @@ export function MomsperioderPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:vat:report">
         <PermissionGate permission={Permissions.FINANCE_VAT_READ}>
           <div className="space-y-6">
 
@@ -682,6 +684,7 @@ export function MomsperioderPage() {
 
           </div>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
 
       {creating && <CreatePeriodDialog onClose={() => setCreating(false)} />}

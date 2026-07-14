@@ -7,6 +7,7 @@ export { ActivityCenterPage }      from './routes/ActivityCenterPage.js';
 export { NotificationRulesPage }   from './routes/NotificationRulesPage.js';
 export { QueueMonitorPage }        from './routes/QueueMonitorPage.js';
 export { CommAnalyticsPage }       from './routes/CommAnalyticsPage.js';
-export { NotificationLogPage }    from './routes/NotificationLogPage.js';
+export { NotificationLogPage }         from './routes/NotificationLogPage.js';
+export { NotificationPreferencesPage } from './routes/NotificationPreferencesPage.js';
 export { ChannelIcon, ChannelBadge, StatusBadge } from './components/ChannelIcon.js';
 export type { CommChannel, OutboundMessage, ChannelConfig, CommTemplate } from './hooks/useCommunication.js';

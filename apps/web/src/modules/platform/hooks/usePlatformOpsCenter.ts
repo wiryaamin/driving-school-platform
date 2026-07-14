@@ -166,6 +166,87 @@ export function usePlatformSecurityEvents(limit = 100) {
   });
 }
 
+export interface WorkerRun {
+  id:                string;
+  worker_name:       string;
+  run_status:        'running' | 'completed' | 'failed' | 'partial';
+  started_at:        string;
+  completed_at:      string | null;
+  duration_ms:       number | null;
+  processed_count:   number;
+  success_count:     number;
+  failed_count:      number;
+  retry_count:       number;
+  dead_letter_count: number;
+  error_summary:     string | null;
+  metadata:          Record<string, unknown>;
+}
+
+export interface WorkerRunPage {
+  total: number;
+  rows:  WorkerRun[];
+}
+
+export interface WorkerRunFilters {
+  workerName?: string | null;
+  status?:     string | null;
+  limit:       number;
+  offset:      number;
+}
+
+export interface WorkerRunSummary {
+  worker_name:         string;
+  last_run_status:     'running' | 'completed' | 'failed' | 'partial';
+  last_started_at:     string;
+  last_completed_at:   string | null;
+  last_duration_ms:    number | null;
+  last_error_summary:  string | null;
+  runs_24h:            number;
+  failed_24h:          number;
+  stuck_count:         number;
+  avg_duration_ms_24h: number | null;
+}
+
+export function useWorkerRuns(filters: WorkerRunFilters) {
+  return useQuery({
+    queryKey: ['platform', 'worker-runs', filters],
+    queryFn:  async (): Promise<WorkerRunPage> => {
+      const params = new URLSearchParams();
+      if (filters.workerName) params.set('worker_name', filters.workerName);
+      if (filters.status)     params.set('status',      filters.status);
+      params.set('limit',  String(filters.limit));
+      params.set('offset', String(filters.offset));
+
+      const { data, error } = await supabase.functions.invoke<{ data: WorkerRunPage }>(
+        `platform-admin/worker-runs?${params.toString()}`,
+        { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      return data?.data ?? { total: 0, rows: [] };
+    },
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+}
+
+export function useWorkerRunSummary() {
+  return useQuery({
+    queryKey: ['platform', 'worker-runs', 'summary'],
+    queryFn:  async (): Promise<WorkerRunSummary[]> => {
+      const { data, error } = await supabase.functions.invoke<{ data: WorkerRunSummary[] }>(
+        'platform-admin/worker-runs/summary',
+        { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      return data?.data ?? [];
+    },
+    staleTime: 20_000,
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+}
+
 export function usePlatformOrgHealth(orgId: string | undefined) {
   return useQuery({
     queryKey: ['platform', 'support', 'health', orgId],

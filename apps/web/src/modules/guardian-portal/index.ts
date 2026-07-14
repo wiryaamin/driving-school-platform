@@ -12,6 +12,7 @@ export { GuardianPortalBokningarPage }        from './routes/GuardianPortalBokni
 export {
   useStudentGuardians,
   useCreateGuardian,
+  useUpdateGuardian,
   useDeleteGuardian,
   useGenerateGuardianToken,
   getStoredGuardianSession,

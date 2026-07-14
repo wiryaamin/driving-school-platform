@@ -46,7 +46,12 @@ async function createLocation(input: CreateLocationInput): Promise<void> {
   const { error } = await supabase
     .from('organization_locations')
     .insert(input as never);
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error.message.includes('LOCATION_LIMIT_EXCEEDED')) {
+      throw new Error('Antal platser har nått organisationens gräns (max_locations). Kontakta plattformsadministratören för att höja gränsen.');
+    }
+    throw new Error(error.message);
+  }
 }
 
 // ─── Soft delete ──────────────────────────────────────────────────────────────

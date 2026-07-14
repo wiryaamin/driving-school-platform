@@ -8,6 +8,8 @@ import {
   ShieldAlert,
   Headphones,
   Shield,
+  Handshake,
+  Rocket,
   LogOut,
   User,
   type LucideIcon,
@@ -37,6 +39,13 @@ const PLATFORM_NAV_GROUPS: NavGroup[] = [
     label: 'ÖVERSIKT',
     items: [
       { key: 'dashboard', labelSv: 'Översikt', icon: LayoutDashboard, path: '/platform/dashboard' },
+    ],
+  },
+  {
+    label: 'KUNDANSKAFFNING',
+    items: [
+      { key: 'demo-requests', labelSv: 'Demoförfrågningar', icon: Handshake, path: '/platform/demo-requests' },
+      { key: 'tenant-onboarding', labelSv: 'Tenant Onboarding', icon: Rocket, path: '/platform/tenant-onboarding' },
     ],
   },
   {

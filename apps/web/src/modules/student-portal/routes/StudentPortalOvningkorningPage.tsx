@@ -7,7 +7,7 @@ import {
   usePortalAddPractice,
   usePortalDeletePractice,
 } from '../hooks/useStudentPortal.js';
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE', {
@@ -287,7 +287,7 @@ export function StudentPortalOvningkorningPage() {
       {/* Entry list */}
       {!isLoading && hasEntries && (
         <div>
-          <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide mb-2">
+          <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-2">
             Logg ({entries!.length} tillfällen)
           </p>
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">

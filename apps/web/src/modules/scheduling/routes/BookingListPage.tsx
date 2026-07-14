@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Link2, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react';
 import { Skeleton } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useSlotList } from '../hooks/useSlots.js';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useInstructorList } from '@modules/instructors/index.js';
@@ -256,7 +258,7 @@ export function BookingListPage() {
   }
 
   return (
-    <>
+    <PermissionGate permission={Permissions.SCHEDULING_READ}>
       <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
 
         {/* Action toolbar */}
@@ -543,6 +545,6 @@ export function BookingListPage() {
       </div>
 
       <SlotDetailSheet slot={selectedSlot} open={sheetOpen} onOpenChange={setSheetOpen} />
-    </>
+    </PermissionGate>
   );
 }

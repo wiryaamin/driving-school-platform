@@ -1,19 +1,21 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText } from 'lucide-react';
+import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText, Search, UserCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
   Button, Badge, Separator, ScrollArea, Skeleton,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Input,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
 import type { LessonSlot, LessonBooking, BookingStatus, Student } from '@platform/types';
-import { useStudentsBatch } from '@modules/students/hooks/useStudents.js';
-import { useInstructor } from '@modules/instructors/index.js';
+import { useStudentsBatch, useStudentList } from '@modules/students/hooks/useStudents.js';
+import { useInstructor, useInstructorList } from '@modules/instructors/index.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
-import { useWaitlistForSlot } from '../hooks/useWaitlist.js';
-import { useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes } from '../hooks/useSchedulingMutations.js';
+import { useWaitlistForSlot, useAddToWaitlist, usePromoteFromWaitlist } from '../hooks/useWaitlist.js';
+import { useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes, useUpdateSlotInstructor } from '../hooks/useSchedulingMutations.js';
 import { useVehicles } from '@modules/resources/index.js';
 import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 import { SlotStatusBadge } from './SlotStatusBadge.js';
@@ -253,6 +255,80 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
   );
 }
 
+// ─── Terminal slot statuses — no edits allowed ────────────────────────────────
+
+const TERMINAL_SLOT_STATUSES = new Set(['completed', 'cancelled', 'blocked']);
+
+// ─── Instructor row — display + inline change ─────────────────────────────────
+
+function InstructorRow({
+  slotId, instructorId, slotStatus, onNavigate,
+}: {
+  slotId:       string;
+  instructorId: string;
+  slotStatus:   string;
+  onNavigate?:  ((path: string) => void) | undefined;
+}) {
+  const [editing, setEditing] = useState(false);
+  const { data: instructorsData } = useInstructorList({ per_page: 100 });
+  const updateInstructor = useUpdateSlotInstructor();
+
+  const instructors = (instructorsData?.data ?? []).filter(i => !i.deleted_at);
+  const isTerminal  = TERMINAL_SLOT_STATUSES.has(slotStatus);
+
+  function handleChange(newId: string) {
+    if (!newId) return;
+    updateInstructor.mutate(
+      { id: slotId, instructor_id: newId },
+      {
+        onSuccess: () => { toast({ title: 'Instruktör uppdaterad' }); setEditing(false); },
+        onError:   () => { toast({ title: 'Kunde inte uppdatera instruktör', variant: 'destructive' }); },
+      },
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+        <select
+          autoFocus
+          value={instructorId}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          disabled={updateInstructor.isPending}
+          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+        >
+          {instructors.map(i => (
+            <option key={i.id} value={i.id}>
+              {i.first_name} {i.last_name}
+            </option>
+          ))}
+        </select>
+        {updateInstructor.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+      <InstructorName id={instructorId} {...(onNavigate !== undefined ? { onNavigate } : {})} />
+      {!isTerminal && (
+        <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="ml-0.5 text-[10px] text-muted-foreground/50 hover:text-primary transition-colors"
+          >
+            Byt
+          </button>
+        </PermissionGate>
+      )}
+    </div>
+  );
+}
+
 // ─── Vehicle row — display + inline change ────────────────────────────────────
 
 function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string | null }) {
@@ -407,6 +483,171 @@ function statusToastLabel(status: BookingStatus): string {
   }
 }
 
+// ─── Promote waitlist entry → booking ─────────────────────────────────────────
+
+function PromoteWaitlistButton({ entry, slotId }: {
+  entry: { id: string; student_id: string };
+  slotId: string;
+}) {
+  const promote = usePromoteFromWaitlist();
+  return (
+    <Button
+      size="sm"
+      className="h-6 text-[10px] gap-1 px-2 shrink-0"
+      disabled={promote.isPending}
+      onClick={() =>
+        promote.mutate(
+          { waitlistEntryId: entry.id, slotId, studentId: entry.student_id },
+          {
+            onSuccess: () => toast({ title: 'Elev inbokad från väntelistan' }),
+            onError:   () => toast({ title: 'Kunde inte boka in', variant: 'destructive' }),
+          },
+        )
+      }
+    >
+      {promote.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarCheck className="w-3 h-3" />}
+      Boka in
+    </Button>
+  );
+}
+
+// ─── Add student to waitlist dialog ───────────────────────────────────────────
+
+function AddToWaitlistDialog({
+  open, onOpenChange, slot,
+}: {
+  open:         boolean;
+  onOpenChange: (open: boolean) => void;
+  slot:         LessonSlot;
+}) {
+  const [search, setSearch]             = useState('');
+  const [debouncedSearch, setDebounced] = useState('');
+  const [selectedStudent, setSelected]  = useState<Student | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    if (!open) { setSearch(''); setDebounced(''); setSelected(null); }
+  }, [open]);
+
+  const { data: studentsData, isLoading: studentsLoading } = useStudentList(
+    { per_page: 50, ...(debouncedSearch ? { search: debouncedSearch } : {}) },
+    { enabled: open },
+  );
+
+  const addToWaitlist = useAddToWaitlist();
+  const students = studentsData?.data ?? [];
+
+  function handleClose() {
+    if (addToWaitlist.isPending) return;
+    onOpenChange(false);
+  }
+
+  function handleConfirm() {
+    if (!selectedStudent) return;
+    addToWaitlist.mutate(
+      { slot_id: slot.id, student_id: selectedStudent.id },
+      {
+        onSuccess: () => {
+          toast({
+            title:       'Elev tillagd på väntelistan',
+            description: `${selectedStudent.first_name} ${selectedStudent.last_name} är nu på väntelistan.`,
+          });
+          handleClose();
+        },
+        onError: (err) => {
+          toast({
+            title:       'Kunde inte lägga till på väntelistan',
+            description: err instanceof Error ? err.message : 'Försök igen',
+            variant:     'destructive',
+          });
+        },
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Lägg till på väntelistan</DialogTitle>
+        </DialogHeader>
+
+        <div className="bg-muted/40 rounded-md px-3 py-2 text-sm text-muted-foreground">
+          {formatSlotDate(slot.starts_at)} · {formatSlotTime(slot.starts_at)}–{formatSlotTime(slot.ends_at)}
+        </div>
+
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Sök elev..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+              autoFocus
+            />
+          </div>
+
+          <ScrollArea className="h-44 sm:h-52 rounded-md border">
+            {studentsLoading ? (
+              <div className="p-3 space-y-2">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-9 w-full rounded" />)}
+              </div>
+            ) : students.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-muted-foreground py-8">
+                Inga elever hittades
+              </div>
+            ) : (
+              <div className="p-1">
+                {students.map((student) => (
+                  <button
+                    key={student.id}
+                    onClick={() => setSelected(student)}
+                    className={`w-full text-left px-3 py-2 rounded text-sm transition-colors flex items-center gap-2 ${
+                      selectedStudent?.id === student.id
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-foreground'
+                    }`}
+                  >
+                    {selectedStudent?.id === student.id && <UserCheck className="w-3.5 h-3.5 shrink-0" />}
+                    <span className="font-medium">{student.first_name} {student.last_name}</span>
+                    {student.personnummer_last4 && (
+                      <span className={`text-xs font-mono ${
+                        selectedStudent?.id === student.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
+                      }`}>
+                        ****{student.personnummer_last4}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+
+          {selectedStudent && (
+            <p className="text-xs text-muted-foreground">
+              Vald: <span className="font-medium text-foreground">{selectedStudent.first_name} {selectedStudent.last_name}</span>
+            </p>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={handleClose} disabled={addToWaitlist.isPending}>
+            Avbryt
+          </Button>
+          <Button onClick={handleConfirm} disabled={addToWaitlist.isPending || !selectedStudent}>
+            {addToWaitlist.isPending ? 'Lägger till...' : 'Lägg till på väntelistan'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface SlotDetailSheetProps {
@@ -428,6 +669,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const [rescheduleStudent,     setRescheduleStudent]     = useState<Student | null>(null);
   const [rescheduleDialogOpen,  setRescheduleDialogOpen]  = useState(false);
   const [waitlistExpanded,      setWaitlistExpanded]      = useState(false);
+  const [addWaitlistDialogOpen, setAddWaitlistDialogOpen] = useState(false);
 
   function handleNavigate(path: string) {
     onOpenChange(false);
@@ -447,6 +689,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
       setRescheduleStudent(null);
       setRescheduleDialogOpen(false);
       setWaitlistExpanded(false);
+      setAddWaitlistDialogOpen(false);
     }
   }, [open]);
 
@@ -460,6 +703,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     setRescheduleStudent(null);
     setRescheduleDialogOpen(false);
     setWaitlistExpanded(false);
+    setAddWaitlistDialogOpen(false);
   }, [slot?.id]);
 
   const { data: bookingsData, isLoading: bookingsLoading } = useBookingsForSlot(slot?.id ?? null);
@@ -553,10 +797,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                 </div>
 
                 {/* Instructor */}
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-                  <InstructorName id={slot.instructor_id} onNavigate={handleNavigate} />
-                </div>
+                <InstructorRow
+                  slotId={slot.id}
+                  instructorId={slot.instructor_id}
+                  slotStatus={slot.status}
+                  onNavigate={handleNavigate}
+                />
 
                 {/* Vehicle */}
                 <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
@@ -653,6 +899,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                                 aria-label="Notifierad"
                               />
                             )}
+                            {/* Promote to booking when slot has capacity */}
+                            {!full && (
+                              <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                                <PromoteWaitlistButton entry={entry} slotId={slot.id} />
+                              </PermissionGate>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -677,7 +929,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
               </div>
             </PermissionGate>
           ) : (
-            <div className="px-5 py-4 border-t border-border">
+            <div className="px-5 py-4 border-t border-border space-y-2">
               <p className="text-xs text-center text-muted-foreground">
                 {full
                   ? 'Fullbokad – inga lediga platser.'
@@ -691,6 +943,17 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   ? 'Passet är blockerat.'
                   : 'Passet är inte öppet för bokning.'}
               </p>
+              {full && slot.status === 'open' && (
+                <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => setAddWaitlistDialogOpen(true)}
+                  >
+                    Lägg till på väntelista
+                  </Button>
+                </PermissionGate>
+              )}
             </div>
           )}
         </SheetContent>
@@ -734,6 +997,13 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
           setRescheduleStudentName('');
           setRescheduleStudent(null);
         }}
+      />
+
+      {/* Nested: add to waitlist (shown when slot is full) */}
+      <AddToWaitlistDialog
+        open={addWaitlistDialogOpen}
+        onOpenChange={setAddWaitlistDialogOpen}
+        slot={slot}
       />
     </>
   );

@@ -3,6 +3,9 @@ import { RefreshCcw, RotateCcw, X, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useMessageList, useRetryMessage, useCancelMessage } from '../hooks/useCommunication.js';
 import { ChannelBadge, StatusBadge } from '../components/ChannelIcon.js';
 import type { CommChannel, MsgStatus, OutboundMessage } from '../hooks/useCommunication.js';
@@ -69,26 +72,30 @@ function MessageRow({
         </td>
         <td className="px-4 py-3 whitespace-nowrap">
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            {canRetry && (
-              <button
-                type="button"
-                onClick={() => onRetry(msg.id)}
-                title="Försök igen"
-                className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {canCancel && (
-              <button
-                type="button"
-                onClick={() => onCancel(msg.id)}
-                title="Avbryt"
-                className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+            <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+              <>
+                {canRetry && (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(msg.id)}
+                    title="Försök igen"
+                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {canCancel && (
+                  <button
+                    type="button"
+                    onClick={() => onCancel(msg.id)}
+                    title="Avbryt"
+                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </>
+            </PermissionGate>
           </div>
         </td>
       </tr>
@@ -174,6 +181,7 @@ export function DeliveryLogPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl border border-border bg-card">
@@ -292,6 +300,7 @@ export function DeliveryLogPage() {
           )}
         </div>
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

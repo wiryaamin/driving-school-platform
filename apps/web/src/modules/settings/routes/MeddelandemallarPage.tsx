@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, FileText, MessageSquare, Mail, Pencil, Copy, Trash2 } from 'lucide-react';
+import { ChevronRight, FileText, MessageSquare, Mail, Pencil, Copy, Trash2, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, toast } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
@@ -121,6 +121,22 @@ export function MeddelandemallarPage() {
             Använd variabler som <code className="text-xs bg-muted px-1 py-0.5 rounded">{'{förnamn}'}</code>,{' '}
             <code className="text-xs bg-muted px-1 py-0.5 rounded">{'{datum}'}</code> och{' '}
             <code className="text-xs bg-muted px-1 py-0.5 rounded">{'{tid}'}</code> i mallarna.
+          </p>
+        </div>
+      </div>
+
+      {/* Notice: this page stores templates in org settings JSONB, not in the notification pipeline */}
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-3 text-sm">
+        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="space-y-1 text-amber-800 dark:text-amber-300">
+          <p className="font-medium">Mallar här ingår inte i det automatiska notissystemet</p>
+          <p className="text-xs leading-relaxed">
+            Dessa mallar sparas lokalt i organisationsinställningarna och används inte av notisregler, automationsregler eller schemalagda utskick.
+            För mallar som kopplas till händelser (bokningsbekräftelse, påminnelser, fakturor m.m.) — gå till{' '}
+            <Link to="/communication/templates" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-200">
+              Notismallar
+            </Link>
+            .
           </p>
         </div>
       </div>

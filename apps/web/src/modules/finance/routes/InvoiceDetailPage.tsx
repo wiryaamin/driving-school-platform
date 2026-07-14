@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  ChevronLeft, FileText, CreditCard, Receipt, Info, Plus,
+  ChevronLeft, FileText, CreditCard, Receipt, Info, Plus, Tag, RotateCcw,
 } from 'lucide-react';
 import { useStudent } from '@modules/students/hooks/useStudents.js';
 import {
@@ -24,7 +24,13 @@ import { Permissions } from '@core/rbac/permissions.js';
 import {
   useInvoice, useIssueInvoice, useVoidInvoice, usePaymentList, useAddInvoiceLine,
 } from '../hooks/useFinance.js';
+import {
+  useDiscounts, useApplyDiscount, useRedeemCoupon, type DiscountDefinition,
+} from '../hooks/useDiscounts.js';
 import { RecordPaymentDialog } from '../components/RecordPaymentDialog.js';
+import { RefundDialog } from '../components/RefundDialog.js';
+import { useInvoiceRefunds } from '../hooks/useRefunds.js';
+import type { RefundStatus, RefundType, RefundReasonCode } from '../hooks/useRefunds.js';
 import { InvoiceStatusBadge } from '../components/InvoiceStatusBadge.js';
 import { PaymentStatusBadge, PaymentMethodBadge } from '../components/PaymentStatusBadge.js';
 import { formatCurrency, formatDate, formatDateTime } from '../lib/financeUtils.js';
@@ -283,6 +289,177 @@ function AddLineDialog({ open, onClose, invoiceId, currency }: AddLineDialogProp
   );
 }
 
+// ─── Refund label maps ────────────────────────────────────────────────────────
+
+const REFUND_TYPE_LABELS: Record<RefundType, string> = {
+  full:         'Full återbetalning',
+  partial:      'Delåterbetalning',
+  credit_only:  'Kreditreversal',
+  payment_only: 'Monetär återbetalning',
+};
+
+const REFUND_REASON_LABELS: Record<RefundReasonCode, string> = {
+  duplicate_payment:    'Dubbel betalning',
+  student_cancellation: 'Elevavbokning',
+  administrative_error: 'Administrativt fel',
+  service_failure:      'Tjänsten levererades ej',
+  goodwill:             'Goodwill',
+  fraud_prevention:     'Bedrägerihantering',
+  partial_adjustment:   'Prisjustering',
+};
+
+const REFUND_STATUS_STYLES: Record<RefundStatus, string> = {
+  pending:    'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+  processing: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  completed:  'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  failed:     'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  cancelled:  'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500',
+};
+
+const REFUND_STATUS_LABELS: Record<RefundStatus, string> = {
+  pending:    'Väntar',
+  processing: 'Behandlas',
+  completed:  'Genomförd',
+  failed:     'Misslyckad',
+  cancelled:  'Avbruten',
+};
+
+// ─── Apply discount / redeem coupon dialog (draft invoices only) ──────────────
+
+interface ApplyDiscountDialogProps {
+  open:      boolean;
+  onClose:   () => void;
+  invoiceId: string;
+  studentId: string;
+}
+
+function discountValueLabel(d: DiscountDefinition): string {
+  if (d.discount_type === 'percentage') return `${(d.discount_value * 100).toFixed(0)}%`;
+  return `${d.discount_value} ${d.currency}`;
+}
+
+function ApplyDiscountDialog({ open, onClose, invoiceId, studentId }: ApplyDiscountDialogProps) {
+  const [mode,               setMode]               = useState<'discount' | 'coupon'>('discount');
+  const [selectedDiscountId, setSelectedDiscountId] = useState('');
+  const [couponCode,         setCouponCode]         = useState('');
+
+  const { data: discountData, isLoading: discountsLoading } = useDiscounts({ is_active: true, per_page: 50 });
+  const discounts = discountData?.data ?? [];
+
+  const applyMutation  = useApplyDiscount(selectedDiscountId);
+  const redeemMutation = useRedeemCoupon();
+
+  useEffect(() => {
+    if (!open) {
+      setMode('discount');
+      setSelectedDiscountId('');
+      setCouponCode('');
+    }
+  }, [open]);
+
+  async function handleApply() {
+    if (!selectedDiscountId) return;
+    try {
+      await applyMutation.mutateAsync({ invoice_id: invoiceId });
+      toast({ title: 'Rabatt applicerad' });
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Försök igen';
+      toast({ title: 'Kunde inte applicera rabatt', description: msg, variant: 'destructive' });
+    }
+  }
+
+  async function handleRedeem() {
+    if (!couponCode.trim()) return;
+    try {
+      await redeemMutation.mutateAsync({
+        invoice_id:  invoiceId,
+        coupon_code: couponCode.trim().toUpperCase(),
+        student_id:  studentId,
+      });
+      toast({ title: 'Kupong inlöst' });
+      onClose();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Försök igen';
+      toast({ title: 'Kunde inte lösa in kupong', description: msg, variant: 'destructive' });
+    }
+  }
+
+  const isBusy = applyMutation.isPending || redeemMutation.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Applicera rabatt</DialogTitle>
+          <DialogDescription>Välj en rabattdefinition eller lös in en kupongkod på fakturautkastet.</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex gap-4 border-b border-border pb-3">
+          {(['discount', 'coupon'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`text-sm font-medium pb-1 border-b-2 transition-colors ${
+                mode === m
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {m === 'discount' ? 'Välj rabatt' : 'Lös in kupong'}
+            </button>
+          ))}
+        </div>
+
+        {mode === 'discount' ? (
+          <div className="py-1">
+            {discountsLoading ? (
+              <div className="h-9 bg-muted rounded animate-pulse" />
+            ) : discounts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Inga aktiva rabatter hittades.</p>
+            ) : (
+              <Select value={selectedDiscountId} onValueChange={setSelectedDiscountId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Välj rabatt..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {discounts.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name} — {discountValueLabel(d)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        ) : (
+          <div className="py-1">
+            <Input
+              placeholder="T.ex. SOMMAR25"
+              value={couponCode}
+              onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+            />
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={isBusy}>Avbryt</Button>
+          {mode === 'discount' ? (
+            <Button onClick={handleApply} disabled={!selectedDiscountId || isBusy}>
+              {applyMutation.isPending ? 'Applicerar...' : 'Applicera rabatt'}
+            </Button>
+          ) : (
+            <Button onClick={handleRedeem} disabled={!couponCode.trim() || isBusy}>
+              {redeemMutation.isPending ? 'Löser in...' : 'Lös in kupong'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Student name with link ───────────────────────────────────────────────────
 
 function StudentLink({ id }: { id: string }) {
@@ -305,11 +482,14 @@ export function InvoiceDetailPage() {
   const [voidOpen,       setVoidOpen]       = useState(false);
   const [addLineOpen,    setAddLineOpen]    = useState(false);
   const [paymentOpen,    setPaymentOpen]    = useState(false);
+  const [discountOpen,   setDiscountOpen]   = useState(false);
+  const [refundOpen,     setRefundOpen]     = useState(false);
 
   const { data, isLoading, error } = useInvoice(id ?? null);
   const { data: paymentData }      = usePaymentList(
     id ? { invoice_id: id } : {},
   );
+  const { data: refundData }       = useInvoiceRefunds(id ?? null);
 
   const issueMutation = useIssueInvoice();
   const voidMutation  = useVoidInvoice();
@@ -345,11 +525,13 @@ export function InvoiceDetailPage() {
   }
 
   const { invoice, line_items } = data;
-  const payments     = paymentData?.data ?? [];
-  const invoiceTitle = invoice.invoice_number ?? 'Fakturautkast';
-  const isDraft      = invoice.status === 'draft';
-  const canVoid      = invoice.status !== 'void' && invoice.status !== 'paid';
-  const isPayable    = invoice.status === 'issued' || invoice.status === 'partially_paid' || invoice.status === 'overdue';
+  const payments      = paymentData?.data ?? [];
+  const refunds       = refundData?.data ?? [];
+  const invoiceTitle  = invoice.invoice_number ?? 'Fakturautkast';
+  const isDraft       = invoice.status === 'draft';
+  const canVoid       = invoice.status !== 'void' && invoice.status !== 'paid';
+  const isPayable     = invoice.status === 'issued' || invoice.status === 'partially_paid' || invoice.status === 'overdue';
+  const isRefundable  = invoice.status === 'paid' || invoice.status === 'partially_paid';
 
   function handleIssue() {
     if (!id) return;
@@ -379,6 +561,7 @@ export function InvoiceDetailPage() {
   }
 
   return (
+    <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
     <PageLayout>
       <PageHeader
         title={invoiceTitle}
@@ -397,6 +580,30 @@ export function InvoiceDetailPage() {
                   onClick={() => setPaymentOpen(true)}
                 >
                   Registrera betalning
+                </Button>
+              </PermissionGate>
+            )}
+            {isRefundable && (
+              <PermissionGate permission={Permissions.FINANCE_REFUND_CREATE}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRefundOpen(true)}
+                >
+                  <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                  Återbetala
+                </Button>
+              </PermissionGate>
+            )}
+            {isDraft && (
+              <PermissionGate permission={Permissions.FINANCE_DISCOUNT_ASSIGN}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDiscountOpen(true)}
+                >
+                  <Tag className="w-3.5 h-3.5 mr-1.5" />
+                  Applicera rabatt
                 </Button>
               </PermissionGate>
             )}
@@ -589,6 +796,63 @@ export function InvoiceDetailPage() {
                 )}
               </CardContent>
             </Card>
+
+            {/* Refunds — shown only when refunds exist on this invoice */}
+            {refunds.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <RotateCcw className="w-4 h-4 text-muted-foreground" />
+                    Återbetalningar
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Typ</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Orsak</TableHead>
+                        <TableHead className="text-right">Belopp</TableHead>
+                        <TableHead>Datum</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {refunds.map((r) => (
+                        <TableRow key={r.id}>
+                          <TableCell className="text-sm">
+                            {REFUND_TYPE_LABELS[r.refund_type] ?? r.refund_type}
+                          </TableCell>
+                          <TableCell>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${REFUND_STATUS_STYLES[r.refund_status] ?? ''}`}>
+                              {REFUND_STATUS_LABELS[r.refund_status] ?? r.refund_status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {REFUND_REASON_LABELS[r.reason_code] ?? r.reason_code}
+                          </TableCell>
+                          <TableCell className="text-right text-sm font-mono">
+                            {r.refund_amount > 0 && (
+                              <span className="font-semibold text-red-600 dark:text-red-400">
+                                −{formatCurrency(r.refund_amount, invoice.currency)}
+                              </span>
+                            )}
+                            {r.credit_quantity > 0 && (
+                              <span className="ml-1 text-xs text-muted-foreground">
+                                {r.credit_quantity} kr.
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {formatDateTime(r.processed_at ?? r.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* ── Right column ───────────────────────────────────────────────── */}
@@ -661,6 +925,15 @@ export function InvoiceDetailPage() {
         />
       )}
 
+      {isDraft && id && (
+        <ApplyDiscountDialog
+          open={discountOpen}
+          onClose={() => setDiscountOpen(false)}
+          invoiceId={id}
+          studentId={invoice.student_id}
+        />
+      )}
+
       {isPayable && id && (
         <RecordPaymentDialog
           open={paymentOpen}
@@ -670,6 +943,16 @@ export function InvoiceDetailPage() {
           currency={invoice.currency}
         />
       )}
+
+      {isRefundable && (
+        <RefundDialog
+          invoice={invoice}
+          payments={payments}
+          open={refundOpen}
+          onClose={() => setRefundOpen(false)}
+        />
+      )}
     </PageLayout>
+    </PermissionGate>
   );
 }

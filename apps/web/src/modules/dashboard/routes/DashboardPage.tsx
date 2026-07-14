@@ -21,8 +21,8 @@ import { useInstructorList } from '@modules/instructors/index.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import { useBookingList, type LessonBooking } from '@modules/scheduling/index.js';
 import { useQueueHealth } from '@modules/communication/hooks/useCommunication.js';
-import { useRecentActivity } from '@shared/hooks/useNotifications.js';
-import type { Notification } from '@shared/hooks/useNotifications.js';
+import { useRecentActivity } from '@shared/hooks/useNotificationBell.js';
+import type { Notification } from '@shared/hooks/useNotificationBell.js';
 import type { LessonSlot, Instructor } from '@platform/types';
 
 // ─── In-page navigation tabs ──────────────────────────────────────────────────

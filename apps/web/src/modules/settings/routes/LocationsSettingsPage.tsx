@@ -13,6 +13,8 @@ import {
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -363,6 +365,7 @@ export function LocationsSettingsPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
+    <PermissionGate permission={Permissions.ADMIN_LOCATION_MANAGE}>
     <div className="max-w-2xl space-y-4">
 
       {/* Breadcrumb + action */}
@@ -651,6 +654,7 @@ export function LocationsSettingsPage() {
       </Dialog>
 
     </div>
+    </PermissionGate>
   );
 }
 

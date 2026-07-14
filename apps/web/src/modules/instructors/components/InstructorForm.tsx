@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -14,23 +14,40 @@ import { useCreateInstructor, useUpdateInstructor } from '../hooks/useInstructor
 import { INSTRUCTOR_STATUS_OPTIONS } from './InstructorStatusBadge.js';
 import type { Instructor, CreateInstructorFormValues } from '../hooks/useInstructors.js';
 
-// ─── Teaching category options ────────────────────────────────────────────────
+// ─── Teaching category options (full Baseline list) ───────────────────────────
 
-const TEACHING_CATEGORIES = ['B', 'A', 'A1', 'A2', 'AM', 'B96', 'BE', 'C', 'C1', 'CE', 'D', 'DE', 'Traktor'] as const;
+const TEACHING_CATEGORIES: { key: string; label: string }[] = [
+  { key: 'B',       label: 'B – Personbil' },
+  { key: 'A',       label: 'A – Motorcykel' },
+  { key: 'A1',      label: 'A1 – Lätt motorcykel' },
+  { key: 'A2',      label: 'A2 – Mellankategori motorcykel' },
+  { key: 'AM',      label: 'AM – Moped' },
+  { key: 'B96',     label: 'B96 – Personbil med lätt släp' },
+  { key: 'BE',      label: 'BE – Personbil med tungt släp' },
+  { key: 'C',       label: 'C – Tung lastbil' },
+  { key: 'C1',      label: 'C1 – Medeltung lastbil' },
+  { key: 'CE',      label: 'CE – Tung lastbil med tungt släp' },
+  { key: 'D',       label: 'D – Buss' },
+  { key: 'DE',      label: 'DE – Buss med tungt släp' },
+  { key: 'Traktor', label: 'Traktor' },
+  { key: 'YKB-C',   label: 'YKB-C – Yrkeskompetensbevis godstransport' },
+  { key: 'YKB-D',   label: 'YKB-D – Yrkeskompetensbevis persontransport' },
+];
 
 // ─── Form schema ──────────────────────────────────────────────────────────────
 
 const instructorFormSchema = z.object({
-  first_name:          z.string().min(1, 'Förnamn krävs').max(100),
-  last_name:           z.string().min(1, 'Efternamn krävs').max(100),
-  email:               z.string().email('Ogiltig e-postadress').max(200),
-  phone:               z.string().max(30).optional(),
-  employment_type:     z.enum(['employed', 'contractor', 'external', 'on_leave', 'inactive'] as const).optional(),
-  teaching_categories: z.string().max(200).optional(),
-  adi_number:          z.string().max(50).optional(),
-  adi_valid_until:     z.string().optional(),
-  employee_number:     z.string().max(50).optional(),
-  max_lessons_per_day: z.string().optional(),
+  first_name:            z.string().min(1, 'Förnamn krävs').max(100),
+  last_name:             z.string().min(1, 'Efternamn krävs').max(100),
+  email:                 z.string().email('Ogiltig e-postadress').max(200),
+  phone:                 z.string().max(30).optional(),
+  employment_type:       z.enum(['employed', 'contractor', 'external', 'on_leave', 'inactive'] as const).optional(),
+  employment_started_at: z.string().optional(),
+  employment_ended_at:   z.string().optional(),
+  adi_number:            z.string().max(50).optional(),
+  adi_valid_until:       z.string().optional(),
+  employee_number:       z.string().max(50).optional(),
+  max_lessons_per_day:   z.string().optional(),
 });
 
 type InstructorFormFields = z.infer<typeof instructorFormSchema>;
@@ -38,50 +55,50 @@ type InstructorFormFields = z.infer<typeof instructorFormSchema>;
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
 const EMPTY_DEFAULTS: InstructorFormFields = {
-  first_name:          '',
-  last_name:           '',
-  email:               '',
-  phone:               '',
-  employment_type:     undefined,
-  teaching_categories: '',
-  adi_number:          '',
-  adi_valid_until:     '',
-  employee_number:     '',
-  max_lessons_per_day: '',
+  first_name:            '',
+  last_name:             '',
+  email:                 '',
+  phone:                 '',
+  employment_type:       undefined,
+  employment_started_at: '',
+  employment_ended_at:   '',
+  adi_number:            '',
+  adi_valid_until:       '',
+  employee_number:       '',
+  max_lessons_per_day:   '',
 };
 
 function instructorToFormFields(i: Instructor): InstructorFormFields {
   return {
-    first_name:          i.first_name,
-    last_name:           i.last_name,
-    email:               i.email,
-    phone:               i.phone ?? '',
-    employment_type:     i.employment_type,
-    teaching_categories: i.teaching_categories.join(', '),
-    adi_number:          i.adi_number ?? '',
-    adi_valid_until:     i.adi_valid_until ?? '',
-    employee_number:     i.employee_number ?? '',
-    max_lessons_per_day: i.max_lessons_per_day != null ? String(i.max_lessons_per_day) : '',
+    first_name:            i.first_name,
+    last_name:             i.last_name,
+    email:                 i.email,
+    phone:                 i.phone ?? '',
+    employment_type:       i.employment_type,
+    employment_started_at: i.employment_started_at ?? '',
+    employment_ended_at:   i.employment_ended_at ?? '',
+    adi_number:            i.adi_number ?? '',
+    adi_valid_until:       i.adi_valid_until ?? '',
+    employee_number:       i.employee_number ?? '',
+    max_lessons_per_day:   i.max_lessons_per_day != null ? String(i.max_lessons_per_day) : '',
   };
 }
 
-function fieldsToInput(fields: InstructorFormFields): CreateInstructorFormValues {
-  const cats = fields.teaching_categories
-    ? fields.teaching_categories.split(',').map((s) => s.trim()).filter(Boolean)
-    : [];
-
+function fieldsToInput(fields: InstructorFormFields, categories: string[]): CreateInstructorFormValues {
   const result: CreateInstructorFormValues = {
     first_name: fields.first_name,
     last_name:  fields.last_name,
     email:      fields.email,
   };
 
-  if (fields.phone)               result.phone               = fields.phone;
-  if (fields.employment_type)     result.employment_type     = fields.employment_type;
-  if (cats.length > 0)            result.teaching_categories = cats;
-  if (fields.adi_number)          result.adi_number          = fields.adi_number;
-  if (fields.adi_valid_until)     result.adi_valid_until     = fields.adi_valid_until;
-  if (fields.employee_number)     result.employee_number     = fields.employee_number;
+  if (fields.phone)                  result.phone                  = fields.phone;
+  if (fields.employment_type)        result.employment_type        = fields.employment_type;
+  if (fields.employment_started_at)  result.employment_started_at  = fields.employment_started_at;
+  if (fields.employment_ended_at)    result.employment_ended_at    = fields.employment_ended_at;
+  if (categories.length > 0)         result.teaching_categories    = categories;
+  if (fields.adi_number)             result.adi_number             = fields.adi_number;
+  if (fields.adi_valid_until)        result.adi_valid_until        = fields.adi_valid_until;
+  if (fields.employee_number)        result.employee_number        = fields.employee_number;
   if (fields.max_lessons_per_day) {
     const n = parseInt(fields.max_lessons_per_day, 10);
     if (!isNaN(n) && n > 0) result.max_lessons_per_day = n;
@@ -103,6 +120,7 @@ interface InstructorFormProps {
 
 export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: InstructorFormProps) {
   const isEdit = instructor != null;
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const form = useForm<InstructorFormFields>({
     resolver:      zodResolver(instructorFormSchema),
@@ -116,11 +134,18 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
   useEffect(() => {
     if (open) {
       form.reset(isEdit ? instructorToFormFields(instructor) : EMPTY_DEFAULTS);
+      setSelectedCategories(isEdit ? (instructor?.teaching_categories ?? []) : []);
     }
   }, [open, instructor, isEdit, form]);
 
+  function toggleCategory(key: string) {
+    setSelectedCategories((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  }
+
   function onSubmit(fields: InstructorFormFields) {
-    const input = fieldsToInput(fields);
+    const input = fieldsToInput(fields, selectedCategories);
 
     if (isEdit) {
       updateMutation.mutate(
@@ -266,6 +291,34 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                   )}
                 />
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="employment_started_at"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Startdatum</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="employment_ended_at"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Slutdatum</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
               <FormField
                 control={form.control}
                 name="max_lessons_per_day"
@@ -287,22 +340,24 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
               <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
                 Behörigheter & certifikat
               </p>
-              <FormField
-                control={form.control}
-                name="teaching_categories"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Undervisningskategorier</FormLabel>
-                    <FormControl>
-                      <Input placeholder="B, A, BE (kommaseparerat)" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                    <p className="text-xs text-muted-foreground">
-                      Tillgängliga: {TEACHING_CATEGORIES.join(', ')}
-                    </p>
-                  </FormItem>
-                )}
-              />
+
+              <div>
+                <p className="text-sm font-medium mb-2">Undervisningskategorier</p>
+                <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                  {TEACHING_CATEGORIES.map(({ key, label }) => (
+                    <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes(key)}
+                        onChange={() => toggleCategory(key)}
+                        className="w-4 h-4 accent-blue-500 shrink-0"
+                      />
+                      <span className="text-sm text-foreground">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}

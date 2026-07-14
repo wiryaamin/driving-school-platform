@@ -1,13 +1,25 @@
 ﻿import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, X, Plus, User, Copy, Check, ExternalLink, TrendingUp, Users, ChartBar, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Loader2, X, Plus, User, Copy, Check, ExternalLink, TrendingUp, Users, ChartBar, CheckCircle, XCircle, AlertCircle, Trash2, Car } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
-import { useInstructor, useUpdateInstructor, useArchiveInstructor, useInstructorBookingLogs } from '../hooks/useInstructors.js';
-import type { InstructorLogFilter } from '../hooks/useInstructors.js';
+import {
+  useInstructor, useUpdateInstructor, useArchiveInstructor, useInstructorBookingLogs,
+  useInstructorCertifications, useCreateInstructorCertification, useDeleteInstructorCertification,
+  useInstructorAvailabilityRules, useCreateAvailabilityRule, useDeleteAvailabilityRule, useUpdateAvailabilityRule,
+  useInstructorTimeOff, useCreateTimeOff, useUpdateTimeOffStatus,
+  useInstructorVehicleAssignments, useAssignVehicle, useUnassignVehicle,
+} from '../hooks/useInstructors.js';
+import type {
+  InstructorLogFilter, InstructorCertification,
+  InstructorAvailabilityRule, InstructorTimeOff, TimeOffStatus,
+  InstructorVehicleAssignment,
+} from '../hooks/useInstructors.js';
+import { useVehicles } from '@modules/resources/hooks/useVehicles.js';
+import type { Vehicle } from '@modules/resources/hooks/useVehicles.js';
 import { useGenerateInstructorPortalToken } from '@modules/instructor-portal/hooks/useInstructorPortal.js';
-import { formatDateTime } from '../lib/instructorUtils.js';
+import { formatDateTime, computeCertStatus } from '../lib/instructorUtils.js';
 import { supabase } from '@core/api/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -24,12 +36,28 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const TEACHING_CATEGORIES = [
-  { key: 'B',     label: 'B - Personbil' },
-  { key: 'C',     label: 'C - Tung lastbil' },
-  { key: 'CE',    label: 'CE - Tung lastbil med tungt släp' },
-  { key: 'D',     label: 'D - Buss' },
-  { key: 'YKB-C', label: 'YKB-C - Yrkeskompetensbevis för godstransport' },
-  { key: 'YKB-D', label: 'YKB-D - Yrkeskompetensbevis för persontransport' },
+  { key: 'B',       label: 'B – Personbil' },
+  { key: 'A',       label: 'A – Motorcykel' },
+  { key: 'A1',      label: 'A1 – Lätt motorcykel' },
+  { key: 'A2',      label: 'A2 – Mellankategori motorcykel' },
+  { key: 'AM',      label: 'AM – Moped' },
+  { key: 'B96',     label: 'B96 – Personbil med lätt släp' },
+  { key: 'BE',      label: 'BE – Personbil med tungt släp' },
+  { key: 'C',       label: 'C – Tung lastbil' },
+  { key: 'C1',      label: 'C1 – Medeltung lastbil' },
+  { key: 'CE',      label: 'CE – Tung lastbil med tungt släp' },
+  { key: 'D',       label: 'D – Buss' },
+  { key: 'DE',      label: 'DE – Buss med tungt släp' },
+  { key: 'Traktor', label: 'Traktor' },
+  { key: 'YKB-C',   label: 'YKB-C – Yrkeskompetensbevis för godstransport' },
+  { key: 'YKB-D',   label: 'YKB-D – Yrkeskompetensbevis för persontransport' },
+];
+
+const CERT_TYPE_OPTIONS = [
+  { key: 'ADI',                    label: 'ADI – Approved Driving Instructor' },
+  { key: 'first_aid',              label: 'Första hjälpen' },
+  { key: 'risk_education_teacher', label: 'Riskettan/Risktvåan lärarbehörighet' },
+  { key: 'other',                  label: 'Övrigt' },
 ];
 
 const LANGUAGE_OPTIONS = [
@@ -332,83 +360,26 @@ function OversiktTab({
 }
 
 function FavoritfordonSection() {
-  const [selected, setSelected] = useState('');
-  const [vehicles, setVehicles] = useState<{ id: string; type: string; name: string; desc: string; order: number }[]>([]);
-
   return (
     <SectionCard title="Favoritfordon">
-      <p className="text-sm text-gray-600 mb-3">
-        Favoritfordon är de fordon som kommer att prioriteras att bokas när ett fordon allokeras till denna läraren.
-      </p>
-
-      <div className="flex items-center gap-2 mb-4">
-        <select
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-2 text-sm flex-1 max-w-xs focus:outline-none"
-        >
-          <option value="">Välj fordon</option>
-        </select>
-        <button className="bg-blue-500 hover:bg-blue-600 text-white rounded px-4 py-2 text-sm font-medium flex items-center gap-1">
-          <Plus className="w-4 h-4" />
-          Lägg till
-        </button>
+      <div className="flex flex-col items-center justify-center py-6 gap-2">
+        <Car className="w-8 h-8 text-gray-300" />
+        <p className="text-sm font-medium text-gray-500">Kommer snart</p>
+        <p className="text-xs text-gray-400 text-center max-w-xs">
+          Prioriterade fordon för automatisk fördelning — aktiveras i en framtida version.
+        </p>
       </div>
-
-      {vehicles.length === 0 ? (
-        <p className="text-sm text-gray-400 py-4 text-center">Inga favoritfordon tillagda.</p>
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
-              <th className="pb-2 pr-4">Typ</th>
-              <th className="pb-2 pr-4">Namn</th>
-              <th className="pb-2 pr-4">Beskrivning</th>
-              <th className="pb-2 pr-4">Sorteringsordning</th>
-              <th className="pb-2">Åtgärd</th>
-            </tr>
-          </thead>
-          <tbody>
-            {vehicles.map((v) => (
-              <tr key={v.id} className="border-b border-gray-100">
-                <td className="py-2 pr-4">{v.type}</td>
-                <td className="py-2 pr-4 text-blue-500">{v.name}</td>
-                <td className="py-2 pr-4">{v.desc}</td>
-                <td className="py-2 pr-4">
-                  <input
-                    type="number"
-                    defaultValue={v.order}
-                    className="w-16 border border-gray-300 rounded px-2 py-1"
-                  />
-                </td>
-                <td className="py-2">
-                  <button
-                    onClick={() => setVehicles((prev) => prev.filter((x) => x.id !== v.id))}
-                    className="bg-red-500 hover:bg-red-600 text-white rounded-full px-3 py-1 text-xs font-medium"
-                  >
-                    Radera
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {vehicles.length > 0 && (
-        <div className="flex justify-end mt-3">
-          <button className="bg-green-500 hover:bg-green-600 text-white rounded-full px-5 py-2 text-sm font-semibold">
-            Spara ordning
-          </button>
-        </div>
-      )}
     </SectionCard>
   );
 }
 
 // ─── Schema tab ───────────────────────────────────────────────────────────────
 
-function SchemaTab() {
+function SchemaTab({
+  instructor,
+}: {
+  instructor: NonNullable<ReturnType<typeof useInstructor>['data']>;
+}) {
   const [template,      setTemplate]     = useState('');
   const [startDate,     setStartDate]    = useState('');
   const [endDate,       setEndDate]      = useState('');
@@ -494,11 +465,941 @@ function SchemaTab() {
       <SectionCard title="Loggar">
         <p className="text-sm text-gray-400">Denna personal har inga loggar.</p>
       </SectionCard>
+
+      <AvailabilityRulesSection
+        instructorId={instructor.id}
+        organizationId={instructor.organization_id}
+      />
+
+      <TimeOffSection
+        instructorId={instructor.id}
+        organizationId={instructor.organization_id}
+      />
+
+      <VehicleAssignmentsSection
+        instructorId={instructor.id}
+        organizationId={instructor.organization_id}
+      />
     </>
   );
 }
 
+// ─── Availability rules section ───────────────────────────────────────────────
+
+const DAY_NAMES_SV = ['Söndag', 'Måndag', 'Tisdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lördag'];
+
+function AvailabilityRulesSection({
+  instructorId,
+  organizationId,
+}: {
+  instructorId: string;
+  organizationId: string;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [showAdd,          setShowAdd]          = useState(false);
+  const [newDay,           setNewDay]           = useState('1');
+  const [newStart,         setNewStart]         = useState('09:00');
+  const [newEnd,           setNewEnd]           = useState('17:00');
+  const [newEffectiveFrom, setNewEffectiveFrom] = useState(today);
+  const [newEffectiveUntil,setNewEffectiveUntil]= useState('');
+  const [newDuration,      setNewDuration]      = useState('60');
+  const [newNotes,         setNewNotes]         = useState('');
+
+  const { data: rules = [], isLoading } = useInstructorAvailabilityRules(instructorId);
+  const createMutation = useCreateAvailabilityRule();
+  const deleteMutation = useDeleteAvailabilityRule();
+  const toggleMutation = useUpdateAvailabilityRule();
+
+  const sorted = [...rules].sort((a: InstructorAvailabilityRule, b: InstructorAvailabilityRule) => {
+    const order = [1, 2, 3, 4, 5, 6, 0]; // Mon–Sun
+    return order.indexOf(a.day_of_week) - order.indexOf(b.day_of_week);
+  });
+
+  function handleAdd() {
+    createMutation.mutate(
+      {
+        instructorId,
+        organizationId,
+        input: {
+          day_of_week:           parseInt(newDay),
+          start_time:            newStart,
+          end_time:              newEnd,
+          effective_from:        newEffectiveFrom,
+          effective_until:       newEffectiveUntil || null,
+          slot_duration_minutes: parseInt(newDuration),
+          notes:                 newNotes || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setShowAdd(false);
+          setNewDay('1');
+          setNewStart('09:00');
+          setNewEnd('17:00');
+          setNewEffectiveFrom(today);
+          setNewEffectiveUntil('');
+          setNewDuration('60');
+          setNewNotes('');
+        },
+      },
+    );
+  }
+
+  return (
+    <SectionCard title="Veckovisa tillgänglighetsregler">
+      {isLoading ? (
+        <p className="text-sm text-gray-400">Laddar...</p>
+      ) : sorted.length === 0 ? (
+        <p className="text-sm text-gray-400 mb-3">Inga regler inlagda.</p>
+      ) : (
+        <div className="overflow-x-auto mb-3">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                <th className="pb-2 pr-4 font-medium">Dag</th>
+                <th className="pb-2 pr-4 font-medium">Start</th>
+                <th className="pb-2 pr-4 font-medium">Slut</th>
+                <th className="pb-2 pr-4 font-medium">Lektionstid</th>
+                <th className="pb-2 pr-4 font-medium">Aktiv från</th>
+                <th className="pb-2 pr-4 font-medium">Status</th>
+                <th className="pb-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((rule: InstructorAvailabilityRule) => (
+                <tr key={rule.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-2 pr-4 font-medium">{DAY_NAMES_SV[rule.day_of_week]}</td>
+                  <td className="py-2 pr-4">{rule.start_time.slice(0, 5)}</td>
+                  <td className="py-2 pr-4">{rule.end_time.slice(0, 5)}</td>
+                  <td className="py-2 pr-4">{rule.slot_duration_minutes} min</td>
+                  <td className="py-2 pr-4">{rule.effective_from}</td>
+                  <td className="py-2 pr-4">
+                    <span className={cn(
+                      'text-xs font-medium px-2 py-0.5 rounded-full',
+                      rule.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500',
+                    )}>
+                      {rule.is_active ? 'Aktiv' : 'Inaktiv'}
+                    </span>
+                  </td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleMutation.mutate({ ruleId: rule.id, instructorId, isActive: !rule.is_active })}
+                        disabled={toggleMutation.isPending}
+                        className="text-xs text-blue-500 hover:underline disabled:opacity-50"
+                      >
+                        {rule.is_active ? 'Inaktivera' : 'Aktivera'}
+                      </button>
+                      <button
+                        onClick={() => deleteMutation.mutate({ ruleId: rule.id, instructorId })}
+                        disabled={deleteMutation.isPending}
+                        className="text-red-400 hover:text-red-600 disabled:opacity-50"
+                        aria-label="Ta bort regel"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!showAdd ? (
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-1.5 text-sm text-blue-500 hover:text-blue-700"
+        >
+          <Plus size={14} />
+          Lägg till regel
+        </button>
+      ) : (
+        <div className="border border-gray-200 rounded-md p-4 bg-gray-50 mt-2">
+          <p className="text-sm font-medium text-gray-700 mb-3">Ny tillgänglighetsregel</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+            <div>
+              <FieldLabel>Veckodag</FieldLabel>
+              <select
+                value={newDay}
+                onChange={(e) => setNewDay(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              >
+                {DAY_NAMES_SV.map((d, i) => (
+                  <option key={i} value={i}>{d}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <FieldLabel>Starttid</FieldLabel>
+              <input
+                type="time"
+                value={newStart}
+                onChange={(e) => setNewStart(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+            <div>
+              <FieldLabel>Sluttid</FieldLabel>
+              <input
+                type="time"
+                value={newEnd}
+                onChange={(e) => setNewEnd(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+            <div>
+              <FieldLabel>Lektionstid (min)</FieldLabel>
+              <select
+                value={newDuration}
+                onChange={(e) => setNewDuration(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              >
+                <option value="30">30 min</option>
+                <option value="45">45 min</option>
+                <option value="60">60 min</option>
+                <option value="90">90 min</option>
+              </select>
+            </div>
+            <div>
+              <FieldLabel>Aktiv från</FieldLabel>
+              <input
+                type="date"
+                value={newEffectiveFrom}
+                onChange={(e) => setNewEffectiveFrom(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+            <div>
+              <FieldLabel>Aktiv till (valfritt)</FieldLabel>
+              <input
+                type="date"
+                value={newEffectiveUntil}
+                onChange={(e) => setNewEffectiveUntil(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+          </div>
+          <div className="mb-3">
+            <FieldLabel>Anteckningar (valfritt)</FieldLabel>
+            <input
+              type="text"
+              value={newNotes}
+              onChange={(e) => setNewNotes(e.target.value)}
+              placeholder="Frivillig anteckning..."
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              disabled={createMutation.isPending || !newStart || !newEnd || !newEffectiveFrom}
+              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+            >
+              {createMutation.isPending ? 'Sparar...' : 'Spara regel'}
+            </button>
+            <button
+              onClick={() => setShowAdd(false)}
+              className="border border-gray-300 rounded px-4 py-2 text-sm hover:bg-gray-100"
+            >
+              Avbryt
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+// ─── Time-off section ──────────────────────────────────────────────────────────
+
+const TIME_OFF_TYPE_LABELS: Record<string, string> = {
+  vacation:       'Semester',
+  sickness:       'Sjukskrivning',
+  training:       'Utbildning',
+  public_holiday: 'Helgdag',
+  emergency:      'Akut frånvaro',
+  other:          'Övrigt',
+};
+
+const TIME_OFF_STATUS_MAP: Record<string, { label: string; cls: string }> = {
+  pending:   { label: 'Väntar',    cls: 'bg-amber-100 text-amber-700' },
+  approved:  { label: 'Godkänd',   cls: 'bg-green-100 text-green-700' },
+  rejected:  { label: 'Avvisad',   cls: 'bg-red-100 text-red-700' },
+  cancelled: { label: 'Avbokad',   cls: 'bg-gray-100 text-gray-500' },
+};
+
+function TimeOffSection({
+  instructorId,
+  organizationId,
+}: {
+  instructorId: string;
+  organizationId: string;
+}) {
+  const [showAdd,      setShowAdd]      = useState(false);
+  const [newType,      setNewType]      = useState<TimeOffStatus | string>('vacation');
+  const [newStartDate, setNewStartDate] = useState('');
+  const [newEndDate,   setNewEndDate]   = useState('');
+  const [newIsFullDay, setNewIsFullDay] = useState(true);
+  const [newReason,    setNewReason]    = useState('');
+
+  const { data: timeOffs = [], isLoading } = useInstructorTimeOff(instructorId);
+  const createMutation = useCreateTimeOff();
+  const updateMutation = useUpdateTimeOffStatus();
+
+  const sorted = [...timeOffs].sort(
+    (a: InstructorTimeOff, b: InstructorTimeOff) =>
+      new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime(),
+  );
+
+  function handleAdd() {
+    if (!newStartDate || !newEndDate) return;
+    createMutation.mutate(
+      {
+        instructorId,
+        organizationId,
+        input: {
+          time_off_type: newType as InstructorTimeOff['time_off_type'],
+          starts_at:     `${newStartDate}T00:00:00Z`,
+          ends_at:       `${newEndDate}T23:59:59Z`,
+          is_full_day:   newIsFullDay,
+          reason:        newReason || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setShowAdd(false);
+          setNewType('vacation');
+          setNewStartDate('');
+          setNewEndDate('');
+          setNewIsFullDay(true);
+          setNewReason('');
+        },
+      },
+    );
+  }
+
+  return (
+    <SectionCard title="Ledighetsansökningar">
+      {isLoading ? (
+        <p className="text-sm text-gray-400">Laddar...</p>
+      ) : sorted.length === 0 ? (
+        <p className="text-sm text-gray-400 mb-3">Inga ledighetsansökningar.</p>
+      ) : (
+        <div className="overflow-x-auto mb-3">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                <th className="pb-2 pr-4 font-medium">Typ</th>
+                <th className="pb-2 pr-4 font-medium">Startdatum</th>
+                <th className="pb-2 pr-4 font-medium">Slutdatum</th>
+                <th className="pb-2 pr-4 font-medium">Heldag</th>
+                <th className="pb-2 pr-4 font-medium">Status</th>
+                <th className="pb-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((to: InstructorTimeOff) => {
+                const statusInfo = TIME_OFF_STATUS_MAP[to.status] ?? { label: to.status, cls: 'bg-gray-100 text-gray-600' };
+                return (
+                  <tr key={to.id} className="border-b border-gray-50 last:border-0">
+                    <td className="py-2 pr-4 font-medium">
+                      {TIME_OFF_TYPE_LABELS[to.time_off_type] ?? to.time_off_type}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {new Date(to.starts_at).toLocaleDateString('sv-SE')}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {new Date(to.ends_at).toLocaleDateString('sv-SE')}
+                    </td>
+                    <td className="py-2 pr-4">{to.is_full_day ? 'Ja' : 'Nej'}</td>
+                    <td className="py-2 pr-4">
+                      <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', statusInfo.cls)}>
+                        {statusInfo.label}
+                      </span>
+                    </td>
+                    <td className="py-2">
+                      {to.status === 'pending' && (
+                        <button
+                          onClick={() => updateMutation.mutate({
+                            timeOffId:    to.id,
+                            instructorId,
+                            status:       'cancelled',
+                          })}
+                          disabled={updateMutation.isPending}
+                          className="text-xs text-red-400 hover:text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Avboka
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!showAdd ? (
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-1.5 text-sm text-blue-500 hover:text-blue-700"
+        >
+          <Plus size={14} />
+          Ansök om ledighet
+        </button>
+      ) : (
+        <div className="border border-gray-200 rounded-md p-4 bg-gray-50 mt-2">
+          <p className="text-sm font-medium text-gray-700 mb-3">Ny ledighetsansökan</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <FieldLabel>Ledighetstyp</FieldLabel>
+              <select
+                value={newType}
+                onChange={(e) => setNewType(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              >
+                {Object.entries(TIME_OFF_TYPE_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end pb-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newIsFullDay}
+                  onChange={(e) => setNewIsFullDay(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                <span className="text-sm text-gray-700">Heldag</span>
+              </label>
+            </div>
+            <div>
+              <FieldLabel>Startdatum</FieldLabel>
+              <input
+                type="date"
+                value={newStartDate}
+                onChange={(e) => setNewStartDate(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+            <div>
+              <FieldLabel>Slutdatum</FieldLabel>
+              <input
+                type="date"
+                value={newEndDate}
+                onChange={(e) => setNewEndDate(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              />
+            </div>
+          </div>
+          <div className="mb-3">
+            <FieldLabel>Anledning (valfritt)</FieldLabel>
+            <input
+              type="text"
+              value={newReason}
+              onChange={(e) => setNewReason(e.target.value)}
+              placeholder="Frivillig beskrivning..."
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleAdd}
+              disabled={createMutation.isPending || !newStartDate || !newEndDate}
+              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+            >
+              {createMutation.isPending ? 'Sparar...' : 'Skicka ansökan'}
+            </button>
+            <button
+              onClick={() => setShowAdd(false)}
+              className="border border-gray-300 rounded px-4 py-2 text-sm hover:bg-gray-100"
+            >
+              Avbryt
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+// ─── Vehicle assignments section ──────────────────────────────────────────────
+
+function VehicleAssignmentsSection({
+  instructorId,
+  organizationId,
+}: {
+  instructorId: string;
+  organizationId: string;
+}) {
+  const [showAdd,       setShowAdd]       = useState(false);
+  const [showHistory,   setShowHistory]   = useState(false);
+  const [newVehicleId,  setNewVehicleId]  = useState('');
+  const [newIsPrimary,  setNewIsPrimary]  = useState(false);
+  const [newNotes,      setNewNotes]      = useState('');
+  const [conflictError, setConflictError] = useState('');
+
+  const { data: assignments = [], isLoading } = useInstructorVehicleAssignments(instructorId);
+  const { data: vehicles = [] }               = useVehicles();
+  const assignMutation   = useAssignVehicle();
+  const unassignMutation = useUnassignVehicle();
+
+  const active  = assignments.filter((a: InstructorVehicleAssignment) => a.unassigned_at === null);
+  const history = assignments.filter((a: InstructorVehicleAssignment) => a.unassigned_at !== null);
+
+  const vehicleMap = Object.fromEntries(vehicles.map((v: Vehicle) => [v.id, v]));
+
+  const availableVehicles = vehicles.filter((v: Vehicle) => v.operational_status !== 'decommissioned');
+
+  function handleAssign() {
+    if (!newVehicleId) return;
+    const alreadyActive = active.some((a: InstructorVehicleAssignment) => a.vehicle_id === newVehicleId);
+    if (alreadyActive) {
+      setConflictError('Detta fordon är redan aktivt tilldelat till denna instruktör.');
+      return;
+    }
+    setConflictError('');
+    assignMutation.mutate(
+      {
+        instructorId,
+        organizationId,
+        input: { vehicle_id: newVehicleId, is_primary: newIsPrimary, notes: newNotes || null },
+      },
+      {
+        onSuccess: () => {
+          setShowAdd(false);
+          setNewVehicleId('');
+          setNewIsPrimary(false);
+          setNewNotes('');
+          setConflictError('');
+        },
+      },
+    );
+  }
+
+  function handleUnassign(assignment: InstructorVehicleAssignment) {
+    const v = vehicleMap[assignment.vehicle_id];
+    const label = v ? `${v.registration_number} – ${v.make} ${v.model}` : 'fordonet';
+    if (!confirm(`Avsluta tilldelning av ${label}?`)) return;
+    unassignMutation.mutate({ assignmentId: assignment.id, instructorId });
+  }
+
+  function formatDate(iso: string) {
+    return new Date(iso).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  return (
+    <SectionCard title="Fordonstilldelningar">
+      {isLoading ? (
+        <p className="text-sm text-gray-400">Laddar...</p>
+      ) : active.length === 0 ? (
+        <p className="text-sm text-gray-400 mb-3">Inga aktiva tilldelningar.</p>
+      ) : (
+        <div className="overflow-x-auto mb-3">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                <th className="pb-2 pr-4 font-medium">Reg.nr</th>
+                <th className="pb-2 pr-4 font-medium">Märke / Modell</th>
+                <th className="pb-2 pr-4 font-medium">Kategori</th>
+                <th className="pb-2 pr-4 font-medium">Primär</th>
+                <th className="pb-2 pr-4 font-medium">Tilldelad</th>
+                <th className="pb-2 pr-4 font-medium">Anteckning</th>
+                <th className="pb-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {active.map((a: InstructorVehicleAssignment) => {
+                const v = vehicleMap[a.vehicle_id];
+                return (
+                  <tr key={a.id} className="border-b border-gray-50 last:border-0">
+                    <td className="py-2 pr-4 font-mono font-semibold text-gray-800 text-xs">
+                      {v?.registration_number ?? '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {v ? `${v.make} ${v.model}` : a.vehicle_id.slice(0, 8)}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-gray-500">
+                      {v?.teaching_categories?.join(', ') ?? '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {a.is_primary ? (
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                          Primär
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-gray-500">{formatDate(a.assigned_at)}</td>
+                    <td className="py-2 pr-4 text-xs text-gray-500 max-w-[120px] truncate">
+                      {a.notes ?? '—'}
+                    </td>
+                    <td className="py-2">
+                      <button
+                        onClick={() => handleUnassign(a)}
+                        disabled={unassignMutation.isPending}
+                        className="text-xs text-red-400 hover:text-red-600 hover:underline disabled:opacity-50"
+                        title="Avsluta tilldelning"
+                      >
+                        Avsluta
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <button
+          onClick={() => setShowHistory((h) => !h)}
+          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 mb-3"
+        >
+          <Car size={12} />
+          {showHistory ? 'Dölj historik' : `Visa historik (${history.length})`}
+        </button>
+      )}
+
+      {showHistory && history.length > 0 && (
+        <div className="overflow-x-auto mb-3 opacity-60">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                <th className="pb-2 pr-4 font-medium">Reg.nr</th>
+                <th className="pb-2 pr-4 font-medium">Märke / Modell</th>
+                <th className="pb-2 pr-4 font-medium">Tilldelad</th>
+                <th className="pb-2 font-medium">Avslutad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((a: InstructorVehicleAssignment) => {
+                const v = vehicleMap[a.vehicle_id];
+                return (
+                  <tr key={a.id} className="border-b border-gray-50 last:border-0">
+                    <td className="py-2 pr-4 font-mono text-xs text-gray-600">
+                      {v?.registration_number ?? '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-gray-600">
+                      {v ? `${v.make} ${v.model}` : a.vehicle_id.slice(0, 8)}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-gray-400">{formatDate(a.assigned_at)}</td>
+                    <td className="py-2 text-xs text-gray-400">
+                      {a.unassigned_at ? formatDate(a.unassigned_at) : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {conflictError && (
+        <p className="text-xs text-red-500 mb-2">{conflictError}</p>
+      )}
+
+      {!showAdd ? (
+        <button
+          onClick={() => { setShowAdd(true); setConflictError(''); }}
+          className="flex items-center gap-1.5 text-sm text-blue-500 hover:text-blue-700"
+        >
+          <Plus size={14} />
+          Tilldela fordon
+        </button>
+      ) : (
+        <div className="border border-gray-200 rounded-md p-4 bg-gray-50 mt-2">
+          <p className="text-sm font-medium text-gray-700 mb-3">Tilldela fordon</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div className="sm:col-span-2">
+              <FieldLabel>Fordon</FieldLabel>
+              <select
+                value={newVehicleId}
+                onChange={(e) => { setNewVehicleId(e.target.value); setConflictError(''); }}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+              >
+                <option value="">Välj fordon…</option>
+                {availableVehicles.map((v: Vehicle) => (
+                  <option key={v.id} value={v.id}>
+                    {v.registration_number} – {v.make} {v.model} ({v.teaching_categories.join(', ')})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mb-3">
+            <FieldLabel>Anteckning (valfritt)</FieldLabel>
+            <input
+              type="text"
+              value={newNotes}
+              onChange={(e) => setNewNotes(e.target.value)}
+              placeholder="Frivillig anteckning..."
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
+            />
+          </div>
+          <div className="mb-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newIsPrimary}
+                onChange={(e) => setNewIsPrimary(e.target.checked)}
+                className="w-4 h-4 accent-blue-500"
+              />
+              <span className="text-sm text-gray-700">Markera som primärt fordon</span>
+            </label>
+          </div>
+          {conflictError && (
+            <p className="text-xs text-red-500 mb-2">{conflictError}</p>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={handleAssign}
+              disabled={assignMutation.isPending || !newVehicleId}
+              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+            >
+              {assignMutation.isPending ? 'Sparar...' : 'Tilldela'}
+            </button>
+            <button
+              onClick={() => { setShowAdd(false); setConflictError(''); }}
+              className="border border-gray-300 rounded px-4 py-2 text-sm hover:bg-gray-100"
+            >
+              Avbryt
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
 // ─── Utbildningsbehörigheter tab ──────────────────────────────────────────────
+
+function CertStatusBadge({ expiresAt }: { expiresAt: string | null }) {
+  const status = computeCertStatus(expiresAt);
+  const MAP: Record<string, { label: string; cls: string }> = {
+    active:        { label: 'Aktiv',         cls: 'bg-green-100 text-green-700' },
+    expiring_soon: { label: 'Upphör snart',  cls: 'bg-amber-100 text-amber-700' },
+    expired:       { label: 'Utgången',      cls: 'bg-red-100 text-red-700' },
+    suspended:     { label: 'Suspenderad',   cls: 'bg-gray-100 text-gray-500' },
+    revoked:       { label: 'Återkallad',    cls: 'bg-red-200 text-red-800' },
+  };
+  const { label, cls } = MAP[status] ?? { label: status, cls: 'bg-gray-100 text-gray-600' };
+  return (
+    <span className={cn('text-xs font-medium px-2 py-0.5 rounded-full', cls)}>
+      {label}
+    </span>
+  );
+}
+
+function CertificationsSection({
+  instructorId,
+  organizationId,
+}: {
+  instructorId: string;
+  organizationId: string;
+}) {
+  const { data: certs = [], isLoading: certLoading } = useInstructorCertifications(instructorId);
+  const createMutation = useCreateInstructorCertification();
+  const deleteMutation = useDeleteInstructorCertification();
+
+  const [showForm,     setShowForm]     = useState(false);
+  const [certType,     setCertType]     = useState('ADI');
+  const [certAuth,     setCertAuth]     = useState('');
+  const [certNumber,   setCertNumber]   = useState('');
+  const [certIssuedAt, setCertIssuedAt] = useState('');
+  const [certExpires,  setCertExpires]  = useState('');
+  const [certNotes,    setCertNotes]    = useState('');
+
+  function resetForm() {
+    setCertType('ADI');
+    setCertAuth('');
+    setCertNumber('');
+    setCertIssuedAt('');
+    setCertExpires('');
+    setCertNotes('');
+  }
+
+  function handleSaveCert() {
+    if (!certIssuedAt) return;
+    createMutation.mutate(
+      {
+        instructorId,
+        organizationId,
+        input: {
+          certification_type:  certType,
+          issuing_authority:   certAuth   || null,
+          certificate_number:  certNumber || null,
+          issued_at:           certIssuedAt,
+          expires_at:          certExpires || null,
+          notes:               certNotes   || null,
+        },
+      },
+      {
+        onSuccess: () => {
+          setShowForm(false);
+          resetForm();
+        },
+      }
+    );
+  }
+
+  function handleDelete(cert: InstructorCertification) {
+    deleteMutation.mutate({ certificationId: cert.id, instructorId });
+  }
+
+  return (
+    <SectionCard title="Behörighetsintyg">
+      {certLoading ? (
+        <div className="flex items-center justify-center py-4">
+          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+        </div>
+      ) : certs.length === 0 && !showForm ? (
+        <p className="text-sm text-gray-400 mb-3">Inga intyg registrerade.</p>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {certs.map((cert) => (
+            <div key={cert.id} className="border border-gray-200 rounded-md p-3 flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-gray-800">
+                    {CERT_TYPE_OPTIONS.find((o) => o.key === cert.certification_type)?.label ?? cert.certification_type}
+                  </span>
+                  <CertStatusBadge expiresAt={cert.expires_at} />
+                </div>
+                {cert.certificate_number && (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Nr: {cert.certificate_number}
+                    {cert.issuing_authority ? ` · ${cert.issuing_authority}` : ''}
+                  </p>
+                )}
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Utfärdad: {cert.issued_at}
+                  {cert.expires_at ? ` · Upphör: ${cert.expires_at}` : ' · Ej tidsbegränsat'}
+                </p>
+                {cert.notes && (
+                  <p className="text-xs text-gray-500 mt-0.5 italic">{cert.notes}</p>
+                )}
+              </div>
+              <button
+                onClick={() => handleDelete(cert)}
+                disabled={deleteMutation.isPending}
+                className="text-red-400 hover:text-red-600 shrink-0 p-1 disabled:opacity-50"
+                title="Ta bort intyg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showForm ? (
+        <div className="border border-blue-200 rounded-md p-4 bg-blue-50/60 space-y-3">
+          <p className="text-sm font-semibold text-blue-800 mb-1">Lägg till intyg</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <FieldLabel>Typ</FieldLabel>
+              <select
+                value={certType}
+                onChange={(e) => setCertType(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              >
+                {CERT_TYPE_OPTIONS.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <FieldLabel>Utfärdande myndighet</FieldLabel>
+              <input
+                type="text"
+                value={certAuth}
+                onChange={(e) => setCertAuth(e.target.value)}
+                placeholder="Trafikverket"
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <FieldLabel>Intygnummer</FieldLabel>
+            <input
+              type="text"
+              value={certNumber}
+              onChange={(e) => setCertNumber(e.target.value)}
+              placeholder="ADI-12345"
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <FieldLabel>Utfärdat *</FieldLabel>
+              <input
+                type="date"
+                value={certIssuedAt}
+                onChange={(e) => setCertIssuedAt(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              />
+            </div>
+            <div>
+              <FieldLabel>Upphör (lämna tomt om ej tidsbegränsat)</FieldLabel>
+              <input
+                type="date"
+                value={certExpires}
+                onChange={(e) => setCertExpires(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <FieldLabel>Anteckningar</FieldLabel>
+            <textarea
+              value={certNotes}
+              onChange={(e) => setCertNotes(e.target.value)}
+              rows={2}
+              placeholder="Valfria anteckningar..."
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              onClick={() => { setShowForm(false); resetForm(); }}
+              className="border border-gray-300 text-gray-600 rounded-full px-4 py-2 text-sm hover:bg-gray-50"
+            >
+              Avbryt
+            </button>
+            <button
+              onClick={handleSaveCert}
+              disabled={!certIssuedAt || createMutation.isPending}
+              className="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
+            >
+              {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              Spara intyg
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowForm(true)}
+          className="flex items-center gap-2 text-sm text-blue-500 hover:text-blue-700 font-medium"
+        >
+          <Plus className="w-4 h-4" />
+          Lägg till intyg
+        </button>
+      )}
+    </SectionCard>
+  );
+}
 
 function UtbildningTab({
   instructor,
@@ -509,10 +1410,14 @@ function UtbildningTab({
   onSave: (patch: Record<string, unknown>) => void;
   saving: boolean;
 }) {
-  const [selected, setSelected] = useState<string[]>(instructor.teaching_categories ?? []);
+  const [selected,     setSelected]     = useState<string[]>(instructor.teaching_categories ?? []);
+  const [adiNumber,    setAdiNumber]    = useState(instructor.adi_number ?? '');
+  const [adiValidUntil, setAdiValidUntil] = useState(instructor.adi_valid_until ?? '');
 
   useEffect(() => {
     setSelected(instructor.teaching_categories ?? []);
+    setAdiNumber(instructor.adi_number ?? '');
+    setAdiValidUntil(instructor.adi_valid_until ?? '');
   }, [instructor]);
 
   function toggle(key: string) {
@@ -521,34 +1426,92 @@ function UtbildningTab({
     );
   }
 
+  const adiStatus = adiValidUntil ? computeCertStatus(adiValidUntil) : null;
+
   return (
-    <SectionCard title="">
-      <h2 className="text-[#1a7dc4] font-semibold text-base mb-1">
-        Utbildningsbehörigheter för {instructor.first_name} {instructor.last_name}
-      </h2>
-      <p className="text-sm text-gray-600 mb-4">
-        Välj vilka utbildningsbehörigheter som {instructor.first_name} {instructor.last_name} kan utbilda på.
-      </p>
+    <>
+      {/* Teaching categories */}
+      <SectionCard title="">
+        <h2 className="text-[#1a7dc4] font-semibold text-base mb-1">
+          Utbildningsbehörigheter för {instructor.first_name} {instructor.last_name}
+        </h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Välj vilka utbildningsbehörigheter som {instructor.first_name} {instructor.last_name} kan utbilda på.
+        </p>
 
-      <div className="space-y-3 mb-4">
-        {TEACHING_CATEGORIES.map(({ key, label }) => (
-          <label key={key} className="flex items-center gap-3 cursor-pointer select-none">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 mb-4">
+          {TEACHING_CATEGORIES.map(({ key, label }) => (
+            <label key={key} className="flex items-center gap-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={selected.includes(key)}
+                onChange={() => toggle(key)}
+                className="w-4 h-4 accent-blue-500"
+              />
+              <span className="text-sm text-gray-700">{label}</span>
+            </label>
+          ))}
+        </div>
+
+        <SaveButton
+          loading={saving}
+          onClick={() => onSave({ teaching_categories: selected })}
+        />
+      </SectionCard>
+
+      {/* ADI section */}
+      <SectionCard title="ADI-behörighet">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <FieldLabel>ADI-nummer</FieldLabel>
             <input
-              type="checkbox"
-              checked={selected.includes(key)}
-              onChange={() => toggle(key)}
-              className="w-4 h-4 accent-blue-500"
+              type="text"
+              value={adiNumber}
+              onChange={(e) => setAdiNumber(e.target.value)}
+              placeholder="ADI-12345"
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
-            <span className="text-sm text-gray-700">{label}</span>
-          </label>
-        ))}
-      </div>
+          </div>
+          <div>
+            <FieldLabel>ADI gäller till</FieldLabel>
+            <input
+              type="date"
+              value={adiValidUntil}
+              onChange={(e) => setAdiValidUntil(e.target.value)}
+              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+        </div>
 
-      <SaveButton
-        loading={saving}
-        onClick={() => onSave({ teaching_categories: selected })}
+        {adiStatus !== null && (
+          <div className="flex items-center gap-2 mb-3">
+            <CertStatusBadge expiresAt={adiValidUntil} />
+            {adiStatus === 'expired' && (
+              <p className="text-xs text-red-600">ADI-behörigheten har löpt ut. Förnya omedelbart.</p>
+            )}
+            {adiStatus === 'expiring_soon' && (
+              <p className="text-xs text-amber-600">ADI-behörigheten upphör inom 60 dagar.</p>
+            )}
+          </div>
+        )}
+
+        <SaveButton
+          loading={saving}
+          onClick={() =>
+            onSave({
+              adi_number:    adiNumber    || null,
+              adi_valid_until: adiValidUntil || null,
+            })
+          }
+        />
+      </SectionCard>
+
+      {/* Certifications */}
+      <CertificationsSection
+        instructorId={instructor.id}
+        organizationId={instructor.organization_id}
       />
-    </SectionCard>
+    </>
   );
 }
 
@@ -1098,7 +2061,7 @@ export function InstructorDetailPage() {
           <OversiktTab instructor={instructor} onSave={handleSave} saving={saving} />
         )}
         {activeTab === 'schema' && (
-          <SchemaTab />
+          <SchemaTab instructor={instructor} />
         )}
         {activeTab === 'utbildning' && (
           <UtbildningTab instructor={instructor} onSave={handleSave} saving={saving} />

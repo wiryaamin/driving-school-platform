@@ -13,6 +13,9 @@ import {
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { formatCurrency, formatDate } from '../lib/financeUtils.js';
 import {
   useBankImports,
@@ -609,6 +612,7 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
                   </div>
 
                   {!isConfirmed && (
+                    <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_MANAGE}>
                     <div className="flex items-center gap-2 pt-1">
                       <Button
                         variant="outline"
@@ -631,6 +635,7 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
                         Bekräfta {unmatchedCount > 0 ? `(${unmatchedCount} kvar)` : 'avstämning'}
                       </Button>
                     </div>
+                    </PermissionGate>
                   )}
                   {isConfirmed && (
                     <p className="text-xs text-emerald-600 flex items-center gap-1.5">
@@ -694,6 +699,7 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
 
                           {/* Actions */}
                           {!isConfirmed && (
+                            <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_MANAGE}>
                             <div className="shrink-0 flex items-center gap-1">
                               {(line.status === 'unmatched' || line.status === 'exception') && (
                                 <button
@@ -715,6 +721,7 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
                                 </button>
                               )}
                             </div>
+                            </PermissionGate>
                           )}
                         </div>
                       ))}
@@ -818,13 +825,17 @@ export function BankReconciliationPage() {
         title="Bankavstämning"
         description="Importera bankutdrag, matcha betalningar och bekräfta perioder"
         actions={
-          <Button onClick={() => setWizardOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" /> Nytt bankutdrag
-          </Button>
+          <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_MANAGE}>
+            <Button onClick={() => setWizardOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" /> Nytt bankutdrag
+            </Button>
+          </PermissionGate>
         }
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:reconciliation:run">
+        <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_READ}>
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           {[
@@ -872,9 +883,11 @@ export function BankReconciliationPage() {
                 Importera ett bankutdrag för att starta månadsavstämningen. Klistra in CSV-data från din internetbank.
               </p>
             </div>
-            <Button onClick={() => setWizardOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Importera bankutdrag
-            </Button>
+            <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_MANAGE}>
+              <Button onClick={() => setWizardOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Importera bankutdrag
+              </Button>
+            </PermissionGate>
           </div>
         ) : (
           <div className="rounded-xl border bg-card overflow-hidden">
@@ -883,6 +896,8 @@ export function BankReconciliationPage() {
             ))}
           </div>
         )}
+        </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
 
       {/* Import wizard sheet */}

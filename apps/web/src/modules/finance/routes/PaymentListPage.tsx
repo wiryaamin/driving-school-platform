@@ -7,6 +7,8 @@ import {
   DataTable, DataTableColumnHeader,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { usePaymentList } from '../hooks/useFinance.js';
 import type { Payment } from '../hooks/useFinance.js';
 import { PaymentStatusBadge, PaymentMethodBadge, PAYMENT_STATUS_OPTIONS, PAYMENT_METHOD_OPTIONS } from '../components/PaymentStatusBadge.js';
@@ -136,6 +138,7 @@ export function PaymentListPage() {
   const columns = useMemo(() => buildColumns(), []);
 
   return (
+    <PermissionGate permission={Permissions.FINANCE_PAYMENT_READ}>
     <PageLayout>
       <PageHeader
         title="Betalningar"
@@ -201,5 +204,6 @@ export function PaymentListPage() {
         )}
       </PageContent>
     </PageLayout>
+    </PermissionGate>
   );
 }

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -219,6 +220,33 @@ export function useConfirmBankReconciliation(importId: string) {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: reconciliationKeys.importList() });
+    },
+  });
+}
+
+export interface CreateFinancialPeriodInput {
+  name:         string;
+  period_start: string;
+  period_end:   string;
+}
+
+export function useCreateFinancialPeriod() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: CreateFinancialPeriodInput): Promise<{ id: string }> => {
+      if (!orgId) throw new Error('Ingen organisation');
+      const { data, error } = await supabase
+        .from('financial_periods' as never)
+        .insert({ ...input, organization_id: orgId } as never)
+        .select('id')
+        .single();
+      if (error) throw error;
+      return data as { id: string };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: reconciliationKeys.periods() });
     },
   });
 }

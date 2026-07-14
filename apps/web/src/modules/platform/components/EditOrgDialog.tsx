@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -9,6 +10,7 @@ import {
 } from '@platform/ui';
 import type { PlatformOrganization } from '../hooks/usePlatformOrganizations.js';
 import { useUpdateOrg } from '../hooks/usePlatformOrgMutations.js';
+import { SUBSCRIPTION_TIERS } from '@platform/types';
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -17,7 +19,9 @@ const schema = z.object({
   legal_name:        z.string().min(2, 'Minst 2 tecken').max(200),
   org_number:        z.string().max(13).default(''),
   contact_email:     z.string().default(''),
-  subscription_tier: z.enum(['trial', 'starter', 'professional', 'enterprise']),
+  subscription_tier: z.enum(SUBSCRIPTION_TIERS),
+  max_users:         z.coerce.number().int().min(1, 'Minst 1').max(10000),
+  max_locations:     z.coerce.number().int().min(1, 'Minst 1').max(1000),
 }).superRefine((data, ctx) => {
   if (data.org_number && !/^\d{6}-\d{4}$/.test(data.org_number)) {
     ctx.addIssue({ code: 'custom', path: ['org_number'], message: 'Format: XXXXXX-XXXX' });
@@ -32,29 +36,49 @@ type FormValues = z.infer<typeof schema>;
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface EditOrgDialogProps {
-  org:     PlatformOrganization;
+  open:    boolean;
+  org:     PlatformOrganization | null;
   onClose: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+//
+// Always mounted by the caller; only `open` toggles (Platform UI Stability
+// Hardening Sprint). See PlatformOrganizationsPage.tsx's ConfirmDialog for
+// the reference implementation of this pattern.
 
-export function EditOrgDialog({ org, onClose }: EditOrgDialogProps) {
+export function EditOrgDialog({ open, org, onClose }: EditOrgDialogProps) {
   const updateOrg = useUpdateOrg();
-
-  const contactEmail = (org.settings['contact_email'] as string | undefined) ?? '';
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      name:              org.name,
-      legal_name:        org.legal_name,
-      org_number:        org.org_number ?? '',
-      contact_email:     contactEmail,
-      subscription_tier: org.subscription_tier as FormValues['subscription_tier'],
+      name: '', legal_name: '', org_number: '', contact_email: '',
+      subscription_tier: 'trial', max_users: 1, max_locations: 1,
     },
   });
 
+  // Reused across different organizations without unmounting — react-hook-
+  // form's defaultValues are only read once at mount, so the form must be
+  // explicitly resynced to `org` each time the dialog (re-)opens.
+  useEffect(() => {
+    if (open && org) {
+      const contactEmail = (org.settings['contact_email'] as string | undefined) ?? '';
+      form.reset({
+        name:              org.name,
+        legal_name:        org.legal_name,
+        org_number:        org.org_number ?? '',
+        contact_email:     contactEmail,
+        subscription_tier: org.subscription_tier as FormValues['subscription_tier'],
+        max_users:         org.max_users,
+        max_locations:     org.max_locations,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, org]);
+
   function onSubmit(values: FormValues) {
+    if (!org) return;
     updateOrg.mutate(
       {
         id:                org.id,
@@ -63,6 +87,8 @@ export function EditOrgDialog({ org, onClose }: EditOrgDialogProps) {
         org_number:        values.org_number || null,
         contact_email:     values.contact_email || null,
         subscription_tier: values.subscription_tier,
+        max_users:         values.max_users,
+        max_locations:     values.max_locations,
         existingSettings:  org.settings,
       },
       {
@@ -82,7 +108,7 @@ export function EditOrgDialog({ org, onClose }: EditOrgDialogProps) {
   }
 
   return (
-    <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <Dialog open={open} onOpenChange={open => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Redigera organisation</DialogTitle>
@@ -161,6 +187,31 @@ export function EditOrgDialog({ org, onClose }: EditOrgDialogProps) {
                 </FormItem>
               )}
             />
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="max_users"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Max antal användare *</FormLabel>
+                    <FormControl><Input type="number" min={1} {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="max_locations"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Max antal filialer *</FormLabel>
+                    <FormControl><Input type="number" min={1} {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={updateOrg.isPending}>

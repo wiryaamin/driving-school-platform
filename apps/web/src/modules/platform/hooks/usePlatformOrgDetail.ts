@@ -20,6 +20,8 @@ export interface PlatformOrgDetail {
   subscription_tier:   string;
   subscription_status: string;
   trial_ends_at:       string | null;
+  max_users:           number;
+  max_locations:       number;
   settings:            Record<string, unknown>;
   created_at:          string;
   updated_at:          string;
@@ -34,16 +36,20 @@ export interface PlatformOrgStats {
   member_count:     number;
 }
 
+export type MembershipStatus = 'active' | 'suspended';
+export type InvitationStatus = 'pending' | 'accepted';
+
 export interface PlatformOrgAdmin {
-  user_id:          string;
-  email:            string | null;
-  first_name:       string | null;
-  last_name:        string | null;
-  role:             string;
-  role_display:     string;
-  is_active:        boolean;
-  assigned_at:      string;
-  last_sign_in_at:  string | null;
+  user_id:            string;
+  email:              string | null;
+  first_name:         string | null;
+  last_name:          string | null;
+  role:               string;
+  role_display:       string;
+  membership_status:  MembershipStatus;
+  invitation_status:  InvitationStatus;
+  assigned_at:        string;
+  last_sign_in_at:    string | null;
 }
 
 export interface PlatformOrgTimelineEvent {

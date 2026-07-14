@@ -13,6 +13,8 @@ export interface PlatformOrganization {
   subscription_tier:   string;
   subscription_status: string;
   trial_ends_at:       string | null;
+  max_users:           number;
+  max_locations:       number;
   settings:            Record<string, unknown>;
   created_at:          string;
 }
@@ -42,7 +44,7 @@ export interface AuditLogEntry {
 export const SYSTEM_ORG_ID = '00000000-0000-0000-0000-000000000000';
 
 const ORG_SELECT =
-  'id, slug, name, legal_name, org_number, status, subscription_tier, subscription_status, trial_ends_at, settings, created_at';
+  'id, slug, name, legal_name, org_number, status, subscription_tier, subscription_status, trial_ends_at, max_users, max_locations, settings, created_at';
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 

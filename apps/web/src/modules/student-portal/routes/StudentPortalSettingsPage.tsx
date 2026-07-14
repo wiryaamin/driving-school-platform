@@ -51,7 +51,7 @@ function stageIndex(stage: string | null | undefined): number {
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide mb-3">
+    <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-3">
       {children}
     </p>
   );
@@ -71,9 +71,9 @@ function InfoRow({ label, value }: { label: string; value: string | null | undef
 // ─── Theme card ───────────────────────────────────────────────────────────────
 
 const THEME_DOTS: Record<ThemeMode, string[]> = {
-  system: ['#0f172a', '#1e3a5f', '#1055C9', '#94a3b8', '#e2e8f0'],
-  dark:   ['#000000', '#1a1a2e', '#16213e', '#0f3460', '#1055C9'],
-  light:  ['#ffffff', '#f0f4f8', '#dbeafe', '#93c5fd', '#1055C9'],
+  system: ['#0f172a', '#1e3a5f', '#684EFF', '#94a3b8', '#e2e8f0'],
+  dark:   ['#000000', '#1a1a2e', '#16213e', '#0f3460', '#684EFF'],
+  light:  ['#ffffff', '#f0f4f8', '#dbeafe', '#93c5fd', '#684EFF'],
 };
 
 function ThemeCard({
@@ -91,18 +91,18 @@ function ThemeCard({
       className={cn(
         'w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all text-left',
         selected
-          ? 'border-[#1055C9] bg-blue-50'
+          ? 'border-[#684EFF] bg-blue-50'
           : 'border-gray-100 bg-white hover:border-gray-200',
       )}
     >
       <div className={cn(
         'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
-        selected ? 'bg-[#1055C9]' : 'bg-gray-100',
+        selected ? 'bg-[#684EFF]' : 'bg-gray-100',
       )}>
         <Icon className={cn('w-5 h-5', selected ? 'text-white' : 'text-gray-500')} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className={cn('text-sm font-semibold', selected ? 'text-[#1055C9]' : 'text-gray-800')}>{label}</p>
+        <p className={cn('text-sm font-semibold', selected ? 'text-[#684EFF]' : 'text-gray-800')}>{label}</p>
         <div className="flex items-center gap-1 mt-1.5">
           {THEME_DOTS[mode].map((color, i) => (
             <span
@@ -113,7 +113,7 @@ function ThemeCard({
           ))}
         </div>
       </div>
-      {selected && <CheckCircle2 className="w-5 h-5 text-[#1055C9] shrink-0" />}
+      {selected && <CheckCircle2 className="w-5 h-5 text-[#684EFF] shrink-0" />}
     </button>
   );
 }
@@ -149,11 +149,11 @@ function AllmantTab() {
           <div className="flex flex-col items-center pt-6 pb-4 border-b border-gray-50 gap-3">
             <div
               className="w-20 h-20 rounded-full flex items-center justify-center text-white text-xl font-bold shadow-sm"
-              style={{ background: 'linear-gradient(135deg, #1055C9 0%, #0d48b2 100%)' }}
+              style={{ background: 'linear-gradient(135deg, #684EFF 0%, #0d48b2 100%)' }}
             >
               {initials}
             </div>
-            <button className="flex items-center gap-2 text-xs font-semibold text-[#1055C9] px-4 py-1.5 rounded-full border border-[#1055C9]/30 bg-blue-50 hover:bg-blue-100 transition-colors">
+            <button className="flex items-center gap-2 text-xs font-semibold text-[#684EFF] px-4 py-1.5 rounded-full border border-[#684EFF]/30 bg-blue-50 hover:bg-blue-100 transition-colors">
               <Camera className="w-3.5 h-3.5" />
               Byt profilbild
             </button>
@@ -244,7 +244,7 @@ function UtbildningTab() {
           ) : (
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0">
-                <Award className="w-7 h-7 text-[#1055C9]" />
+                <Award className="w-7 h-7 text-[#684EFF]" />
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900">
@@ -253,7 +253,7 @@ function UtbildningTab() {
                 <p className="text-xs text-gray-400 mt-0.5">Körkortsbehörighet</p>
               </div>
               {stage && (
-                <span className="ml-auto px-3 py-1.5 rounded-full text-xs font-bold bg-blue-50 text-[#1055C9] border border-blue-100">
+                <span className="ml-auto px-3 py-1.5 rounded-full text-xs font-bold bg-blue-50 text-[#684EFF] border border-blue-100">
                   {PERMIT_LABELS[stage] ?? stage}
                 </span>
               )}
@@ -280,7 +280,7 @@ function UtbildningTab() {
                 <div className={cn(
                   'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-xs font-bold',
                   done    ? 'bg-green-500 text-white' :
-                  current ? 'bg-[#1055C9] text-white' :
+                  current ? 'bg-[#684EFF] text-white' :
                             'bg-gray-100 text-gray-400',
                 )}>
                   {done ? <CheckCircle2 className="w-4 h-4" /> : i + 1}
@@ -288,13 +288,13 @@ function UtbildningTab() {
                 <p className={cn(
                   'text-sm font-medium flex-1',
                   done    ? 'text-gray-500 line-through' :
-                  current ? 'text-[#1055C9] font-semibold' :
+                  current ? 'text-[#684EFF] font-semibold' :
                             'text-gray-400',
                 )}>
                   {step.label}
                 </p>
                 {current && (
-                  <span className="text-[10px] font-bold text-[#1055C9] bg-blue-100 px-2 py-0.5 rounded-full">
+                  <span className="text-[10px] font-bold text-[#684EFF] bg-blue-100 px-2 py-0.5 rounded-full">
                     Nu
                   </span>
                 )}
@@ -402,7 +402,7 @@ export function StudentPortalSettingsPage() {
 
       {/* Page header */}
       <div className="mb-5">
-        <p className="text-[#1055C9] text-[10px] font-bold uppercase tracking-widest">INSTÄLLNINGAR</p>
+        <p className="text-[#684EFF] text-[10px] font-bold uppercase tracking-widest">INSTÄLLNINGAR</p>
         <h1 className="text-2xl font-bold text-gray-900 mt-0.5">
           {activeTab === 'allmant'    ? 'Allmänt'    :
            activeTab === 'utbildning' ? 'Utbildning' :
@@ -419,7 +419,7 @@ export function StudentPortalSettingsPage() {
             className={cn(
               'flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 -mb-px transition-colors',
               activeTab === key
-                ? 'border-[#1055C9] text-[#1055C9]'
+                ? 'border-[#684EFF] text-[#684EFF]'
                 : 'border-transparent text-gray-400 hover:text-gray-600',
             )}
           >

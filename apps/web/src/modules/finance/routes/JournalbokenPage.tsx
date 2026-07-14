@@ -36,6 +36,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useFinancialPeriods } from '../hooks/useReconciliation.js';
 import {
@@ -753,6 +754,7 @@ export function JournalbokenPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:ledger:read">
         <PermissionGate permission={Permissions.FINANCE_LEDGER_READ}>
           <div className="space-y-5">
 
@@ -817,6 +819,7 @@ export function JournalbokenPage() {
 
           </div>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

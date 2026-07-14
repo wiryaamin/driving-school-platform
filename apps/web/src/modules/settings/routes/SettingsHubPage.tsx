@@ -7,7 +7,7 @@ import {
   ShoppingBag, Gift, BookOpen, ShoppingCart, Package,
   GraduationCap, ClipboardList, MessageSquare, Mail,
   MessageCircle, Globe, Palette, TrendingUp, FileText,
-  ClipboardCheck, Star, Monitor, Shield,
+  ClipboardCheck, Star, Monitor, Shield, Plug,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { useSession } from '@shared/hooks/useSession.js';
@@ -110,7 +110,7 @@ const SECTIONS: SettingSection[] = [
     title: 'Utbildning',
     cards: [
       { label: 'Utbildningsbehörigheter', description: 'Behörigheter som tillhandahålls', icon: GraduationCap, color: 'purple', path: '/settings/education/licenses' },
-      { label: 'Undervisningsplan', description: 'Se, redigera och skapa nya', icon: ClipboardList, color: 'red', path: '/settings/education/curriculum' },
+      { label: 'Undervisningsplan', description: 'Se, redigera och skapa nya', icon: ClipboardList, color: 'red', path: '/curriculum' },
     ],
   },
   {
@@ -148,6 +148,7 @@ const SECTIONS: SettingSection[] = [
     title: 'System',
     cards: [
       { label: 'Systeminställningar', description: 'Inställningar för systemet och personal', icon: Monitor, color: 'gray', path: '/settings/system' },
+      { label: 'Externa tjänster', description: 'Integrationer och tredjepartstjänster', icon: Plug, color: 'gray', path: '/settings/external-services' },
     ],
   },
 ];

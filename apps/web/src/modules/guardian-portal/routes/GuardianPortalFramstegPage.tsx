@@ -9,7 +9,7 @@ import {
 } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 function formatDate(iso: string | null): string {
   if (!iso) return '';

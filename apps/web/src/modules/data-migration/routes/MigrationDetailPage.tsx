@@ -9,6 +9,7 @@ import {
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import {
   useMigrationSession,
   useMigrationRows,
@@ -892,6 +893,7 @@ export function MigrationDetailPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="admin:data-migration:run">
         {/* Step indicator */}
         <div className="rounded-xl border border-border bg-card px-5 py-4">
           <StepIndicator current={step} />
@@ -923,6 +925,7 @@ export function MigrationDetailPage() {
             onNewImport={() => navigate('/settings/data-migration')}
           />
         )}
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

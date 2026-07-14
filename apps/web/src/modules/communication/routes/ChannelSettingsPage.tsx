@@ -4,6 +4,9 @@ import { Save, Info, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useChannelConfigs,
   useUpdateChannelConfig,
@@ -57,13 +60,13 @@ function ChannelForm({
   const meta   = CHANNEL_META[channel];
   const opts   = PROVIDER_OPTIONS[channel];
 
-  const [enabled,     setEnabled]     = useState(config?.enabled     ?? false);
-  const [provider,    setProvider]    = useState(config?.provider     ?? '');
-  const [fromAddress, setFromAddress] = useState(config?.from_address ?? '');
-  const [displayName, setDisplayName] = useState(config?.display_name ?? '');
-  const [dailyLimit,  setDailyLimit]  = useState(String(config?.daily_limit ?? 500));
-  const [testAddr,    setTestAddr]    = useState('');
-  const [testResult,  setTestResult]  = useState<'idle' | 'ok' | 'error'>('idle');
+  const [enabled,           setEnabled]           = useState(config?.enabled              ?? false);
+  const [provider,          setProvider]          = useState(config?.provider               ?? '');
+  const [fromAddress,       setFromAddress]       = useState(config?.from_address           ?? '');
+  const [displayName,       setDisplayName]       = useState(config?.display_name           ?? '');
+  const [dailyLimit,        setDailyLimit]        = useState(String(config?.daily_limit     ?? 500));
+  const [testAddr,          setTestAddr]          = useState('');
+  const [testResult,        setTestResult]        = useState<'idle' | 'ok' | 'error'>('idle');
   const sendMsg = useSendMessage();
 
   // Sync when config loads
@@ -80,11 +83,11 @@ function ChannelForm({
 
   const hints = provider ? (CHANNEL_PROVIDER_HINTS[channel]?.[provider] ?? ENV_HINTS[provider] ?? []) : [];
   const isDirty = !config
-    || config.enabled       !== enabled
-    || (config.provider     ?? '') !== provider
-    || (config.from_address ?? '') !== fromAddress
-    || (config.display_name ?? '') !== displayName
-    || String(config.daily_limit)  !== dailyLimit;
+    || config.enabled              !== enabled
+    || (config.provider            ?? '') !== provider
+    || (config.from_address        ?? '') !== fromAddress
+    || (config.display_name        ?? '') !== displayName
+    || String(config.daily_limit)         !== dailyLimit;
 
   function handleTest() {
     if (!testAddr.trim() || !enabled) return;
@@ -108,9 +111,9 @@ function ChannelForm({
       {
         channel,
         enabled,
-        provider:     provider     || null,
-        from_address: fromAddress  || null,
-        display_name: displayName  || null,
+        provider:              provider    || null,
+        from_address:          fromAddress || null,
+        display_name:          displayName || null,
         daily_limit:  parseInt(dailyLimit, 10) || 500,
       },
       {
@@ -230,14 +233,16 @@ function ChannelForm({
             placeholder={channel === 'email' ? 'test@example.com' : '+46 70 000 00 00'}
             className="flex-1 h-8 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={sendMsg.isPending || !testAddr.trim() || !enabled}
-            onClick={handleTest}
-          >
-            {sendMsg.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Testa'}
-          </Button>
+          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={sendMsg.isPending || !testAddr.trim() || !enabled}
+              onClick={handleTest}
+            >
+              {sendMsg.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Testa'}
+            </Button>
+          </PermissionGate>
           {testResult === 'ok'    && <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />}
           {testResult === 'error' && <XCircle      className="w-4 h-4 text-destructive shrink-0" />}
         </div>
@@ -250,17 +255,19 @@ function ChannelForm({
       </div>
 
       {/* Save */}
-      <div className="flex justify-end pt-1">
-        <Button
-          size="sm"
-          onClick={handleSave}
-          disabled={update.isPending || !isDirty}
-          className={cn(!isDirty && 'opacity-40')}
-        >
-          <Save className="w-3.5 h-3.5 mr-1.5" />
-          {update.isPending ? 'Sparar…' : 'Spara'}
-        </Button>
-      </div>
+      <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+        <div className="flex justify-end pt-1">
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={update.isPending || !isDirty}
+            className={cn(!isDirty && 'opacity-40')}
+          >
+            <Save className="w-3.5 h-3.5 mr-1.5" />
+            {update.isPending ? 'Sparar…' : 'Spara'}
+          </Button>
+        </div>
+      </PermissionGate>
     </div>
   );
 }
@@ -283,6 +290,7 @@ export function ChannelSettingsPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
         <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-lg border border-border bg-muted/20 px-4 py-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
           <span>
@@ -317,6 +325,7 @@ export function ChannelSettingsPage() {
             Konfigurera notisregler →
           </Link>
         </div>
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

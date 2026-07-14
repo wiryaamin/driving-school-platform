@@ -620,6 +620,36 @@ export function useDeleteGuardian() {
   });
 }
 
+export function useUpdateGuardian() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      guardianId: string;
+      studentId:  string;
+      first_name: string;
+      last_name:  string;
+      email:      string;
+      phone:      string | null;
+      relation:   string | null;
+      can_pay:    boolean;
+    }): Promise<Guardian> =>
+      adminFetch<Guardian>(`/guardians/${vars.guardianId}`, {
+        method: 'PATCH',
+        body:   JSON.stringify({
+          first_name: vars.first_name,
+          last_name:  vars.last_name,
+          email:      vars.email,
+          phone:      vars.phone,
+          relation:   vars.relation,
+          can_pay:    vars.can_pay,
+        }),
+      }),
+    onSuccess: (_, vars) => {
+      void qc.invalidateQueries({ queryKey: ['guardians', vars.studentId] });
+    },
+  });
+}
+
 export function useGenerateGuardianToken() {
   return useMutation({
     mutationFn: (guardianId: string): Promise<{
@@ -631,33 +661,3 @@ export function useGenerateGuardianToken() {
   });
 }
 
-// ─── Token validation ─────────────────────────────────────────────────────────
-
-export interface ValidateGuardianResult {
-  guardian:     GuardianMe['guardian'];
-  student:      GuardianMe['student'];
-  organization: GuardianMe['organization'];
-  expires_at:   string;
-}
-
-export async function validateGuardianToken(token: string): Promise<ValidateGuardianResult | null> {
-  try {
-    const res = await fetch(`${PORTAL_API}/me`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'apikey':        ANON_KEY,
-      },
-    });
-    if (!res.ok) return null;
-    const body = await res.json() as { data: { guardian: GuardianMe['guardian']; student: GuardianMe['student']; organization: GuardianMe['organization'] } };
-    if (!body.data) return null;
-    return {
-      guardian:     body.data.guardian,
-      student:      body.data.student,
-      organization: body.data.organization,
-      expires_at:   new Date(Date.now() + 30 * 86_400_000).toISOString(),
-    };
-  } catch {
-    return null;
-  }
-}

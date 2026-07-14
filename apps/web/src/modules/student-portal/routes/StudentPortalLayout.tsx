@@ -2,7 +2,7 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import { Outlet, NavLink, useSearchParams, Link } from 'react-router-dom';
 import {
   Home, CalendarPlus, MessageSquare, User,
-  GraduationCap, Wallet, CalendarDays, Map,
+  GraduationCap, Wallet, CalendarDays,
   FileText, LogOut, Loader2, Shield, Bell, Headphones, ChevronRight,
 } from 'lucide-react';
 import {
@@ -132,7 +132,10 @@ function DesktopSidebar({ session }: { session: PortalSession }) {
 
       {/* Help */}
       <div className="px-3 pb-3">
-        <div className="p-3 rounded-xl bg-gray-50 flex items-center gap-2.5">
+        <Link
+          to="/portal/support"
+          className="p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors flex items-center gap-2.5"
+        >
           <div className="w-8 h-8 rounded-xl bg-white flex items-center justify-center shadow-sm shrink-0">
             <Headphones className="w-4 h-4 text-gray-400" strokeWidth={1.75} />
           </div>
@@ -140,7 +143,7 @@ function DesktopSidebar({ session }: { session: PortalSession }) {
             <p className="text-gray-700 text-xs font-semibold leading-tight">Behöver du hjälp?</p>
             <p className="text-gray-400 text-[10px] leading-tight mt-0.5">Kontakta din skola</p>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* User / logout */}
@@ -202,9 +205,9 @@ function MobileBottomNav() {
           <span className="text-[10px] font-semibold">Hem</span>
         </NavLink>
 
-        {/* Resa */}
+        {/* Mina lektioner */}
         <NavLink
-          to="/portal/korkortsresa"
+          to="/portal/bokningar"
           className={({ isActive }) =>
             cn(
               'flex flex-col items-center gap-0.5 px-3 py-1 rounded-xl transition-colors min-w-[52px]',
@@ -213,8 +216,8 @@ function MobileBottomNav() {
           }
           style={({ isActive }) => isActive ? { color: PRIMARY } : {}}
         >
-          <Map className="w-5 h-5" strokeWidth={1.75} />
-          <span className="text-[10px] font-semibold">Resa</span>
+          <CalendarDays className="w-5 h-5" strokeWidth={1.75} />
+          <span className="text-[10px] font-semibold">Lektioner</span>
         </NavLink>
 
         {/* Boka — centre FAB */}

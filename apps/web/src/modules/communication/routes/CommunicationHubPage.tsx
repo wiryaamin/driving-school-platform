@@ -4,10 +4,14 @@ import {
   MessageSquare, Bell, Settings, Send,
   CheckCircle2, XCircle, Clock, ChartBar,
   ChevronRight, Plus, RefreshCcw, AlertTriangle, Zap,
+  Activity, SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, toast } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { useChannelConfigs, useCommAnalytics, useMessageList, useQueueHealth, useUpdateChannelConfig, useNotificationRules, useUpdateRule } from '../hooks/useCommunication.js';
 import { ChannelBadge, StatusBadge, CHANNEL_META } from '../components/ChannelIcon.js';
 import type { CommChannel, ChannelConfig, NotificationRule } from '../hooks/useCommunication.js';
@@ -28,22 +32,24 @@ function ChannelCard({ config, onToggle }: {
         <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0', meta.bg)}>
           <meta.Icon className={cn('w-4 h-4', meta.text)} />
         </div>
-        <button
-          type="button"
-          onClick={() => onToggle(config.channel, !config.enabled)}
-          className={cn(
-            'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent',
-            'transition-colors focus:outline-none',
-            config.enabled ? 'bg-primary' : 'bg-muted',
-          )}
-          role="switch"
-          aria-checked={config.enabled}
-        >
-          <span className={cn(
-            'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
-            config.enabled ? 'translate-x-4' : 'translate-x-0',
-          )} />
-        </button>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <button
+            type="button"
+            onClick={() => onToggle(config.channel, !config.enabled)}
+            className={cn(
+              'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent',
+              'transition-colors focus:outline-none',
+              config.enabled ? 'bg-primary' : 'bg-muted',
+            )}
+            role="switch"
+            aria-checked={config.enabled}
+          >
+            <span className={cn(
+              'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
+              config.enabled ? 'translate-x-4' : 'translate-x-0',
+            )} />
+          </button>
+        </PermissionGate>
       </div>
 
       <div>
@@ -269,6 +275,9 @@ const EVENT_LABELS: Record<string, { label: string; description: string }> = {
   booking_reminder_24h:      { label: 'Påminnelse 24 tim',      description: 'Skickas 24 timmar före lektionen' },
   booking_reminder_same_day: { label: 'Påminnelse samma dag',   description: 'Skickas på morgonen av lektionsdagen' },
   instructor_schedule_daily: { label: 'Dagsschemapåminnelse',   description: 'Instruktörens schema skickas varje morgon' },
+  waitlist_promoted:         { label: 'Väntelistepromovering',  description: 'Skickas när en plats frigörs och eleven befordras' },
+  invoice_issued:            { label: 'Faktura skapad',         description: 'Skickas när en ny faktura utfärdas' },
+  invoice_overdue:           { label: 'Faktura försenad',       description: 'Skickas när en faktura passerar förfallodatum' },
 };
 
 function AutomationRulesPanel() {
@@ -336,24 +345,40 @@ function AutomationRulesPanel() {
                     <ChannelBadge channel={rule.channel} />
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleToggle(rule)}
-                  disabled={updateRule.isPending}
-                  className={cn(
-                    'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent',
-                    'transition-colors focus:outline-none disabled:opacity-50',
-                    rule.enabled ? 'bg-primary' : 'bg-muted',
-                  )}
-                  role="switch"
-                  aria-checked={rule.enabled}
-                  aria-label={`${eventMeta?.label ?? rule.trigger_event} ${rule.enabled ? 'aktiv' : 'inaktiv'}`}
+                <PermissionGate
+                  permission={Permissions.COMMUNICATIONS_CREATE}
+                  fallback={
+                    <span
+                      className={cn(
+                        'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0',
+                        rule.enabled
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400'
+                          : 'bg-muted text-muted-foreground/60',
+                      )}
+                    >
+                      {rule.enabled ? 'Aktiv' : 'Inaktiv'}
+                    </span>
+                  }
                 >
-                  <span className={cn(
-                    'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
-                    rule.enabled ? 'translate-x-4' : 'translate-x-0',
-                  )} />
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggle(rule)}
+                    disabled={updateRule.isPending}
+                    className={cn(
+                      'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent',
+                      'transition-colors focus:outline-none disabled:opacity-50',
+                      rule.enabled ? 'bg-primary' : 'bg-muted',
+                    )}
+                    role="switch"
+                    aria-checked={rule.enabled}
+                    aria-label={`${eventMeta?.label ?? rule.trigger_event} ${rule.enabled ? 'aktiv' : 'inaktiv'}`}
+                  >
+                    <span className={cn(
+                      'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
+                      rule.enabled ? 'translate-x-4' : 'translate-x-0',
+                    )} />
+                  </button>
+                </PermissionGate>
               </div>
             );
           })}
@@ -405,6 +430,7 @@ export function CommunicationHubPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* Stats (last 24h) */}
         <StatsBar
@@ -437,6 +463,14 @@ export function CommunicationHubPage() {
           <Button variant="outline" onClick={() => navigate('/communication/notification-log')}>
             <Bell className="w-4 h-4 mr-1.5" />
             Notifikationslogg
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/communication/activity')}>
+            <Activity className="w-4 h-4 mr-1.5" />
+            Aktivitetscenter
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/communication/preferences')}>
+            <SlidersHorizontal className="w-4 h-4 mr-1.5" />
+            Mina notisinställningar
           </Button>
         </div>
 
@@ -530,6 +564,7 @@ export function CommunicationHubPage() {
           </div>
         </div>
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

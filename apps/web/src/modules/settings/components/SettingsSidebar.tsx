@@ -4,9 +4,12 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Building2, MapPin, Key, Briefcase, Calendar, Users,
   Wallet, GraduationCap, MessageSquare, Globe, Layers,
-  BookOpen, Settings, ChevronRight, UserCog, Shield,
+  BookOpen, Settings, ChevronRight, UserCog, Shield, Plug,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
+import { usePermissions } from '@core/rbac/hooks.js';
+import { Permissions } from '@core/rbac/permissions.js';
+import type { Permission } from '@core/rbac/permissions.js';
 
 // ─── Nav structure ────────────────────────────────────────────────────────────
 
@@ -14,14 +17,21 @@ interface NavChild {
   key:     string;
   label:   string;
   segment: string;
+  /** Optional absolute path override — for entries that link to a module
+   *  outside /settings/* (e.g. a standalone top-level route being reused
+   *  as-is rather than embedded in the Settings shell). Takes precedence
+   *  over the segment-derived /settings/${segment} URL when present. */
+  path?:   string;
 }
 
 interface NavSection {
-  key:       string;
-  label:     string;
-  icon:      LucideIcon;
-  segment?:  string;       // direct-link sections
-  children?: NavChild[];
+  key:         string;
+  label:       string;
+  icon:        LucideIcon;
+  segment?:    string;       // direct-link sections
+  children?:   NavChild[];
+  /** When set, the section is hidden unless the user holds this permission. */
+  permission?: Permission;
 }
 
 const SETTINGS_NAV: NavSection[] = [
@@ -32,9 +42,9 @@ const SETTINGS_NAV: NavSection[] = [
       { key: 'legal',   label: 'Juridik',           segment: 'legal'   },
     ],
   },
-  { key: 'platser',    label: 'Platser',           icon: MapPin,       segment: 'locations' },
-  { key: 'anvandare', label: 'Användare',         icon: UserCog,      segment: 'users'     },
-  { key: 'roller',    label: 'Roller',            icon: Shield,       segment: 'roles'     },
+  { key: 'platser',    label: 'Platser',           icon: MapPin,       segment: 'locations', permission: Permissions.ADMIN_LOCATION_MANAGE },
+  { key: 'anvandare', label: 'Användare',         icon: UserCog,      segment: 'users',     permission: Permissions.ADMIN_USER_READ       },
+  { key: 'roller',    label: 'Roller',            icon: Shield,       segment: 'roles',     permission: Permissions.ADMIN_ROLE_READ       },
   {
     key: 'elevbokning', label: 'Elevbokning', icon: Key,
     children: [
@@ -86,7 +96,7 @@ const SETTINGS_NAV: NavSection[] = [
     key: 'utbildning', label: 'Utbildning', icon: GraduationCap,
     children: [
       { key: 'utb-behorighet',   label: 'Utbildningsbehörigheter', segment: 'education/licenses'    },
-      { key: 'undervisningsplan', label: 'Undervisningsplan',       segment: 'education/curriculum'  },
+      { key: 'undervisningsplan', label: 'Undervisningsplan',       segment: 'education/curriculum', path: '/curriculum' },
       { key: 'material',         label: 'Material',                 segment: 'education/materials'   },
     ],
   },
@@ -117,6 +127,7 @@ const SETTINGS_NAV: NavSection[] = [
   },
   { key: 'teoricentralen', label: 'Teoricentralen',      icon: BookOpen, segment: 'theory-center' },
   { key: 'systeminst',     label: 'Systeminställningar', icon: Settings, segment: 'system'        },
+  { key: 'externa',        label: 'Externa tjänster',    icon: Plug,     segment: 'external-services' },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -140,6 +151,8 @@ function getActiveSectionKey(segment: string): string | null {
 
 export function SettingsSidebar({ segment }: { segment: string }) {
   const location = useLocation();
+  const { can } = usePermissions();
+  const visibleNav = SETTINGS_NAV.filter(section => section.permission == null || can(section.permission));
 
   const [open, setOpen] = useState<Set<string>>(() => {
     const active = getActiveSectionKey(segment);
@@ -168,7 +181,7 @@ export function SettingsSidebar({ segment }: { segment: string }) {
       className="w-44 shrink-0 border-r border-border bg-background py-3 space-y-0.5
                  sticky top-[52px] self-start h-[calc(100vh-52px)] overflow-y-auto"
     >
-      {SETTINGS_NAV.map(section => {
+      {visibleNav.map(section => {
         const Icon = section.icon;
         const isExpanded = open.has(section.key);
 
@@ -206,7 +219,7 @@ export function SettingsSidebar({ segment }: { segment: string }) {
                     return (
                       <Link
                         key={child.key}
-                        to={`/settings/${child.segment}`}
+                        to={child.path ?? `/settings/${child.segment}`}
                         className={cn(
                           'block px-2.5 py-1.5 rounded-lg text-sm transition-colors',
                           isActive

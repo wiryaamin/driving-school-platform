@@ -442,18 +442,20 @@ export function MySchedulePage() {
               {instructorsLoading ? 'Mitt schema' : displayName}
             </h1>
             {showInstructorSelector && instructors.length > 0 && (
-              <select
-                value={overrideId ?? ''}
-                onChange={(e) => setOverrideId(e.target.value || null)}
-                className="h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-              >
-                <option value="">Välj instruktör</option>
-                {instructors.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.first_name} {i.last_name}
-                  </option>
-                ))}
-              </select>
+              <PermissionGate permission={Permissions.SCHEDULING_READ}>
+                <select
+                  value={overrideId ?? ''}
+                  onChange={(e) => setOverrideId(e.target.value || null)}
+                  className="h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                >
+                  <option value="">Välj instruktör</option>
+                  {instructors.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.first_name} {i.last_name}
+                    </option>
+                  ))}
+                </select>
+              </PermissionGate>
             )}
           </div>
 

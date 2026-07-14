@@ -2,7 +2,7 @@ import { CheckCircle2, Circle, AlertCircle, Phone, Mail } from 'lucide-react';
 import { useGuardianMe, useGuardianProgress } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 function formatDate(iso: string | null): string {
   if (!iso) return '';
@@ -148,7 +148,7 @@ export function GuardianPortalKorkortsresaPage() {
       {/* Hero */}
       <div
         className="rounded-2xl p-5 text-white"
-        style={{ background: 'linear-gradient(135deg, #1055C9 0%, #0d48b2 100%)' }}
+        style={{ background: 'linear-gradient(135deg, #2D5BE3 0%, #0d48b2 100%)' }}
       >
         <p className="text-white/70 text-xs font-bold uppercase tracking-wide mb-1">Körkortsresa</p>
         <p className="text-xl font-bold">{doneCount} av {STEPS.length} steg klara</p>

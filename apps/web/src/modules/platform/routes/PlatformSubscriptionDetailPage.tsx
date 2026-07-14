@@ -14,57 +14,12 @@ import {
   usePlatformSubscriptionHistory,
 } from '../hooks/usePlatformSubscriptions.js';
 import type { SubscriptionHistoryEvent } from '../hooks/usePlatformSubscriptions.js';
-
-// ─── Plan catalog (static, read-only) ────────────────────────────────────────
-
-interface PlanDef {
-  id:       string;
-  name:     string;
-  desc:     string;
-  maxUsers: number | null;
-  maxLocs:  number | null;
-  modules:  string[];
-  features: string[];
-}
-
-const PLAN_CATALOG: PlanDef[] = [
-  {
-    id: 'trial',
-    name: 'Trial',
-    desc: '14-dagars provperiod med grundläggande funktioner.',
-    maxUsers: 5,
-    maxLocs: 1,
-    features: ['Upp till 5 användare', '1 plats', 'E-postsupport'],
-    modules: ['Bokningar', 'Elever'],
-  },
-  {
-    id: 'starter',
-    name: 'Starter',
-    desc: 'Perfekt för mindre trafikskolor med en enda plats.',
-    maxUsers: 10,
-    maxLocs: 1,
-    features: ['Upp till 10 användare', '1 plats', 'Prioriterad e-postsupport'],
-    modules: ['Bokningar', 'Elever', 'Ekonomi', 'Lärare'],
-  },
-  {
-    id: 'professional',
-    name: 'Professional',
-    desc: 'Idealisk för medelstora trafikskolor med flera platser.',
-    maxUsers: 25,
-    maxLocs: 3,
-    features: ['Upp till 25 användare', 'Upp till 3 platser', 'Prioriterad support', 'Avancerade rapporter'],
-    modules: ['Bokningar', 'Elever', 'Ekonomi', 'Lärare', 'Företagskunder', 'Kommunikation', 'Rapporter'],
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    desc: 'För stora trafikskolor och kedjor med anpassade behov.',
-    maxUsers: null,
-    maxLocs: null,
-    features: ['Obegränsade användare', 'Obegränsade platser', 'Dedikerad support', 'Anpassad integrering', 'SLA-garanti'],
-    modules: ['Bokningar', 'Elever', 'Ekonomi', 'Lärare', 'Företagskunder', 'Kommunikation', 'Rapporter', 'API-åtkomst', 'AI-funktioner', 'Elevportal', 'Målsmannaportalen'],
-  },
-];
+import { TIER_LABEL } from '../lib/tierDisplay.js';
+// Plan identity/description/default entitlements now come from the Platform
+// Plan Catalog (@platform/types) — the single authoritative source of truth,
+// no longer a local, hardcoded array (Platform Billing Phase 1).
+import { getPlatformPlan } from '@platform/types';
+import type { SubscriptionTier } from '@platform/types';
 
 const ALL_MODULES = [
   'Bokningar', 'Elever', 'Ekonomi', 'Lärare', 'Företagskunder',
@@ -73,13 +28,6 @@ const ALL_MODULES = [
 ];
 
 // ─── Display maps ─────────────────────────────────────────────────────────────
-
-const TIER_LABEL: Record<string, string> = {
-  trial:        'Trial',
-  starter:      'Starter',
-  professional: 'Professional',
-  enterprise:   'Enterprise',
-};
 
 const TIER_CLASS: Record<string, string> = {
   trial:        'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
@@ -243,7 +191,7 @@ export function PlatformSubscriptionDetailPage() {
     );
   }
 
-  const plan = PLAN_CATALOG.find(p => p.id === sub?.subscription_tier) ?? null;
+  const plan = sub ? getPlatformPlan(sub.subscription_tier as SubscriptionTier) : null;
   const trialExpired =
     sub?.subscription_status === 'trialing' &&
     sub?.trial_ends_at != null &&
@@ -577,15 +525,15 @@ export function PlatformSubscriptionDetailPage() {
               </div>
             ) : plan ? (
               <div className="px-4 py-4 space-y-4">
-                <p className="text-sm text-muted-foreground">{plan.desc}</p>
+                <p className="text-sm text-muted-foreground">{plan.description}</p>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="rounded-lg bg-muted/40 px-3 py-2.5">
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Max. användare</p>
-                    <p className="text-lg font-bold text-foreground">{plan.maxUsers ?? '∞'}</p>
+                    <p className="text-lg font-bold text-foreground">{plan.defaultMaxUsers ?? '∞'}</p>
                   </div>
                   <div className="rounded-lg bg-muted/40 px-3 py-2.5">
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Max. platser</p>
-                    <p className="text-lg font-bold text-foreground">{plan.maxLocs ?? '∞'}</p>
+                    <p className="text-lg font-bold text-foreground">{plan.defaultMaxLocations ?? '∞'}</p>
                   </div>
                 </div>
                 {/* Plan features */}

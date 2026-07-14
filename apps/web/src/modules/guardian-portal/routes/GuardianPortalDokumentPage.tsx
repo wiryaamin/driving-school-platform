@@ -1,7 +1,7 @@
 import { FileText, Download, AlertCircle, Loader2, FolderOpen } from 'lucide-react';
 import { useGuardianDocuments, type GuardianDocument } from '../hooks/useGuardianPortal.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 const CATEGORY_LABELS: Record<string, string> = {
   contract:      'Avtal',

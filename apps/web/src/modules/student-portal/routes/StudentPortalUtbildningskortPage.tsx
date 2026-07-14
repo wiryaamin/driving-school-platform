@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Star, AlertCircle, Loader2, BookOpen } from 'lu
 import { usePortalHistory } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -257,7 +257,7 @@ export function StudentPortalUtbildningskortPage() {
 
           {/* Competency list */}
           <div>
-            <p className="text-[#1055C9] text-xs font-bold uppercase tracking-wide mb-2">
+            <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-2">
               Kompetenser
             </p>
             <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">

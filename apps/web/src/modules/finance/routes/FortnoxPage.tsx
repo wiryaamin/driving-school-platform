@@ -9,29 +9,20 @@ import { useSession } from '@shared/hooks/useSession.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, Skeleton, toast } from '@platform/ui';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { cn } from '@/lib/utils.js';
+import { fortnoxKeys as fortnoxStatusKeys, useFortnoxStatus } from '../hooks/useFortnoxStatus.js';
 
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 const fortnoxKeys = {
-  all:     () => ['fortnox'] as const,
-  status:  (orgId: string) => ['fortnox', 'status', orgId] as const,
+  ...fortnoxStatusKeys,
   counts:  (orgId: string) => ['fortnox', 'counts', orgId] as const,
   lineage: (orgId: string) => ['fortnox', 'lineage', orgId] as const,
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type OAuthStatus = {
-  configured:    boolean;
-  connected:     boolean;
-  method?:       'oauth' | 'api_token';
-  scope?:        string | null;
-  connected_at?: string | null;
-  token_expiry?: string | null;
-  needs_refresh?: boolean;
-};
 
 type SyncCounts = {
   customersPending: number;
@@ -146,12 +137,7 @@ function FortnoxConnectionSection({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
   const [connecting, setConnecting] = useState(false);
 
-  const { data: status, isLoading } = useQuery<OAuthStatus>({
-    queryKey: fortnoxKeys.status(orgId),
-    queryFn:  () => invoke<OAuthStatus>('fortnox/oauth/status', { method: 'GET' }),
-    enabled:  !!orgId,
-    staleTime: 60_000,
-  });
+  const { data: status, isLoading } = useFortnoxStatus(orgId);
 
   const refreshMut = useMutation({
     mutationFn: () => invoke<{ refreshed: boolean; token_expiry: string }>('fortnox/oauth/refresh', { method: 'POST', body: JSON.stringify({}) }),
@@ -395,6 +381,7 @@ export function FortnoxPage() {
     <PageLayout>
       <PageHeader title="Fortnox" description="Integrationsinställningar och synkroniseringsstatus" />
       <PageContent>
+        <SubscriptionGate feature="finance:fortnox:sync">
         <PermissionGate permission={Permissions.FINANCE_FORTNOX_MANAGE}>
 
           <div className="max-w-3xl space-y-6">
@@ -559,6 +546,7 @@ export function FortnoxPage() {
 
           </div>
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

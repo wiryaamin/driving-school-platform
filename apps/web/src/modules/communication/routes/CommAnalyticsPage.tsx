@@ -2,13 +2,27 @@
 import { Link } from 'react-router-dom';
 import {
   ChartBar, CheckCircle2, XCircle, Send, Clock,
-  ChevronRight, TrendingUp, AlertTriangle,
+  ChevronRight, TrendingUp, AlertTriangle, Timer, FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
-import { useCommAnalytics, useCommDailyStats, useQueueHealth } from '../hooks/useCommunication.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import {
+  useCommAnalytics, useCommDailyStats, useQueueHealth,
+  useTemplateUsage, useDeliveryLatency,
+} from '../hooks/useCommunication.js';
 import { CHANNEL_META } from '../components/ChannelIcon.js';
 import type { CommChannel } from '../hooks/useCommunication.js';
+
+// ─── Latency formatting ───────────────────────────────────────────────────────
+
+function formatLatency(seconds: number | null): string {
+  if (seconds === null) return '—';
+  if (seconds < 60)     return `${seconds}s`;
+  const mins = Math.round(seconds / 60);
+  if (mins < 60)        return `${mins}m`;
+  return `${Math.round(mins / 60)}h ${mins % 60}m`;
+}
 
 // ─── Period selector ──────────────────────────────────────────────────────────
 
@@ -147,6 +161,8 @@ export function CommAnalyticsPage() {
   const { data: channelStats = [], isLoading: channelLoading } = useCommAnalytics(days);
   const { data: dailyStats   = [], isLoading: dailyLoading   } = useCommDailyStats(days);
   const { data: queueHealth }                                   = useQueueHealth();
+  const { data: templateUsage = [], isLoading: templateLoading } = useTemplateUsage(days);
+  const { data: latency,          isLoading: latencyLoading }    = useDeliveryLatency(days);
 
   const totalSent     = channelStats.reduce((s, r) => s + r.sent,   0);
   const totalFailed   = channelStats.reduce((s, r) => s + r.failed, 0);
@@ -169,6 +185,7 @@ export function CommAnalyticsPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* Period selector */}
         <div className="flex items-center gap-1.5">
@@ -368,6 +385,102 @@ export function CommAnalyticsPage() {
           )}
         </div>
 
+        {/* Dispatch latency (Epic 7.4) */}
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+            <Timer className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Leveranstid per kanal</h2>
+            <span className="text-xs text-muted-foreground ml-auto">Snitt från köad till skickad</span>
+          </div>
+
+          {latencyLoading ? (
+            <div className="px-4 py-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="h-12 bg-muted rounded-lg animate-pulse" />)}
+            </div>
+          ) : (latency?.per_channel ?? []).length === 0 ? (
+            <div className="py-10 flex flex-col items-center gap-2 text-center">
+              <Timer className="w-8 h-8 text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">Inga levererade meddelanden under vald period.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-4 py-4">
+              {(latency?.per_channel ?? []).map((row) => {
+                const meta = CHANNEL_META[row.channel as CommChannel];
+                return (
+                  <div key={row.channel} className="rounded-lg border border-border px-3 py-2.5">
+                    <div className="flex items-center gap-1.5">
+                      {meta && <meta.Icon className={cn('w-3.5 h-3.5', meta.text)} />}
+                      <span className="text-xs font-medium text-foreground capitalize">{meta?.label ?? row.channel}</span>
+                    </div>
+                    <p className="text-lg font-bold text-foreground tabular-nums mt-1">
+                      {formatLatency(row.avg_latency_seconds)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">{row.delivered_count} levererade</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Template usage (Epic 7.4) */}
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+            <FileText className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Mallanvändning</h2>
+          </div>
+
+          {templateLoading ? (
+            <div className="divide-y divide-border">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="px-4 py-3">
+                  <div className="h-3 bg-muted rounded animate-pulse w-1/3" />
+                </div>
+              ))}
+            </div>
+          ) : templateUsage.length === 0 ? (
+            <div className="py-12 flex flex-col items-center gap-2 text-center">
+              <FileText className="w-8 h-8 text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">Inga mallbaserade meddelanden under vald period.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Mall</th>
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Kanal</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Totalt</th>
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground w-40">Leveransgrad</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {templateUsage.slice(0, 15).map((row) => {
+                    const meta = CHANNEL_META[row.channel as CommChannel];
+                    return (
+                      <tr key={`${row.template_id}:${row.channel}`} className="hover:bg-accent/10 transition-colors">
+                        <td className="px-4 py-3 text-xs font-mono text-foreground">{row.template_key ?? row.template_id}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            {meta && <meta.Icon className={cn('w-3.5 h-3.5', meta.text)} />}
+                            <span className="text-xs text-foreground capitalize">{meta?.label ?? row.channel}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <span className="text-xs tabular-nums text-foreground">{row.total.toLocaleString('sv-SE')}</span>
+                        </td>
+                        <td className="px-4 py-3 w-40">
+                          <DeliveryRateBar rate={row.delivery_rate} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
         {/* Quick links */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
@@ -387,6 +500,7 @@ export function CommAnalyticsPage() {
           ))}
         </div>
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

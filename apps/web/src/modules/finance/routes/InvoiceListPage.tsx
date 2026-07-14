@@ -253,6 +253,7 @@ export function InvoiceListPage() {
   const columns = useMemo(() => buildColumns(handleVoid), [handleVoid]);
 
   return (
+    <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
     <PageLayout>
       <PageHeader
         title="Fakturor"
@@ -350,5 +351,6 @@ export function InvoiceListPage() {
         onOpenChange={setCreateSheetOpen}
       />
     </PageLayout>
+    </PermissionGate>
   );
 }

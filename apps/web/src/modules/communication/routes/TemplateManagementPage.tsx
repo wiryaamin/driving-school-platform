@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { Plus, Pencil, Trash2, X, Check, Info } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Check, Info, Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useCommTemplates,
   useCreateTemplate,
   useUpdateTemplate,
   useDeleteTemplate,
+  useSendMessage,
   type CommTemplate,
   type CommChannel,
 } from '../hooks/useCommunication.js';
@@ -34,7 +38,7 @@ function TemplateEditorForm({
   isNew,
 }: {
   initial?:  Partial<CommTemplate>;
-  onSave:    (data: { key: string; channel: CommChannel; subject: string; body_text: string; variables: string[] }) => void;
+  onSave:    (data: { key: string; channel: CommChannel; subject: string; body_text: string; body_html: string | null; variables: string[] }) => void;
   onCancel:  () => void;
   isNew:     boolean;
 }) {
@@ -42,6 +46,8 @@ function TemplateEditorForm({
   const [channel,  setChannel]  = useState<CommChannel>(initial?.channel as CommChannel ?? 'sms');
   const [subject,  setSubject]  = useState(initial?.subject  ?? '');
   const [bodyText, setBodyText] = useState(initial?.body_text ?? '');
+  const [bodyHtml, setBodyHtml] = useState<string>(initial?.body_html ?? '');
+  const [showHtml, setShowHtml] = useState(false);
   const [vars,     setVars]     = useState((initial?.variables ?? []).join(', '));
   const [preview,  setPreview]  = useState(false);
 
@@ -57,7 +63,14 @@ function TemplateEditorForm({
     if (!key.trim())      { toast({ title: 'Mallnyckel saknas', variant: 'destructive' }); return; }
     if (!bodyText.trim()) { toast({ title: 'Meddelandetext saknas', variant: 'destructive' }); return; }
     const variables = vars.split(',').map((v) => v.trim()).filter(Boolean);
-    onSave({ key: key.trim(), channel, subject: subject.trim(), body_text: bodyText.trim(), variables });
+    onSave({
+      key:       key.trim(),
+      channel,
+      subject:   subject.trim(),
+      body_text: bodyText.trim(),
+      body_html: channel === 'email' && bodyHtml.trim() ? bodyHtml.trim() : null,
+      variables,
+    });
   }
 
   return (
@@ -134,6 +147,35 @@ function TemplateEditorForm({
         </p>
       </div>
 
+      {channel === 'email' && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-foreground">HTML-version (valfri)</label>
+            <button
+              type="button"
+              onClick={() => setShowHtml((v) => !v)}
+              className="text-xs text-primary hover:underline"
+            >
+              {showHtml ? 'Dölj HTML' : 'Redigera HTML'}
+            </button>
+          </div>
+          {showHtml && (
+            <textarea
+              value={bodyHtml}
+              onChange={(e) => setBodyHtml(e.target.value)}
+              rows={6}
+              placeholder={'<p>Hej {förnamn},</p>\n<p>Din körlektion är bekräftad...</p>'}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          )}
+          {showHtml && (
+            <p className="text-[10px] text-muted-foreground">
+              HTML-versionen används av e-postklienter som stöder HTML. Samma variabler som textversionen: {'{förnamn}'} {'{datum}'} osv.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="space-y-1">
         <label className="text-xs font-medium text-foreground">Variabler (kommaseparerade)</label>
         <input
@@ -149,15 +191,30 @@ function TemplateEditorForm({
         <Button variant="outline" size="sm" onClick={onCancel}>
           <X className="w-3.5 h-3.5 mr-1" />Avbryt
         </Button>
-        <Button size="sm" onClick={handleSubmit}>
-          <Check className="w-3.5 h-3.5 mr-1" />Spara mall
-        </Button>
+        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+          <Button size="sm" onClick={handleSubmit}>
+            <Check className="w-3.5 h-3.5 mr-1" />Spara mall
+          </Button>
+        </PermissionGate>
       </div>
     </div>
   );
 }
 
 // ─── TemplateRow ──────────────────────────────────────────────────────────────
+
+const TEMPLATE_SAMPLE_VARS: Record<string, string> = {
+  förnamn:         'Anna',
+  datum:           'måndag 15 dec',
+  tid:             '09:00',
+  trafikskola:     'Stockholms Trafikskola',
+  fakturanr:       'INV-1042',
+  belopp:          '1 500',
+  förfallodatum:   '31 dec 2026',
+  betalsätt:       'Bankgiro 123-4567',
+  loginlänk:       'https://app.example.se',
+  antal_lektioner: '3',
+};
 
 function TemplateRow({
   tpl,
@@ -168,8 +225,31 @@ function TemplateRow({
   onEdit:   (tpl: CommTemplate) => void;
   onDelete: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open,     setOpen]     = useState(false);
+  const [testing,  setTesting]  = useState(false);
+  const [testAddr, setTestAddr] = useState('');
+  const send     = useSendMessage();
   const isSystem = tpl.organization_id === null;
+
+  function handleTestSend() {
+    if (!testAddr.trim()) return;
+    const body    = applyTemplateVars(tpl.body_text, TEMPLATE_SAMPLE_VARS);
+    const subject = tpl.subject ? applyTemplateVars(tpl.subject, TEMPLATE_SAMPLE_VARS) : undefined;
+    send.mutate(
+      {
+        channel:           tpl.channel as CommChannel,
+        recipient_address: testAddr.trim(),
+        body,
+        subject,
+        template_id:       tpl.id,
+        metadata:          { event: 'template_test', template_key: tpl.key },
+      },
+      {
+        onSuccess: () => { toast({ title: 'Testmeddelande skickat' }); setTesting(false); setTestAddr(''); },
+        onError:   (e) => toast({ title: 'Kunde inte skicka test', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
 
   return (
     <>
@@ -200,35 +280,44 @@ function TemplateRow({
           </span>
         </td>
         <td className="px-4 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center gap-1">
-            {!isSystem && (
-              <>
-                <button
-                  onClick={() => onEdit(tpl)}
-                  className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-                  title="Redigera"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => onDelete(tpl.id)}
-                  className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                  title="Inaktivera"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </>
-            )}
-            {isSystem && (
+          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+            <div className="flex items-center gap-1">
               <button
-                onClick={(e) => { e.stopPropagation(); onEdit({ ...tpl, id: '', organization_id: 'override' }); }}
-                className="px-2 py-1 text-[10px] border border-primary/30 text-primary rounded hover:bg-primary/5 transition-colors"
-                title="Skapa org-specifik override"
+                onClick={(e) => { e.stopPropagation(); setTesting((v) => !v); setOpen(false); }}
+                className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Skicka testmeddelande"
               >
-                Anpassa
+                <Send className="w-3.5 h-3.5" />
               </button>
-            )}
-          </div>
+              {!isSystem && (
+                <>
+                  <button
+                    onClick={() => onEdit(tpl)}
+                    className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                    title="Redigera"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => onDelete(tpl.id)}
+                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    title="Inaktivera"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
+              {isSystem && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onEdit({ ...tpl, id: '', organization_id: 'override' }); }}
+                  className="px-2 py-1 text-[10px] border border-primary/30 text-primary rounded hover:bg-primary/5 transition-colors"
+                  title="Skapa org-specifik override"
+                >
+                  Anpassa
+                </button>
+              )}
+            </div>
+          </PermissionGate>
         </td>
       </tr>
       {open && (
@@ -257,6 +346,39 @@ function TemplateRow({
           </td>
         </tr>
       )}
+
+      {testing && (
+        <tr className="bg-primary/5">
+          <td colSpan={5} className="px-4 py-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-foreground shrink-0">Skicka testmeddelande:</span>
+              <input
+                type={tpl.channel === 'email' ? 'email' : 'text'}
+                value={testAddr}
+                autoFocus
+                onChange={(e) => setTestAddr(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleTestSend(); if (e.key === 'Escape') setTesting(false); }}
+                placeholder={tpl.channel === 'email' ? 'test@example.com' : '+46 70 000 00 00'}
+                className="flex-1 min-w-40 h-8 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary/40"
+              />
+              <Button
+                size="sm"
+                disabled={send.isPending || !testAddr.trim()}
+                onClick={handleTestSend}
+              >
+                {send.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                <span className="ml-1.5">{send.isPending ? 'Skickar…' : 'Skicka'}</span>
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setTesting(false)}>
+                <X className="w-3.5 h-3.5" />
+              </Button>
+              <p className="w-full text-[10px] text-muted-foreground">
+                Exempelvariabler används: {'{förnamn}'} → Anna, {'{datum}'} → måndag 15 dec, {'{tid}'} → 09:00
+              </p>
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -273,15 +395,18 @@ export function TemplateManagementPage() {
   const updateTpl  = useUpdateTemplate();
   const deleteTpl  = useDeleteTemplate();
 
-  function handleSave(formData: { key: string; channel: CommChannel; subject: string; body_text: string; variables: string[] }) {
+  function handleSave(formData: { key: string; channel: CommChannel; subject: string; body_text: string; body_html: string | null; variables: string[] }) {
     if (isNew || !editing?.id) {
-      createTpl.mutate(formData, {
-        onSuccess: () => { toast({ title: 'Mall skapad' }); setEditing(null); },
-        onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
-      });
+      createTpl.mutate(
+        { key: formData.key, channel: formData.channel, subject: formData.subject || null, body_text: formData.body_text, body_html: formData.body_html, variables: formData.variables },
+        {
+          onSuccess: () => { toast({ title: 'Mall skapad' }); setEditing(null); },
+          onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+        },
+      );
     } else {
       updateTpl.mutate(
-        { id: editing.id, subject: formData.subject || null, body_text: formData.body_text, variables: formData.variables },
+        { id: editing.id, subject: formData.subject || null, body_text: formData.body_text, body_html: formData.body_html, variables: formData.variables },
         {
           onSuccess: () => { toast({ title: 'Mall uppdaterad' }); setEditing(null); },
           onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
@@ -309,6 +434,7 @@ export function TemplateManagementPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="communication:templates:manage">
 
         {/* New template editor */}
         {editing && (
@@ -337,15 +463,17 @@ export function TemplateManagementPage() {
               {c.label}
             </button>
           ))}
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            onClick={() => { setEditing({}); setIsNew(true); }}
-          >
-            <Plus className="w-3.5 h-3.5 mr-1.5" />
-            Ny anpassad mall
-          </Button>
+          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => { setEditing({}); setIsNew(true); }}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              Ny anpassad mall
+            </Button>
+          </PermissionGate>
         </div>
 
         {/* Template table */}
@@ -400,6 +528,7 @@ export function TemplateManagementPage() {
           </span>
         </div>
 
+      </SubscriptionGate>
       </PageContent>
     </PageLayout>
   );

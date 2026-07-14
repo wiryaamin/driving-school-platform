@@ -312,3 +312,19 @@ export function useRolloverOpeningBalances() {
     onSuccess: () => invalidateClose(qc),
   });
 }
+
+export function useAssignPeriodToFiscalYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      fyId, periodId, isYearEnd = false,
+    }: { fyId: string; periodId: string; isYearEnd?: boolean }) => {
+      const { error } = await supabase.functions.invoke(
+        `financial-close/fiscal-years/${fyId}/assign-period`,
+        { method: 'POST', body: { period_id: periodId, is_year_end: isYearEnd } },
+      );
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateClose(qc),
+  });
+}

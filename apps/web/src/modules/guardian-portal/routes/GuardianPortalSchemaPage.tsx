@@ -3,7 +3,7 @@ import { CalendarDays, Clock, User, CheckCircle2, XCircle, AlertCircle, FileText
 import { useGuardianMe, useGuardianBookings, type GuardianBooking } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 // ─── ICS calendar download ────────────────────────────────────────────────────
 

@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
@@ -9,51 +8,40 @@ import {
   Button, toast,
 } from '@platform/ui';
 import { useCreateOrg } from '../hooks/usePlatformOrgMutations.js';
+import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
 
-// ─── Schema ───────────────────────────────────────────────────────────────────
-
-const schema = z.object({
-  name:              z.string().min(2, 'Minst 2 tecken').max(100),
-  legal_name:        z.string().min(2, 'Minst 2 tecken').max(200),
-  org_number:        z.string().max(13).default(''),
-  contact_email:     z.string().default(''),
-  subscription_tier: z.enum(['trial', 'starter', 'professional', 'enterprise']),
-  trial_days:        z.coerce.number().int().min(1).max(365).default(30),
-}).superRefine((data, ctx) => {
-  if (data.org_number && !/^\d{6}-\d{4}$/.test(data.org_number)) {
-    ctx.addIssue({ code: 'custom', path: ['org_number'], message: 'Format: XXXXXX-XXXX' });
-  }
-  if (data.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contact_email)) {
-    ctx.addIssue({ code: 'custom', path: ['contact_email'], message: 'Ogiltig e-postadress' });
-  }
-  if (data.subscription_tier === 'trial' && data.trial_days < 1) {
-    ctx.addIssue({ code: 'custom', path: ['trial_days'], message: 'Minst 1 dag' });
-  }
-});
-
-type FormValues = z.infer<typeof schema>;
+type FormValues = ProvisioningFormValues;
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+const EMPTY_DEFAULTS: FormValues = {
+  name:              '',
+  legal_name:        '',
+  org_number:        '',
+  subscription_tier: 'trial',
+  trial_days:        30,
+  admin_first_name:  '',
+  admin_last_name:   '',
+  admin_email:       '',
+};
+
 interface CreateOrgDialogProps {
+  open:    boolean;
   onClose: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+//
+// Always mounted by the caller; only `open` toggles (Platform UI Stability
+// Hardening Sprint). See PlatformOrganizationsPage.tsx's ConfirmDialog for
+// the reference implementation of this pattern.
 
-export function CreateOrgDialog({ onClose }: CreateOrgDialogProps) {
+export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
   const createOrg = useCreateOrg();
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      name:              '',
-      legal_name:        '',
-      org_number:        '',
-      contact_email:     '',
-      subscription_tier: 'trial',
-      trial_days:        30,
-    },
+    resolver: zodResolver(provisioningSchema),
+    defaultValues: EMPTY_DEFAULTS,
   });
 
   const tier = form.watch('subscription_tier');
@@ -64,24 +52,38 @@ export function CreateOrgDialog({ onClose }: CreateOrgDialogProps) {
     if (!isTrial) form.setValue('trial_days', 30);
   }, [isTrial, form]);
 
+  // Reused across multiple opens without unmounting — clear any previously
+  // typed values each time the dialog (re-)opens.
+  useEffect(() => {
+    if (open) form.reset(EMPTY_DEFAULTS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   function onSubmit(values: FormValues) {
     createOrg.mutate(
       {
         name:              values.name,
         legal_name:        values.legal_name,
         org_number:        values.org_number || null,
-        contact_email:     values.contact_email || null,
         subscription_tier: values.subscription_tier,
         trial_days:        values.trial_days,
+        admin_first_name:  values.admin_first_name,
+        admin_last_name:   values.admin_last_name,
+        admin_email:       values.admin_email,
       },
       {
-        onSuccess: (data) => {
-          toast({ title: 'Organisation skapad', description: data?.name ?? values.name });
+        onSuccess: () => {
+          toast({ title: 'Organisation skapad', description: `${values.name} — inbjudan skickas till ${values.admin_email}` });
           onClose();
         },
         onError: (err) => {
-          if (err.message.includes('uq_organizations_org_number')) {
+          // POST /provision returns a friendly message, not a raw Postgres
+          // constraint name (see platform-admin/index.ts handleProvision) —
+          // matched on the org_number-specific phrase it actually sends.
+          if (err.message.includes('already in use by another organization')) {
             form.setError('org_number', { type: 'manual', message: 'Organisationsnumret används redan av en annan organisation' });
+          } else if (err.message.toLowerCase().includes('already exists')) {
+            form.setError('admin_email', { type: 'manual', message: 'Ett konto med denna e-postadress finns redan' });
           } else {
             toast({ title: 'Fel', description: err.message, variant: 'destructive' });
           }
@@ -91,7 +93,7 @@ export function CreateOrgDialog({ onClose }: CreateOrgDialogProps) {
   }
 
   return (
-    <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <Dialog open={open} onOpenChange={open => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Ny organisation</DialogTitle>
@@ -126,31 +128,18 @@ export function CreateOrgDialog({ onClose }: CreateOrgDialogProps) {
               )}
             />
 
-            {/* Org number + contact email in a grid */}
-            <div className="grid grid-cols-2 gap-3">
-              <FormField
-                control={form.control}
-                name="org_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Org.nummer</FormLabel>
-                    <FormControl><Input placeholder="556789-1234" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="contact_email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Kontakt-e-post</FormLabel>
-                    <FormControl><Input type="email" placeholder="info@skolan.se" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+            {/* Org number */}
+            <FormField
+              control={form.control}
+              name="org_number"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Org.nummer</FormLabel>
+                  <FormControl><Input placeholder="556789-1234" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             {/* Subscription tier */}
             <FormField
@@ -198,6 +187,49 @@ export function CreateOrgDialog({ onClose }: CreateOrgDialogProps) {
                 )}
               />
             )}
+
+            {/* Tenant Administrator — the account that will own this organization */}
+            <div className="pt-2 border-t border-border">
+              <p className="text-sm font-medium text-foreground mb-3">Tenant-administratör</p>
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="admin_first_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Förnamn *</FormLabel>
+                      <FormControl><Input placeholder="Anna" {...field} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="admin_last_name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Efternamn *</FormLabel>
+                      <FormControl><Input placeholder="Andersson" {...field} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={form.control}
+                name="admin_email"
+                render={({ field }) => (
+                  <FormItem className="mt-3">
+                    <FormLabel>E-post *</FormLabel>
+                    <FormControl><Input type="email" placeholder="anna@skolan.se" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                Ett konto skapas med denna e-postadress som ägare (org_owner) av organisationen.
+              </p>
+            </div>
 
             <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={createOrg.isPending}>

@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
+import { useNavigate } from 'react-router-dom';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
@@ -12,10 +14,14 @@ import {
   Textarea,
   toast,
 } from '@platform/ui';
+import { isValidPersonalNumber } from '@platform/utils';
 import { useCreateStudent, useUpdateStudent } from '../hooks/useStudents.js';
 import type { Student, CreateStudentFormValues } from '../hooks/useStudents.js';
+import { usePersonLookupByPersonnummer } from '../hooks/usePersonLookup.js';
 import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js';
 import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -203,6 +209,7 @@ function SectionHeader({ children }: { children: ReactNode }) {
 export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentFormProps) {
   const isEdit = student != null;
   const [companyOpen, setCompanyOpen] = useState(false);
+  const navigate = useNavigate();
 
   const form = useForm<StudentFormValues>({
     resolver: zodResolver(studentFormSchema),
@@ -211,7 +218,54 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
 
   const createMutation = useCreateStudent();
   const updateMutation = useUpdateStudent();
+  const personLookup   = usePersonLookupByPersonnummer();
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  // ── Person Lookup Framework (Sprint 6) — "Hämta personuppgifter" ────────────
+  // Invalid personnummer never calls the lookup provider. Any outcome (found,
+  // not found, or the provider being unavailable) leaves the receptionist free
+  // to complete the registration manually — the lookup only ever pre-fills.
+  function handlePersonLookup() {
+    const raw = form.getValues('personnummer');
+    if (!raw || !isValidPersonalNumber(raw)) {
+      toast({
+        title:       'Ogiltigt personnummer',
+        description: 'Ange ett giltigt personnummer (ÅÅÅÅMMDD-XXXX) innan du söker.',
+        variant:     'destructive',
+      });
+      return;
+    }
+
+    personLookup.mutate(raw, {
+      onSuccess: (result) => {
+        if (result.status === 'found' && result.data) {
+          const d = result.data;
+          if (d.first_name)    form.setValue('first_name', d.first_name);
+          if (d.last_name)     form.setValue('last_name', d.last_name);
+          if (d.address_line1) form.setValue('address_line1', d.address_line1);
+          if (d.postal_code)   form.setValue('postal_code', d.postal_code);
+          if (d.city)          form.setValue('city', d.city);
+          toast({ title: 'Uppgifter hämtade', description: 'Granska informationen innan du sparar.' });
+        } else if (result.status === 'not_found') {
+          toast({
+            title:       'Ingen information hittades',
+            description: 'Fortsätt registrera eleven manuellt.',
+          });
+        } else {
+          toast({
+            title:       'Sökningen är inte tillgänglig',
+            description: 'Fortsätt registrera eleven manuellt.',
+          });
+        }
+      },
+      onError: () => {
+        toast({
+          title:       'Sökningen misslyckades',
+          description: 'Fortsätt registrera eleven manuellt.',
+        });
+      },
+    });
+  }
 
   const { data: instructorsData } = useInstructorList({ per_page: 100 }, { enabled: open });
   const instructors = instructorsData?.data ?? [];
@@ -275,8 +329,46 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
           onOpenChange(false);
         },
         onError: (e) => {
-          const msg = e instanceof Error ? e.message : 'Försök igen';
-          toast({ title: 'Kunde inte skapa elev', description: msg, variant: 'destructive' });
+          void (async () => {
+            // A duplicate personnummer is reported by the existing duplicate-
+            // detection check in supabase/functions/students/index.ts
+            // (handleCreate) — unchanged here; only surfaced with a link to
+            // the existing student, per the Business Objective ("Allow
+            // opening the existing student. Do not create duplicates.").
+            if (e instanceof FunctionsHttpError) {
+              try {
+                const body = await e.context.json() as { code?: string; message?: string; details?: { existing_student_id?: string } };
+                if (body.code === 'DUPLICATE_PERSONAL_NUMBER') {
+                  const existingId = body.details?.existing_student_id;
+                  toast({
+                    title:       'Eleven finns redan',
+                    description: (
+                      <div className="flex flex-col gap-1.5">
+                        <span>En elev med detta personnummer är redan registrerad.</span>
+                        {existingId && (
+                          <button
+                            type="button"
+                            className="text-sm font-medium text-primary underline underline-offset-2 text-left"
+                            onClick={() => { onOpenChange(false); navigate(`/students/${existingId}`); }}
+                          >
+                            Visa befintlig elev →
+                          </button>
+                        )}
+                      </div>
+                    ),
+                    variant: 'destructive',
+                  });
+                  return;
+                }
+                toast({ title: 'Kunde inte skapa elev', description: body.message ?? 'Försök igen', variant: 'destructive' });
+                return;
+              } catch {
+                // response body wasn't JSON — fall through to generic message
+              }
+            }
+            const msg = e instanceof Error ? e.message : 'Försök igen';
+            toast({ title: 'Kunde inte skapa elev', description: msg, variant: 'destructive' });
+          })();
         },
       });
     }
@@ -597,7 +689,10 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                   />
                 </div>
 
-                {/* Personnummer */}
+                {/* Personnummer — only gated when editing an existing student's already-
+                    stored PII; entering a new student's personnummer at creation is not
+                    a "view" of existing PII and must not be blocked. */}
+                <PermissionGate {...(isEdit ? { permission: Permissions.STUDENTS_PII_READ } : {})}>
                 <div className="space-y-1.5">
                   <FormLabel>Personnummer</FormLabel>
                   <div className="flex items-center gap-2">
@@ -617,13 +712,16 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="shrink-0 text-xs whitespace-nowrap"
-                      disabled
+                      className="shrink-0 text-xs whitespace-nowrap gap-1.5"
+                      onClick={handlePersonLookup}
+                      disabled={personLookup.isPending}
                     >
-                      Sök i Statens personadressregister
+                      {personLookup.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+                      Hämta personuppgifter
                     </Button>
                   </div>
                 </div>
+                </PermissionGate>
 
                 {/* Adress */}
                 <FormField
@@ -670,9 +768,9 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                   />
                 </div>
 
-                {/* Folkbokföring info */}
+                {/* Person Lookup Framework info */}
                 <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-xs text-muted-foreground">
-                  För att kunna hämta uppgifter från folkbokföringen ska korrekt personnummer fyllas i.
+                  För att kunna hämta personuppgifter automatiskt ska korrekt personnummer fyllas i.
                 </div>
 
                 {/* Flera val */}

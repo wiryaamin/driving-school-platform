@@ -17,11 +17,12 @@ import type { PlatformOrganization } from '../hooks/usePlatformOrganizations.js'
 import { usePlatformOrganizations } from '../hooks/usePlatformOrganizations.js';
 import { usePlatformOrgCounts } from '../hooks/usePlatformOrgDetail.js';
 import type { OrgCounts } from '../hooks/usePlatformOrgDetail.js';
-import { useSuspendOrg, useReactivateOrg, useStartTrial, useExtendTrial, useEndTrial } from '../hooks/usePlatformOrgMutations.js';
+import { useSuspendOrg, useReactivateOrg, useTerminateOrg, useStartTrial, useExtendTrial, useEndTrial } from '../hooks/usePlatformOrgMutations.js';
 import { useSwitchTenant } from '@modules/auth/hooks/useSwitchTenant.js';
 import { CreateOrgDialog } from '../components/CreateOrgDialog.js';
 import { EditOrgDialog } from '../components/EditOrgDialog.js';
 import { OrgDetailSheet } from '../components/OrgDetailSheet.js';
+import { TIER_LABEL } from '../lib/tierDisplay.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ type PageModal =
   | { type: 'edit';         org: PlatformOrganization }
   | { type: 'suspend';      org: PlatformOrganization }
   | { type: 'reactivate';   org: PlatformOrganization }
+  | { type: 'terminate';    org: PlatformOrganization }
   | { type: 'trial-start';  org: PlatformOrganization }
   | { type: 'trial-extend'; org: PlatformOrganization }
   | { type: 'trial-end';    org: PlatformOrganization };
@@ -101,24 +103,28 @@ const SUB_STATUS_CLASS: Record<string, string> = {
   suspended: 'text-muted-foreground',
 };
 
-const TIER_LABEL: Record<string, string> = {
-  trial:        'Trial',
-  starter:      'Starter',
-  professional: 'Professional',
-  enterprise:   'Enterprise',
-};
-
 // ─── Confirm dialog ───────────────────────────────────────────────────────────
 
+// All three dialogs below take an explicit `open` prop and are rendered
+// exactly once each, always mounted (see the "Modals" section at the bottom
+// of this file) — never conditionally mounted/unmounted by the caller.
+// Radix's Dialog renders through a Portal into document.body and owns its
+// own close/exit-animation cleanup; conditionally mounting/unmounting the
+// component that wraps it from the parent races React's own removal of that
+// portaled node against Radix's, producing "Failed to execute 'removeChild'
+// on 'Node'". Reused for suspend/reactivate/terminate, trial-start/
+// trial-extend, and trial-end respectively (previously 6 separate
+// conditionally-mounted instances).
+
 function ConfirmDialog({
-  title, description, confirmLabel, confirmVariant = 'destructive', loading, onConfirm, onCancel,
+  open, title, description, confirmLabel, confirmVariant = 'destructive', loading, onConfirm, onCancel,
 }: {
-  title: string; description: string; confirmLabel: string;
+  open: boolean; title: string; description: string; confirmLabel: string;
   confirmVariant?: 'default' | 'destructive'; loading: boolean;
   onConfirm: () => void; onCancel: () => void;
 }) {
   return (
-    <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+    <Dialog open={open} onOpenChange={open => { if (!open) onCancel(); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground">{description}</p>
@@ -136,14 +142,18 @@ function ConfirmDialog({
 // ─── Trial days dialog ────────────────────────────────────────────────────────
 
 function TrialDaysDialog({
-  title, defaultDays, loading, onConfirm, onCancel,
+  open, title, defaultDays, loading, onConfirm, onCancel,
 }: {
-  title: string; defaultDays: number; loading: boolean;
+  open: boolean; title: string; defaultDays: number; loading: boolean;
   onConfirm: (days: number) => void; onCancel: () => void;
 }) {
   const [days, setDays] = useState(defaultDays);
+  // Reused across two modal types (trial-start, trial-extend) without
+  // unmounting — reset the field whenever the dialog (re-)opens rather than
+  // relying on useState's one-time initializer.
+  useEffect(() => { if (open) setDays(defaultDays); }, [open, defaultDays]);
   return (
-    <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+    <Dialog open={open} onOpenChange={open => { if (!open) onCancel(); }}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
         <div className="space-y-2">
@@ -168,14 +178,15 @@ function TrialDaysDialog({
 // ─── End trial dialog ─────────────────────────────────────────────────────────
 
 function EndTrialDialog({
-  orgName, loading, onConfirm, onCancel,
+  open, orgName, loading, onConfirm, onCancel,
 }: {
-  orgName: string; loading: boolean;
+  open: boolean; orgName: string; loading: boolean;
   onConfirm: (targetTier: string) => void; onCancel: () => void;
 }) {
   const [tier, setTier] = useState('starter');
+  useEffect(() => { if (open) setTier('starter'); }, [open]);
   return (
-    <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+    <Dialog open={open} onOpenChange={open => { if (!open) onCancel(); }}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader><DialogTitle>Avsluta testperiod — {orgName}</DialogTitle></DialogHeader>
         <div className="space-y-3">
@@ -237,9 +248,11 @@ function OrgRowActions({
   onAction:   (modal: PageModal) => void;
   onNavigate: () => void;
 }) {
-  const isActive   = org.status === 'active';
-  const isTrialing = org.subscription_status === 'trialing';
-  const hasTrialEnd = org.trial_ends_at !== null;
+  const isActive     = org.status === 'active';
+  const isSuspended  = org.status === 'suspended';
+  const isTerminated = org.status === 'terminated';
+  const isTrialing   = org.subscription_status === 'trialing';
+  const hasTrialEnd  = org.trial_ends_at !== null;
 
   return (
     <div className="flex items-center gap-1 justify-end">
@@ -268,12 +281,18 @@ function OrgRowActions({
           <DropdownMenuItem onClick={onNavigate}>Öppna detalj</DropdownMenuItem>
           <DropdownMenuItem onClick={() => onAction({ type: 'edit', org })}>Redigera</DropdownMenuItem>
           <DropdownMenuSeparator />
-          {isActive ? (
+          {isActive && (
             <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'suspend', org })}>
               Suspendera
             </DropdownMenuItem>
-          ) : (
+          )}
+          {(isSuspended || isTerminated) && (
             <DropdownMenuItem onClick={() => onAction({ type: 'reactivate', org })}>Återaktivera</DropdownMenuItem>
+          )}
+          {!isTerminated && (
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'terminate', org })}>
+              Avsluta organisation
+            </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
           {!isTrialing ? (
@@ -327,6 +346,7 @@ export function PlatformOrganizationsPage() {
   const { switchTenant, isPending: isSwitching }                        = useSwitchTenant();
   const suspendOrg    = useSuspendOrg();
   const reactivateOrg = useReactivateOrg();
+  const terminateOrg  = useTerminateOrg();
   const startTrial    = useStartTrial();
   const extendTrial   = useExtendTrial();
   const endTrial      = useEndTrial();
@@ -446,6 +466,15 @@ export function PlatformOrganizationsPage() {
     const { org } = modal;
     reactivateOrg.mutate(org.id, {
       onSuccess: () => { toast({ title: 'Återaktiverat', description: `${org.name} är nu aktiv` }); closeModal(); },
+      onError: err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleTerminate() {
+    if (modal?.type !== 'terminate') return;
+    const { org } = modal;
+    terminateOrg.mutate(org.id, {
+      onSuccess: () => { toast({ title: 'Avslutad', description: `${org.name} har avslutats` }); closeModal(); },
       onError: err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
     });
   }
@@ -732,46 +761,66 @@ export function PlatformOrganizationsPage() {
       )}
 
       {/* ── Modals ── */}
-      {modal?.type === 'create'   && <CreateOrgDialog onClose={closeModal} />}
-      {modal?.type === 'edit'     && <EditOrgDialog org={modal.org} onClose={closeModal} />}
-      {modal?.type === 'detail'   && <OrgDetailSheet org={modal.org} onClose={closeModal} />}
+      <CreateOrgDialog open={modal?.type === 'create'} onClose={closeModal} />
+      <EditOrgDialog
+        open={modal?.type === 'edit'}
+        org={modal?.type === 'edit' ? modal.org : null}
+        onClose={closeModal}
+      />
+      <OrgDetailSheet
+        open={modal?.type === 'detail'}
+        org={modal?.type === 'detail' ? modal.org : null}
+        onClose={closeModal}
+      />
 
-      {modal?.type === 'suspend' && (
-        <ConfirmDialog
-          title="Suspendera organisation"
-          description={`Suspenderade organisationer kan inte logga in eller använda plattformen. Du kan återaktivera när som helst.\n\nOrganisation: ${modal.org.name}`}
-          confirmLabel="Suspendera" confirmVariant="destructive"
-          loading={suspendOrg.isPending}
-          onConfirm={handleSuspend} onCancel={closeModal}
-        />
-      )}
-      {modal?.type === 'reactivate' && (
-        <ConfirmDialog
-          title="Återaktivera organisation"
-          description={`Organisationen och dess användare får åter tillgång till plattformen.\n\nOrganisation: ${modal.org.name}`}
-          confirmLabel="Återaktivera" confirmVariant="default"
-          loading={reactivateOrg.isPending}
-          onConfirm={handleReactivate} onCancel={closeModal}
-        />
-      )}
-      {modal?.type === 'trial-start' && (
-        <TrialDaysDialog
-          title={`Starta testperiod — ${modal.org.name}`} defaultDays={30}
-          loading={startTrial.isPending} onConfirm={handleStartTrial} onCancel={closeModal}
-        />
-      )}
-      {modal?.type === 'trial-extend' && (
-        <TrialDaysDialog
-          title={`Förläng testperiod — ${modal.org.name}`} defaultDays={14}
-          loading={extendTrial.isPending} onConfirm={handleExtendTrial} onCancel={closeModal}
-        />
-      )}
-      {modal?.type === 'trial-end' && (
-        <EndTrialDialog
-          orgName={modal.org.name} loading={endTrial.isPending}
-          onConfirm={handleEndTrial} onCancel={closeModal}
-        />
-      )}
+      <ConfirmDialog
+        open={modal?.type === 'suspend' || modal?.type === 'reactivate' || modal?.type === 'terminate'}
+        title={
+          modal?.type === 'suspend'    ? 'Suspendera organisation' :
+          modal?.type === 'reactivate' ? 'Återaktivera organisation' :
+          modal?.type === 'terminate'  ? 'Avsluta organisation' : ''
+        }
+        description={
+          modal?.type === 'suspend'
+            ? `Suspenderade organisationer kan inte logga in eller använda plattformen. Du kan återaktivera när som helst.\n\nOrganisation: ${modal.org.name}`
+          : modal?.type === 'reactivate'
+            ? `Organisationen och dess användare får åter tillgång till plattformen.\n\nOrganisation: ${modal.org.name}`
+          : modal?.type === 'terminate'
+            ? `Organisationen avslutas permanent. Data behålls, men organisationen kan endast återaktiveras manuellt av en plattformsadministratör.\n\nOrganisation: ${modal.org.name}`
+          : ''
+        }
+        confirmLabel={
+          modal?.type === 'suspend'    ? 'Suspendera' :
+          modal?.type === 'reactivate' ? 'Återaktivera' :
+          modal?.type === 'terminate'  ? 'Avsluta organisation' : ''
+        }
+        confirmVariant={modal?.type === 'reactivate' ? 'default' : 'destructive'}
+        loading={suspendOrg.isPending || reactivateOrg.isPending || terminateOrg.isPending}
+        onConfirm={
+          modal?.type === 'suspend'    ? handleSuspend :
+          modal?.type === 'reactivate' ? handleReactivate :
+          modal?.type === 'terminate'  ? handleTerminate : closeModal
+        }
+        onCancel={closeModal}
+      />
+      <TrialDaysDialog
+        open={modal?.type === 'trial-start' || modal?.type === 'trial-extend'}
+        title={
+          modal?.type === 'trial-start'  ? `Starta testperiod — ${modal.org.name}` :
+          modal?.type === 'trial-extend' ? `Förläng testperiod — ${modal.org.name}` : ''
+        }
+        defaultDays={modal?.type === 'trial-extend' ? 14 : 30}
+        loading={startTrial.isPending || extendTrial.isPending}
+        onConfirm={modal?.type === 'trial-extend' ? handleExtendTrial : handleStartTrial}
+        onCancel={closeModal}
+      />
+      <EndTrialDialog
+        open={modal?.type === 'trial-end'}
+        orgName={modal?.type === 'trial-end' ? modal.org.name : ''}
+        loading={endTrial.isPending}
+        onConfirm={handleEndTrial}
+        onCancel={closeModal}
+      />
     </PageLayout>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, ShoppingBag, TrendingUp } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
@@ -7,6 +8,13 @@ import { Skeleton } from '@platform/ui';
 import { InvoiceStatusBadge } from '../components/InvoiceStatusBadge.js';
 import { cn } from '@/lib/utils.js';
 import type { Invoice } from '../hooks/useFinance.js';
+import {
+  useOrderList,
+  orderStatusLabel,
+  orderStatusColor,
+  type OrderStatus,
+  type OrderListItem,
+} from '@modules/orders/hooks/useOrders.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +36,18 @@ const TABS: { key: OrdrarTab; label: string }[] = [
   { key: 'ehandel',     label: 'E-handelsordrar' },
   { key: 'varukorgar',  label: 'Varukorgar' },
   { key: 'kassaordrar', label: 'Kassaordrar' },
+];
+
+type EcomStatusFilter = OrderStatus | 'all';
+
+const ECOM_STATUS_OPTIONS: { value: EcomStatusFilter; label: string }[] = [
+  { value: 'all',             label: 'Visa alla' },
+  { value: 'draft',           label: 'Utkast' },
+  { value: 'pending_payment', label: 'Väntar betalning' },
+  { value: 'paid',            label: 'Betald' },
+  { value: 'partially_paid',  label: 'Delvis betald' },
+  { value: 'cancelled',       label: 'Avbokad' },
+  { value: 'refunded',        label: 'Återbetald' },
 ];
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -67,6 +87,188 @@ function StatCard({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-border bg-card px-5 py-4">
       <p className="text-sm text-muted-foreground">{label}</p>
       <p className="text-2xl font-bold text-foreground mt-1">{value}</p>
+    </div>
+  );
+}
+
+// ─── Ecom Filter Bar ──────────────────────────────────────────────────────────
+
+function EcomFilterBar({
+  status,
+  search,
+  onStatusChange,
+  onSearchChange,
+}: {
+  status:         EcomStatusFilter;
+  search:         string;
+  onStatusChange: (v: EcomStatusFilter) => void;
+  onSearchChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="relative shrink-0">
+        <select
+          value={status}
+          onChange={e => onStatusChange(e.target.value as EcomStatusFilter)}
+          className="h-9 text-sm border border-border rounded-md pl-3 pr-8 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 appearance-none"
+        >
+          {ECOM_STATUS_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </span>
+      </div>
+      <div className="relative flex-1 min-w-[280px]">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+          placeholder="Sök på ordernummer, elevnamn eller e-post..."
+          className="w-full h-9 pl-8 pr-3 text-sm border border-border rounded-md bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Ecom Orders Table ────────────────────────────────────────────────────────
+
+function EcomOrdersTable({
+  orders,
+  isLoading,
+}: {
+  orders:    OrderListItem[];
+  isLoading: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-muted/40">
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Ordernr</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Elev</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Paket</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Kampanj</th>
+              <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total inkl moms</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Datum</th>
+              <th className="px-4 py-3" />
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              [...Array(6)].map((_, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  {[...Array(8)].map((_, j) => (
+                    <td key={j} className="px-4 py-3">
+                      <Skeleton className="h-4 w-full rounded" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : orders.length === 0 ? (
+              <tr>
+                <td colSpan={8}>
+                  <div className="flex flex-col items-center gap-2 py-14 text-center">
+                    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                      <ShoppingBag className="w-5 h-5 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">Det finns inga e-handelsordrar att visa.</p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              orders.map(order => (
+                <tr key={order.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                    #{order.order_number}
+                  </td>
+                  <td className="px-4 py-3">
+                    {(order.student_first_name != null || order.student_last_name != null) ? (
+                      <>
+                        <div className="text-sm font-medium text-foreground">
+                          {`${order.student_first_name ?? ''} ${order.student_last_name ?? ''}`.trim()}
+                        </div>
+                        {order.student_email != null && (
+                          <div className="text-xs text-muted-foreground">{order.student_email}</div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">{order.student_email ?? '—'}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-foreground">{order.package_name ?? '—'}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{order.campaign_name ?? '—'}</td>
+                  <td className="px-4 py-3 text-right tabular-nums font-medium">
+                    {fmtSek(order.total_amount_incl_vat)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={cn('text-xs font-semibold px-2 py-0.5 rounded-full', orderStatusColor(order.status))}>
+                      {orderStatusLabel(order.status)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">
+                    {fmtDate(order.created_at)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <Link
+                      to={`/orders/${order.id}`}
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      Visa →
+                    </Link>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Ecom Pagination ──────────────────────────────────────────────────────────
+
+function EcomPagination({
+  page,
+  total,
+  perPage,
+  onChange,
+}: {
+  page:     number;
+  total:    number;
+  perPage:  number;
+  onChange: (p: number) => void;
+}) {
+  const lastPage = Math.ceil(total / perPage);
+  if (lastPage <= 1) return null;
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-muted-foreground">{total} ordrar totalt</span>
+      <div className="flex items-center gap-2">
+        <button
+          disabled={page <= 1}
+          onClick={() => onChange(page - 1)}
+          className="px-3 py-1.5 rounded-md border border-border text-sm disabled:opacity-40 hover:bg-muted/50 transition-colors"
+        >
+          ← Föregående
+        </button>
+        <span className="px-2 py-1.5 text-muted-foreground">Sida {page} / {lastPage}</span>
+        <button
+          disabled={page >= lastPage}
+          onClick={() => onChange(page + 1)}
+          className="px-3 py-1.5 rounded-md border border-border text-sm disabled:opacity-40 hover:bg-muted/50 transition-colors"
+        >
+          Nästa →
+        </button>
+      </div>
     </div>
   );
 }
@@ -169,6 +371,20 @@ export function OrdrarPage() {
   const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>('all');
   const [search,       setSearch]       = useState('');
 
+  // E-handelsordrar tab state
+  const [ecomStatus, setEcomStatus] = useState<EcomStatusFilter>('all');
+  const [ecomSearch, setEcomSearch] = useState('');
+  const [ecomPage,   setEcomPage]   = useState(1);
+
+  const { data: ecomData, isLoading: ecomLoading } = useOrderList({
+    status:   ecomStatus !== 'all' ? ecomStatus : undefined,
+    search:   ecomSearch || undefined,
+    page:     ecomPage,
+    per_page: 25,
+  });
+  const ecomOrders = ecomData?.data ?? [];
+  const ecomTotal  = ecomData?.meta?.total ?? 0;
+
   const { data: allInvoices = [], isLoading } = useOrdrar();
 
   // Kassaordrar = all invoices (POS + manual) filtered client-side
@@ -214,7 +430,11 @@ export function OrdrarPage() {
           {TABS.map(t => (
             <button
               key={t.key}
-              onClick={() => { setActiveTab(t.key); setSearch(''); setStatusFilter('all'); }}
+              onClick={() => {
+                setActiveTab(t.key);
+                setSearch(''); setStatusFilter('all');
+                setEcomSearch(''); setEcomStatus('all'); setEcomPage(1);
+              }}
               className={cn(
                 'px-5 py-2.5 text-sm font-medium border-b-2 transition-colors',
                 activeTab === t.key
@@ -276,21 +496,14 @@ export function OrdrarPage() {
       {/* ── E-handelsordrar ─────────────────────────────────────────────── */}
       {activeTab === 'ehandel' && (
         <>
-          <FilterBar
-            statusFilter={statusFilter}
-            search={search}
-            onStatusChange={setStatusFilter}
-            onSearchChange={setSearch}
-            placeholder="Sök efter siffrorna på ordernummer, förnamn, efternamn, e-post, personnummer eller telefonnummer"
+          <EcomFilterBar
+            status={ecomStatus}
+            search={ecomSearch}
+            onStatusChange={(s) => { setEcomStatus(s); setEcomPage(1); }}
+            onSearchChange={(s) => { setEcomSearch(s); setEcomPage(1); }}
           />
-          <div className="rounded-lg border border-border bg-card">
-            <div className="flex flex-col items-center gap-2 py-14 text-center">
-              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                <ShoppingBag className="w-5 h-5 text-muted-foreground" />
-              </div>
-              <p className="text-sm text-muted-foreground">Det finns inga ordrar att visa just nu.</p>
-            </div>
-          </div>
+          <EcomOrdersTable orders={ecomOrders} isLoading={ecomLoading} />
+          <EcomPagination page={ecomPage} total={ecomTotal} perPage={25} onChange={setEcomPage} />
         </>
       )}
     </PageLayout>

@@ -5,7 +5,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useTranslation } from '@platform/i18n';
 import { useAuth } from '@core/auth/hooks.js';
+import { supabase } from '@core/api/supabase.js';
+import { parseJwtClaims } from '@/lib/auth/jwt.js';
 import { cn } from '@/lib/utils.js';
+import { BankidLogin } from '../components/BankidLogin.js';
 
 // ─── Validation Schema ────────────────────────────────────────────────────────
 
@@ -25,7 +28,12 @@ export function LoginPage() {
   const location = useLocation();
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname ?? '/dashboard';
+  // Only set when a route guard redirected here (e.g. a deep link to a
+  // protected page). Absent on a direct visit to /auth/login — in that case
+  // the destination depends on the account signed in (see onSubmit below),
+  // not a hardcoded default, since a platform admin's real "home" is
+  // /platform/dashboard, not the tenant /dashboard.
+  const explicitFrom = (location.state as { from?: { pathname: string } } | null)?.from?.pathname;
 
   const {
     register,
@@ -35,11 +43,26 @@ export function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
+  // Shared by both password and BankID sign-in — routes by account type once
+  // a real Supabase session exists. supabase.auth.getSession() returns the
+  // session set synchronously by signInWithPassword/verifyOtp, so the JWT
+  // (and its is_platform_admin claim) is available immediately without
+  // waiting on AuthProvider's onAuthStateChange listener.
+  const routeAfterSignIn = async () => {
+    if (explicitFrom) {
+      navigate(explicitFrom, { replace: true });
+      return;
+    }
+    const { data: { session } } = await supabase.auth.getSession();
+    const claims = session ? parseJwtClaims(session.access_token) : null;
+    navigate(claims?.is_platform_admin ? '/platform/dashboard' : '/dashboard', { replace: true });
+  };
+
   const onSubmit = async (values: LoginFormValues) => {
     setServerError(null);
     const result = await signIn(values);
     if (result.success) {
-      navigate(from, { replace: true });
+      await routeAfterSignIn();
     } else {
       setServerError(result.error ?? t('login.error.generic'));
     }
@@ -139,6 +162,14 @@ export function LoginPage() {
           ) : t('login.submit')}
         </button>
       </form>
+
+      <div className="flex items-center gap-3 my-4">
+        <div className="h-px flex-1 bg-border" />
+        <span className="text-xs text-muted-foreground">eller</span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+
+      <BankidLogin onComplete={() => void routeAfterSignIn()} />
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { CreditCard, AlertCircle, CheckCircle2, Clock, Lock, Package, Phone, Mai
 import { useGuardianMe, useGuardianBalance, useGuardianProgress } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#2D5BE3';
 
 function formatSEK(n: number): string {
   return new Intl.NumberFormat('sv-SE', { style: 'currency', currency: 'SEK', maximumFractionDigits: 0 }).format(n);

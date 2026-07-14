@@ -3,7 +3,7 @@ import { Outlet, NavLink, Link, useSearchParams } from 'react-router-dom';
 import {
   Home, CalendarDays, TrendingUp, CreditCard, Route, ShieldCheck,
   MessageSquare, FileText, Menu, X, LogOut, Loader2, Shield, User,
-  BookOpen, Bell, CheckCircle2,
+  BookOpen, CheckCircle2,
 } from 'lucide-react';
 import {
   getStoredGuardianSession, storeGuardianSession, clearGuardianSession,
@@ -26,8 +26,8 @@ const DEMO_SESSION: GuardianSession = {
 
 // ─── Brand colors ─────────────────────────────────────────────────────────────
 
-const BRAND           = '#1055C9'; // loading/error screens + mobile
-const DESKTOP_PRIMARY = '#4F46E5'; // desktop sidebar active state
+const BRAND           = '#2D5BE3'; // loading/error screens + mobile
+const DESKTOP_PRIMARY = '#2D5BE3'; // desktop sidebar active state
 
 const STAGE_PILL_LABELS: Record<string, string> = {
   not_started:           'Ej börjat',
@@ -63,14 +63,14 @@ const NAV_ALL = [
   { to: '/guardian/bokningar',      label: 'Bokningshistorik',Icon: BookOpen,     end: false, badge: 0 },
   { to: '/guardian/korkortsresa',   label: 'Körkortsresa',    Icon: Route,        end: false, badge: 0 },
   { to: '/guardian/riskutbildning', label: 'Riskutbildning',  Icon: ShieldCheck,  end: false, badge: 0 },
-  { to: '/guardian/meddelanden',    label: 'Meddelanden',     Icon: MessageSquare,end: false, badge: 2 },
+  { to: '/guardian/meddelanden',    label: 'Meddelanden',     Icon: MessageSquare,end: false, badge: 0 },
   { to: '/guardian/dokument',       label: 'Dokument',        Icon: FileText,     end: false, badge: 0 },
   { to: '/guardian/konto',          label: 'Mitt konto',      Icon: User,         end: false, badge: 0 },
 ];
 
 // ─── Mobile bottom tab bar ────────────────────────────────────────────────────
 
-function MobileBottomNav({ onMenuOpen }: { onMenuOpen: () => void }) {
+function MobileBottomNav() {
   const { data: progress } = useGuardianProgress();
   const stage      = progress?.permit_stage;
   const stageLabel = stage ? (STAGE_PILL_LABELS[stage] ?? stage) : 'Framsteg';
@@ -90,10 +90,10 @@ function MobileBottomNav({ onMenuOpen }: { onMenuOpen: () => void }) {
           Hem
         </NavLink>
 
-        {/* Schema */}
-        <NavLink to="/guardian/schema" className={tabCls}>
-          <CalendarDays className="w-5 h-5" strokeWidth={1.75} />
-          Schema
+        {/* Framsteg */}
+        <NavLink to="/guardian/framsteg" className={tabCls}>
+          <TrendingUp className="w-5 h-5" strokeWidth={1.75} />
+          Framsteg
         </NavLink>
 
         {/* Center stage pill — raised above bar */}
@@ -123,14 +123,11 @@ function MobileBottomNav({ onMenuOpen }: { onMenuOpen: () => void }) {
           Ekonomi
         </NavLink>
 
-        {/* Meny */}
-        <button
-          onClick={onMenuOpen}
-          className="flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-semibold text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <Menu className="w-5 h-5" strokeWidth={1.75} />
-          Meny
-        </button>
+        {/* Kontakt */}
+        <NavLink to="/guardian/meddelanden" className={tabCls}>
+          <MessageSquare className="w-5 h-5" strokeWidth={1.75} />
+          Kontakt
+        </NavLink>
       </div>
     </nav>
   );
@@ -259,19 +256,13 @@ function MobileHeader({
         {session.organization_name}
       </p>
       <div className="flex items-center gap-2 shrink-0">
-        <button className="relative p-2 rounded-xl text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors">
-          <Bell className="w-5 h-5" strokeWidth={1.75} />
-          <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-            2
-          </span>
-        </button>
         <Link
-          to="/guardian/schema"
+          to="/guardian/framsteg"
           className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white"
           style={{ background: DESKTOP_PRIMARY }}
         >
-          <CalendarDays className="w-3.5 h-3.5" strokeWidth={2} />
-          Schema
+          <TrendingUp className="w-3.5 h-3.5" strokeWidth={2} />
+          Se framsteg
         </Link>
       </div>
     </header>
@@ -370,6 +361,7 @@ export function GuardianPortalLayout() {
             guardian:     { id: string; first_name: string; last_name: string };
             student:      { id: string };
             organization: { id: string; name: string };
+            session:      { expires_at: string };
           };
           error?: string;
         };
@@ -379,7 +371,7 @@ export function GuardianPortalLayout() {
           return;
         }
 
-        const { guardian, student, organization } = body.data;
+        const { guardian, student, organization, session: portalSession } = body.data;
         const s: GuardianSession = {
           token:             tokenParam,
           guardian_id:       guardian.id,
@@ -387,7 +379,7 @@ export function GuardianPortalLayout() {
           student_id:        student.id,
           organization_id:   organization.id,
           organization_name: organization.name,
-          expires_at:        new Date(Date.now() + 30 * 86_400_000).toISOString(),
+          expires_at:        portalSession.expires_at,
         };
         storeGuardianSession(s);
         setSession(s);
@@ -446,7 +438,7 @@ export function GuardianPortalLayout() {
         </div>
 
         {/* ── Mobile bottom navigation ───────────────────────────────────── */}
-        <MobileBottomNav onMenuOpen={() => setSidebarOpen(true)} />
+        <MobileBottomNav />
 
         {/* ── Mobile sidebar drawer ──────────────────────────────────────── */}
         {sidebarOpen && (

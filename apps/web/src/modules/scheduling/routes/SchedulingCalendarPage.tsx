@@ -1,14 +1,18 @@
 import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import type FullCalendar from '@fullcalendar/react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Settings, Search } from 'lucide-react';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { toast } from '@platform/ui';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import { SchedulingCalendar } from '../components/SchedulingCalendar.js';
 import { SlotDetailSheet } from '../components/SlotDetailSheet.js';
 import { BookingDialog } from '../components/BookingDialog.js';
 import { CreateSlotSheet } from '../components/CreateSlotSheet.js';
 import { MultiInstructorGrid } from '../components/MultiInstructorGrid.js';
+import { MultiVehicleGrid } from '../components/MultiVehicleGrid.js';
 import { SchedulingActionToolbar } from '../components/SchedulingActionToolbar.js';
+import { useVehicles } from '@modules/resources/hooks/useVehicles.js';
 import { SubstituteInstructorDialog } from '../components/SubstituteInstructorDialog.js';
 import { HittaLedigTidDialog } from '../components/HittaLedigTidDialog.js';
 import { useCalendarView } from '../hooks/useCalendarView.js';
@@ -59,49 +63,139 @@ function FilterRow({
   showWeekends,
   onFilterDateChange,
   onShowWeekendsChange,
+  instructors = [],
+  selectedInstructorId = '',
+  onInstructorChange,
+  lessonTypes = [],
+  selectedLessonTypeId = '',
+  onLessonTypeChange,
+  vehicles = [],
+  selectedVehicleId = '',
+  onVehicleChange,
+  groupByDay,
+  onGroupByDayChange,
 }: {
-  filterDate:           string;
-  showWeekends:         boolean;
-  onFilterDateChange:   (d: string) => void;
-  onShowWeekendsChange: (v: boolean) => void;
+  filterDate:            string;
+  showWeekends:          boolean;
+  onFilterDateChange:    (d: string) => void;
+  onShowWeekendsChange:  (v: boolean) => void;
+  instructors?:          { id: string; first_name: string; last_name: string }[];
+  selectedInstructorId?: string;
+  onInstructorChange?:   (id: string) => void;
+  lessonTypes?:          { id: string; name: string }[];
+  selectedLessonTypeId?: string;
+  onLessonTypeChange?:   (id: string) => void;
+  vehicles?:             { id: string; registration_number: string; make: string; model: string }[];
+  selectedVehicleId?:    string;
+  onVehicleChange?:      (id: string) => void;
+  groupByDay?:           boolean;
+  onGroupByDayChange?:   (v: boolean) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-muted/20 border-b border-border">
+    <div className="flex flex-col shrink-0 border-b border-border bg-muted/20">
 
-      {/* Date filter */}
-      <div className="relative flex items-center gap-1.5">
-        <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-          <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-        <input
-          type="date"
-          value={filterDate}
-          onChange={(e) => onFilterDateChange(e.target.value)}
-          className="h-7 text-xs border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-        />
-        {filterDate && (
-          <button
-            onClick={() => onFilterDateChange('')}
-            className="text-muted-foreground/50 hover:text-muted-foreground"
-            aria-label="Rensa datum"
+      {/* Row 2: group filters + date picker + checkboxes */}
+      <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border/40">
+
+        {/* Filtrera på personalgrupp */}
+        <div className="relative shrink-0">
+          <select
+            value={selectedInstructorId}
+            onChange={(e) => onInstructorChange?.(e.target.value)}
+            className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[168px]"
           >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        )}
+            <option value="">Filtrera på personalgrupp</option>
+            {instructors.map((i) => (
+              <option key={i.id} value={i.id}>{i.first_name} {i.last_name}</option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60">
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </div>
+
+        {/* Filtrera på tidmallsgrupp */}
+        <div className="relative shrink-0">
+          <select
+            value={selectedLessonTypeId}
+            onChange={(e) => onLessonTypeChange?.(e.target.value)}
+            className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[180px]"
+          >
+            <option value="">Filtrera på lektionstyp</option>
+            {lessonTypes.map((lt) => (
+              <option key={lt.id} value={lt.id}>{lt.name}</option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60">
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </div>
+
+        {/* Välj datum */}
+        <div className="relative flex items-center gap-1.5 shrink-0">
+          <svg className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+          <input
+            type="date"
+            value={filterDate}
+            onChange={(e) => onFilterDateChange(e.target.value)}
+            placeholder="Välj datum"
+            className="h-7 text-[11px] border border-border rounded px-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          />
+          {filterDate && (
+            <button
+              onClick={() => onFilterDateChange('')}
+              className="text-muted-foreground/50 hover:text-muted-foreground"
+              aria-label="Rensa datum"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* Checkboxes (right) */}
+        <div className="flex items-center gap-3 ml-auto shrink-0">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={groupByDay ?? false}
+              onChange={(e) => onGroupByDayChange?.(e.target.checked)}
+              className="w-3.5 h-3.5 rounded accent-primary"
+            />
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">Gruppera personal per dag</span>
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showWeekends}
+              onChange={(e) => onShowWeekendsChange(e.target.checked)}
+              className="w-3.5 h-3.5 rounded accent-primary"
+            />
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">Visa helger</span>
+          </label>
+        </div>
       </div>
 
-      <div className="flex items-center gap-3 ml-auto">
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showWeekends}
-            onChange={(e) => onShowWeekendsChange(e.target.checked)}
-            className="w-3.5 h-3.5 rounded accent-primary"
-          />
-          <span className="text-xs text-muted-foreground">Visa helger</span>
-        </label>
+      {/* Row 3: resource search */}
+      <div className="flex items-center px-3 py-1.5">
+        <div className="relative shrink-0">
+          <select
+            value={selectedVehicleId}
+            onChange={(e) => onVehicleChange?.(e.target.value)}
+            className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[152px]"
+          >
+            <option value="">Sök efter resurs</option>
+            {vehicles.map((v) => (
+              <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60">
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -137,17 +231,17 @@ function GridNavBar({
       {/* Left: nav */}
       <div className="flex items-center gap-1">
         <button
-          onClick={onToday}
-          className="px-3 py-1 text-xs font-medium rounded border border-border bg-background hover:bg-accent transition-colors"
-        >
-          Idag
-        </button>
-        <button
           onClick={onPrev}
           className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground"
           aria-label="Föregående"
         >
           <ChevronLeft className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onToday}
+          className="px-3 py-1 text-xs font-medium rounded border border-border bg-background hover:bg-accent transition-colors"
+        >
+          Idag
         </button>
         <button
           onClick={onNext}
@@ -156,7 +250,7 @@ function GridNavBar({
         >
           <ChevronRight className="w-4 h-4" />
         </button>
-        <span className="text-sm font-semibold text-foreground ml-1 capitalize">{title}</span>
+        <span className="text-sm font-semibold text-foreground ml-2">{title}</span>
       </div>
 
       {/* Right: create + view switcher */}
@@ -188,36 +282,14 @@ function GridNavBar({
   );
 }
 
-// ─── Resursschema Tab ─────────────────────────────────────────────────────────
-
-function ResursschemaTab() {
-  return (
-    <div className="flex flex-col items-center justify-center py-24 px-6 gap-4 text-center">
-      <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center">
-        <svg className="w-7 h-7 text-muted-foreground/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-          <rect x="3" y="4" width="18" height="18" rx="2" />
-          <line x1="16" y1="2" x2="16" y2="6" />
-          <line x1="8" y1="2" x2="8" y2="6" />
-          <line x1="3" y1="10" x2="21" y2="10" />
-        </svg>
-      </div>
-      <div className="space-y-1.5">
-        <p className="text-sm font-semibold text-foreground">Resursschema</p>
-        <p className="text-xs text-muted-foreground max-w-xs leading-relaxed">
-          Schemalägg fordon, simulatorer och lokaler. Koppla resurser till lektioner och se konflikter i realtid.
-        </p>
-      </div>
-      <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-        Kommer snart
-      </span>
-    </div>
-  );
-}
+// ResursschemaTab is rendered inline inside SchedulingCalendarPage
+// so it can share weekStart, gridView, gridSlots, lessonTypeMap, vehicles, etc.
 
 // ─── SchedulingCalendarPage ───────────────────────────────────────────────────
 
 export function SchedulingCalendarPage() {
   const navigate      = useNavigate();
+  const location      = useLocation();
   const [searchParams] = useSearchParams();
   const calendarRef = useRef<FullCalendar>(null);
 
@@ -232,8 +304,13 @@ export function SchedulingCalendarPage() {
     }
     return getMonday(new Date());
   });
-  const [showWeekends, setShowWeekends] = useState(true);
-  const [filterDate,   setFilterDate]   = useState('');
+  const [showWeekends,             setShowWeekends]             = useState(true);
+  const [filterDate,               setFilterDate]               = useState('');
+  const [selectedInstructorFilter, setSelectedInstructorFilter] = useState('');
+  const [selectedLessonTypeFilter, setSelectedLessonTypeFilter] = useState('');
+  const [selectedVehicleFilter,    setSelectedVehicleFilter]    = useState('');
+  const [groupByDay,               setGroupByDay]               = useState(false);
+  const [customerSearchValue,      setCustomerSearchValue]      = useState('');
 
   // ── Sheet / dialog state ─────────────────────────────────────────────────
   const [selectedSlot,    setSelectedSlot]    = useState<LessonSlot | null>(null);
@@ -258,11 +335,37 @@ export function SchedulingCalendarPage() {
 
   // ── Lesson types ─────────────────────────────────────────────────────────────
   const { data: lessonTypes = [] } = useLessonTypes();
+
+  // Category → compact Swedish label shown on slot cards in the grid.
+  // Matches the visual convention in the reference ("Vanlig" for driving, "Risk 1" etc.).
+  const CATEGORY_LABEL: Record<string, string> = {
+    driving:      'Vanlig',
+    theory:       'Teori',
+    risk1:        'Risk 1',
+    risk2:        'Risk 2',
+    simulator:    'Simul.',
+    group_theory: 'Grupp',
+    intensive:    'Intensiv',
+    assessment:   'Prov',
+  };
+
   const lessonTypeMap = useMemo(
     () => Object.fromEntries(
-      lessonTypes.map((lt) => [lt.id, lt.name.length > 7 ? lt.name.slice(0, 7) : lt.name])
+      lessonTypes.map((lt) => [
+        lt.id,
+        CATEGORY_LABEL[lt.category] ?? (lt.name.length > 7 ? lt.name.slice(0, 7) : lt.name),
+      ])
     ),
     [lessonTypes],
+  );
+
+  // ── Vehicles ─────────────────────────────────────────────────────────────
+  const { data: vehiclesRaw = [], isLoading: vehiclesLoading } = useVehicles();
+  const vehicles = useMemo(
+    () => vehiclesRaw.filter(
+      v => v.operational_status !== 'decommissioned' && v.operational_status !== 'inactive',
+    ),
+    [vehiclesRaw],
   );
 
   // ── Instructors ──────────────────────────────────────────────────────────
@@ -312,7 +415,8 @@ export function SchedulingCalendarPage() {
     sort_dir: 'asc',
     ...(dateRange.from         ? { from:         dateRange.from         } : {}),
     ...(dateRange.to           ? { to:            dateRange.to           } : {}),
-    ...(selectedInstructorId   ? { instructor_id: selectedInstructorId   } : {}),
+    ...(selectedInstructorId       ? { instructor_id:   selectedInstructorId       } : {}),
+    ...(selectedLessonTypeFilter   ? { lesson_type_id:  selectedLessonTypeFilter   } : {}),
   });
 
   const updateSlotTiming = useUpdateSlotTiming();
@@ -385,17 +489,109 @@ export function SchedulingCalendarPage() {
     [instructors],
   );
 
-  // ── Tab bar ───────────────────────────────────────────────────────────────
-  const TABS: { key: SchemaTab; label: string; comingSoon?: boolean }[] = [
+  const filteredInstructors = useMemo(
+    () => selectedInstructorFilter
+      ? instructors.filter((i) => i.id === selectedInstructorFilter)
+      : instructors,
+    [instructors, selectedInstructorFilter],
+  );
+
+  const filteredGridSlots = useMemo(() => {
+    let result = gridSlots;
+    if (selectedInstructorFilter) result = result.filter((s) => s.instructor_id === selectedInstructorFilter);
+    if (selectedLessonTypeFilter) result = result.filter((s) => s.lesson_type_id === selectedLessonTypeFilter);
+    return result;
+  }, [gridSlots, selectedInstructorFilter, selectedLessonTypeFilter]);
+
+  const filteredVehicles = useMemo(
+    () => selectedVehicleFilter
+      ? vehicles.filter((v) => v.id === selectedVehicleFilter)
+      : vehicles,
+    [vehicles, selectedVehicleFilter],
+  );
+
+  // ── Module-level nav tabs ─────────────────────────────────────────────────
+  const MODULE_NAV_TABS = [
+    { label: 'Mitt schema',    path: '/scheduling/mine'      },
+    { label: 'Kunder',         path: '/students'             },
+    { label: 'Bokningsschema', path: '/scheduling'           },
+    { label: 'Bokningslista',  path: '/scheduling/bokningar' },
+    { label: 'Bevakningar',    path: '/watchlist'            },
+    { label: 'Loggar',         path: '/logs'                 },
+  ] as const;
+
+  // ── Sub-tabs ──────────────────────────────────────────────────────────────
+  const TABS: { key: SchemaTab; label: string }[] = [
     { key: 'bokningsschema', label: 'Bokningsschema' },
-    { key: 'resursschema',   label: 'Resursschema',  comingSoon: true },
+    { key: 'resursschema',   label: 'Resursschema'   },
   ];
 
   return (
-    <>
+    <PermissionGate permission={Permissions.SCHEDULING_READ}>
       <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
 
-        {/* Tab bar */}
+        {/* Module navigation bar */}
+        <div className="flex items-center border-b border-border bg-card shrink-0 px-2">
+          <div className="flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none">
+            {MODULE_NAV_TABS.map((tab) => (
+              <button
+                key={tab.path}
+                onClick={() => navigate(tab.path)}
+                className={cn(
+                  'px-3 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0',
+                  (tab.path === '/scheduling'
+                    ? location.pathname === '/scheduling'
+                    : location.pathname.startsWith(tab.path))
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <button
+              onClick={() => navigate('/settings')}
+              className="p-2 text-muted-foreground hover:text-foreground transition-colors border-b-2 border-transparent -mb-px shrink-0 ml-1"
+              aria-label="Inställningar"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Right: search + action buttons */}
+          <div className="flex items-center gap-2 pl-3 py-1.5 shrink-0">
+            <div className="relative flex items-center">
+              <Search className="absolute left-2 w-3.5 h-3.5 text-muted-foreground/50 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Sök kund..."
+                value={customerSearchValue}
+                onChange={(e) => setCustomerSearchValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && customerSearchValue.trim()) {
+                    navigate(`/students?search=${encodeURIComponent(customerSearchValue.trim())}`);
+                    setCustomerSearchValue('');
+                  }
+                }}
+                className="h-7 pl-7 pr-2 text-xs border border-border rounded bg-background text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/40 w-36"
+              />
+            </div>
+            <button
+              onClick={() => navigate('/finance/cash')}
+              className="px-3 py-1 text-xs font-semibold rounded bg-amber-400 text-amber-900 hover:bg-amber-500 transition-colors whitespace-nowrap"
+            >
+              Kassa
+            </button>
+            <button
+              onClick={() => navigate('/students')}
+              className="px-3 py-1 text-xs font-semibold rounded bg-green-500 text-white hover:bg-green-600 transition-colors whitespace-nowrap"
+            >
+              Ny kund
+            </button>
+          </div>
+        </div>
+
+        {/* Sub-tabs (Bokningsschema | Resursschema) */}
         <div className="flex items-end border-b border-border px-4 bg-card shrink-0">
           {TABS.map((tab) => (
             <button
@@ -409,17 +605,54 @@ export function SchedulingCalendarPage() {
               )}
             >
               {tab.label}
-              {tab.comingSoon && (
-                <span className="text-[9px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 px-1 py-0.5 rounded leading-none dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800">
-                  Snart
-                </span>
-              )}
             </button>
           ))}
         </div>
 
-        {/* ─── Resursschema ───────────────────────────────────────────────── */}
-        {activeTab === 'resursschema' && <ResursschemaTab />}
+        {/* ─── Resursschema ────────────────────────────────────────────────── */}
+        {activeTab === 'resursschema' && (
+          <div className="flex flex-col flex-1 min-h-0">
+            {/* Reuse the same filter row and nav as Bokningsschema */}
+            <FilterRow
+              filterDate={filterDate}
+              showWeekends={showWeekends}
+              onFilterDateChange={(d) => {
+                setFilterDate(d);
+                if (d) {
+                  const date = new Date(d + 'T12:00:00');
+                  if (!isNaN(date.getTime())) setWeekStart(getMonday(date));
+                }
+              }}
+              onShowWeekendsChange={setShowWeekends}
+              vehicles={vehicles}
+              selectedVehicleId={selectedVehicleFilter}
+              onVehicleChange={setSelectedVehicleFilter}
+            />
+            <GridNavBar
+              title={gridTitle}
+              view={gridView}
+              onPrev={handleGridPrev}
+              onNext={handleGridNext}
+              onToday={handleGridToday}
+              onViewChange={handleGridViewChange}
+              onCreateSlot={() => setCreateSlotOpen(true)}
+            />
+            <div className="flex-1 overflow-auto px-4 py-3">
+              <div className="rounded-lg border border-border bg-card overflow-hidden">
+                <MultiVehicleGrid
+                  slots={filteredGridSlots}
+                  vehicles={filteredVehicles}
+                  weekStart={weekStart}
+                  numWeeks={numWeeks}
+                  showWeekends={showWeekends}
+                  isLoading={gridLoading || vehiclesLoading}
+                  lessonTypeMap={lessonTypeMap}
+                  onSlotClick={handleSlotClick}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ─── Bokningsschema ──────────────────────────────────────────────── */}
         {activeTab === 'bokningsschema' && (
@@ -449,6 +682,14 @@ export function SchedulingCalendarPage() {
                 }
               }}
               onShowWeekendsChange={setShowWeekends}
+              instructors={instructors}
+              selectedInstructorId={selectedInstructorFilter}
+              onInstructorChange={setSelectedInstructorFilter}
+              lessonTypes={lessonTypes}
+              selectedLessonTypeId={selectedLessonTypeFilter}
+              onLessonTypeChange={setSelectedLessonTypeFilter}
+              groupByDay={groupByDay}
+              onGroupByDayChange={setGroupByDay}
             />
 
             {/* Navigation bar */}
@@ -528,14 +769,15 @@ export function SchedulingCalendarPage() {
                 /* ── Week / 5-week view: multi-instructor grid ───────────── */
                 <div className="rounded-lg border border-border bg-card overflow-hidden">
                   <MultiInstructorGrid
-                    slots={gridSlots}
-                    instructors={instructors}
+                    slots={filteredGridSlots}
+                    instructors={filteredInstructors}
                     weekStart={weekStart}
                     numWeeks={numWeeks}
                     showWeekends={showWeekends}
                     isLoading={gridLoading}
                     lessonTypeMap={lessonTypeMap}
                     onSlotClick={handleSlotClick}
+                    groupByDay={groupByDay}
                   />
                 </div>
               )}
@@ -576,6 +818,6 @@ export function SchedulingCalendarPage() {
         open={hittaLedigTidOpen}
         onOpenChange={setHittaLedigTidOpen}
       />
-    </>
+    </PermissionGate>
   );
 }

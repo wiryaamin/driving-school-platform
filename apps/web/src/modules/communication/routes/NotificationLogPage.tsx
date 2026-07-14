@@ -57,10 +57,10 @@ import {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const CHANNEL_LABELS: Record<string, string> = {
-  email:  'E-post',
-  sms:    'SMS',
-  push:   'Push',
-  in_app: 'In-app',
+  email:    'E-post',
+  sms:      'SMS',
+  push:     'Push',
+  internal: 'In-app',
 };
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   pending:   { label: 'Väntar',     cls: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' },
@@ -256,7 +256,7 @@ function CreateNotificationDialog({ onClose }: { onClose: () => void }) {
                 <option value="email">E-post</option>
                 <option value="sms">SMS</option>
                 <option value="push">Push</option>
-                <option value="in_app">In-app</option>
+                <option value="internal">In-app</option>
               </select>
             </div>
           </div>
@@ -564,11 +564,20 @@ function PreferencesTab() {
                     <div className="flex flex-wrap gap-3">
                       {typedPrefs.map((pref) => (
                         <div key={pref.id} className="flex items-center gap-2">
-                          <Switch
-                            checked={pref.enabled}
-                            onCheckedChange={() => void togglePref(pref)}
-                            disabled={upsert.isPending}
-                          />
+                          <PermissionGate
+                            permission={Permissions.NOTIFICATIONS_PREFERENCES_MANAGE}
+                            fallback={
+                              <span className={`text-xs font-medium ${pref.enabled ? 'text-primary' : 'text-muted-foreground'}`}>
+                                {pref.enabled ? 'På' : 'Av'}
+                              </span>
+                            }
+                          >
+                            <Switch
+                              checked={pref.enabled}
+                              onCheckedChange={() => void togglePref(pref)}
+                              disabled={upsert.isPending}
+                            />
+                          </PermissionGate>
                           <span className="text-sm">{channelLabel(pref.channel)}</span>
                         </div>
                       ))}
@@ -587,7 +596,7 @@ function PreferencesTab() {
                         <div key={t.value} className="space-y-1">
                           <p className="text-xs font-medium">{t.label}</p>
                           <div className="flex gap-1.5 flex-wrap">
-                            {(['email', 'sms', 'push', 'in_app'] as const).map((ch) => {
+                            {(['email', 'sms', 'push', 'internal'] as const).map((ch) => {
                               const existing = prefs.find((p) => p.notification_type === t.value && p.channel === ch);
                               if (existing) return null;
                               return (

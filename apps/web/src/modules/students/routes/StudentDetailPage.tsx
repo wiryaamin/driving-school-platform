@@ -3,9 +3,10 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Home, ChevronRight, Copy, Check, Bell, AlertTriangle,
   Plus, Mail, MessageSquare, Car, Bus, Truck, X,
-  Calendar, BookOpen, ClipboardList, FileText,
+  Calendar, BookOpen, ClipboardList, FileText, Tag,
   ExternalLink, Settings, ChevronDown, Pencil, Link2, Loader2,
-  Upload, Trash2, Download, ShieldCheck,
+  Upload, Trash2, Download, ShieldCheck, Eye,
+  Pin, PinOff, Lock, Search,
 } from 'lucide-react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
@@ -13,7 +14,7 @@ import { StudentFinancePanel } from '@modules/finance/components/StudentFinanceP
 import { StudentPackagePanel } from '@modules/packages/index.js';
 import { useInstructor } from '@modules/instructors/index.js';
 import { useStudentUpcomingBookings, useBookingList, BookingStatusBadge, StudentBookingDialog, CancelBookingDialog, RescheduleBookingDialog } from '@modules/scheduling/index.js';
-import { Button, Skeleton } from '@platform/ui';
+import { Button, Input, Skeleton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@platform/ui';
 import { toast } from '@platform/ui';
 import { useSendMessage, useStudentMessages, type CommChannel } from '@modules/communication/hooks/useCommunication.js';
 import { StatusBadge, ChannelBadge } from '@modules/communication/index.js';
@@ -24,11 +25,19 @@ import type { LessonBooking } from '@platform/types';
 import {
   useStudent, useUpdateStudent, useArchiveStudent, studentKeys,
   useOrgStudentTags, useStudentTagAssignments, useAssignStudentTag, useRemoveStudentTag,
+  useCreateTag, useUpdateTag, useDeleteTag,
+  type CreateTagInput, type UpdateTagInput,
   useStudentAssessments,
   useStudentMilestones, useRecordMilestone,
   type StudentAssessment,
   type PermitMilestoneKey,
 } from '../hooks/useStudents.js';
+import {
+  useStudentNotes, useCreateNote, useUpdateNote, useDeleteNote,
+  NOTE_CATEGORY_LABELS,
+  type NoteCategory,
+  type StudentNote,
+} from '../hooks/useStudentNotes.js';
 import { ContractSheet } from '../components/ContractSheet.js';
 import { StudentStatusBadge, PermitStageBadge } from '../components/StudentStatusBadge.js';
 import { StudentTrainingPlanPanel } from '@modules/curriculum/index.js';
@@ -36,7 +45,7 @@ import { StudentForm } from '../components/StudentForm.js';
 import { useGeneratePortalToken } from '@modules/student-portal/index.js';
 import { useInstructorList } from '@modules/instructors/index.js';
 import {
-  useStudentGuardians, useCreateGuardian, useDeleteGuardian, useGenerateGuardianToken,
+  useStudentGuardians, useCreateGuardian, useUpdateGuardian, useDeleteGuardian, useGenerateGuardianToken,
   type Guardian,
 } from '@modules/guardian-portal/index.js';
 import { cn } from '@/lib/utils.js';
@@ -485,6 +494,213 @@ export function StudentDetailPage() {
   );
 }
 
+// ─── Tag manager dialog ────────────────────────────────────────────────────────
+
+function TagManagerDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const orgTags   = useOrgStudentTags();
+  const createTag = useCreateTag();
+  const updateTag = useUpdateTag();
+  const deleteTag = useDeleteTag();
+
+  const [newName,  setNewName]  = useState('');
+  const [newColor, setNewColor] = useState('#4F46E5');
+  const [newDesc,  setNewDesc]  = useState('');
+
+  const [editingId,    setEditingId]    = useState<string | null>(null);
+  const [editName,     setEditName]     = useState('');
+  const [editColor,    setEditColor]    = useState('');
+  const [editDesc,     setEditDesc]     = useState('');
+  const [confirmDelId, setConfirmDelId] = useState<string | null>(null);
+
+  function startEdit(tag: { id: string; name: string; color: string | null; description?: string | null }) {
+    setEditingId(tag.id);
+    setEditName(tag.name);
+    setEditColor(tag.color ?? '#4F46E5');
+    setEditDesc(tag.description ?? '');
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  function handleCreate() {
+    if (!newName.trim()) return;
+    createTag.mutate(
+      { name: newName.trim(), color: newColor || null, description: newDesc.trim() || null } satisfies CreateTagInput,
+      {
+        onSuccess: () => { setNewName(''); setNewColor('#4F46E5'); setNewDesc(''); },
+        onError: (e) => toast({ title: 'Kunde inte skapa tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function handleUpdate() {
+    if (!editingId || !editName.trim()) return;
+    updateTag.mutate(
+      { id: editingId, name: editName.trim(), color: editColor || null, description: editDesc.trim() || null } satisfies UpdateTagInput,
+      {
+        onSuccess: () => setEditingId(null),
+        onError: (e) => toast({ title: 'Kunde inte uppdatera tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function handleDelete(tagId: string) {
+    deleteTag.mutate(tagId, {
+      onSuccess: () => setConfirmDelId(null),
+      onError: (e) => toast({ title: 'Kunde inte ta bort tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Hantera taggar</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto pr-1">
+
+          {/* Existing tags */}
+          {orgTags.isLoading ? (
+            <div className="space-y-2">
+              {[1, 2].map((i) => <div key={i} className="h-9 bg-muted rounded animate-pulse" />)}
+            </div>
+          ) : (orgTags.data ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">Inga taggar skapade ännu.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {(orgTags.data ?? []).map((tag) =>
+                editingId === tag.id ? (
+                  <div key={tag.id} className="border border-primary/30 rounded-lg p-3 space-y-2 bg-primary/5">
+                    <div className="flex gap-2">
+                      <input
+                        type="color"
+                        value={editColor || '#4F46E5'}
+                        onChange={(e) => setEditColor(e.target.value)}
+                        className="h-8 w-9 cursor-pointer rounded border border-input p-0.5"
+                        title="Välj färg"
+                      />
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        placeholder="Taggnamn"
+                        className="flex-1 h-8 text-sm"
+                        onKeyDown={(e) => e.key === 'Enter' && handleUpdate()}
+                      />
+                    </div>
+                    <Input
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      placeholder="Beskrivning (valfritt)"
+                      className="h-8 text-sm"
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" className="h-7 text-xs" onClick={handleUpdate} disabled={updateTag.isPending || !editName.trim()}>
+                        Spara
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancelEdit}>
+                        Avbryt
+                      </Button>
+                    </div>
+                  </div>
+                ) : confirmDelId === tag.id ? (
+                  <div key={tag.id} className="border border-destructive/30 rounded-lg p-3 bg-destructive/5">
+                    <p className="text-sm text-foreground mb-2">Ta bort <strong>{tag.name}</strong>? Taggen tas bort från alla elever.</p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 text-xs"
+                        onClick={() => handleDelete(tag.id)}
+                        disabled={deleteTag.isPending}
+                      >
+                        Ta bort
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setConfirmDelId(null)}>
+                        Avbryt
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={tag.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40 transition-colors">
+                    <span
+                      className="w-3 h-3 rounded-full shrink-0 border border-black/10"
+                      style={{ backgroundColor: tag.color ?? '#94a3b8' }}
+                    />
+                    <span className="text-sm font-medium flex-1 min-w-0 truncate">{tag.name}</span>
+                    {tag.description && (
+                      <span className="text-xs text-muted-foreground truncate max-w-[120px] hidden sm:block">{tag.description}</span>
+                    )}
+                    <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                      <button
+                        onClick={() => startEdit(tag)}
+                        className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                        title="Redigera tagg"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelId(tag.id)}
+                        className="p-1 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                        title="Ta bort tagg"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </PermissionGate>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+
+          {/* Create new tag */}
+          <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+            <div className="border-t border-border pt-4 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Skapa ny tagg</p>
+              <div className="flex gap-2">
+                <input
+                  type="color"
+                  value={newColor}
+                  onChange={(e) => setNewColor(e.target.value)}
+                  className="h-8 w-9 cursor-pointer rounded border border-input p-0.5"
+                  title="Välj färg"
+                />
+                <Input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Taggnamn (t.ex. Intensivkurs)"
+                  className="flex-1 h-8 text-sm"
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+                />
+              </div>
+              <Input
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="Beskrivning (valfritt)"
+                className="h-8 text-sm"
+              />
+              <Button
+                size="sm"
+                className="h-8"
+                onClick={handleCreate}
+                disabled={createTag.isPending || !newName.trim()}
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Skapa tagg
+              </Button>
+            </div>
+          </PermissionGate>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>Stäng</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Tags card ────────────────────────────────────────────────────────────────
 
 function TagsCard({ studentId }: { studentId: string }) {
@@ -493,12 +709,24 @@ function TagsCard({ studentId }: { studentId: string }) {
   const assignMut = useAssignStudentTag(studentId);
   const removeMut = useRemoveStudentTag(studentId);
 
+  const [managerOpen, setManagerOpen] = useState(false);
+
   const assignedIds = new Set((assigned.data ?? []).map((t) => t.id));
   const available   = (orgTags.data ?? []).filter((t) => !assignedIds.has(t.id));
 
   return (
     <div className="bg-card border border-border rounded-lg p-4">
-      <SectionHeading title="Taggar" />
+      <div className="flex items-center justify-between mb-2">
+        <SectionHeading title="Taggar" />
+        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+          <button
+            onClick={() => setManagerOpen(true)}
+            className="text-[10px] text-primary hover:underline"
+          >
+            Hantera taggar
+          </button>
+        </PermissionGate>
+      </div>
 
       {assigned.isLoading ? (
         <div className="h-5 w-24 bg-muted rounded animate-pulse mb-2" />
@@ -513,16 +741,18 @@ function TagsCard({ studentId }: { studentId: string }) {
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
               )}
               {tag.name}
-              <button
-                onClick={() => removeMut.mutate(tag.id, {
-                  onError: (e) => toast({ title: 'Kunde inte ta bort tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
-                })}
-                disabled={removeMut.isPending}
-                className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
-                title="Ta bort tagg"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
+              <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                <button
+                  onClick={() => removeMut.mutate(tag.id, {
+                    onError: (e) => toast({ title: 'Kunde inte ta bort tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+                  })}
+                  disabled={removeMut.isPending}
+                  className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
+                  title="Ta bort tagg"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </PermissionGate>
             </span>
           ))}
         </div>
@@ -530,29 +760,38 @@ function TagsCard({ studentId }: { studentId: string }) {
         <p className="text-xs text-muted-foreground mb-2">Inga taggar tillagda.</p>
       )}
 
-      {available.length > 0 && (
-        <select
-          value=""
-          onChange={(e) => {
-            const tagId = e.target.value;
-            if (!tagId) return;
-            assignMut.mutate(tagId, {
-              onError: (e) => toast({ title: 'Kunde inte lägga till tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
-            });
-          }}
-          disabled={assignMut.isPending}
-          className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-        >
-          <option value="">Lägg till tagg…</option>
-          {available.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
-      )}
+      <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+        {available.length > 0 && (
+          <select
+            value=""
+            onChange={(e) => {
+              const tagId = e.target.value;
+              if (!tagId) return;
+              assignMut.mutate(tagId, {
+                onError: (e) => toast({ title: 'Kunde inte lägga till tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+              });
+            }}
+            disabled={assignMut.isPending}
+            className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+          >
+            <option value="">Lägg till tagg…</option>
+            {available.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        )}
 
-      {!orgTags.isLoading && orgTags.data?.length === 0 && (
-        <p className="text-[10px] text-muted-foreground mt-1">Inga taggar skapade för organisationen.</p>
-      )}
+        {!orgTags.isLoading && orgTags.data?.length === 0 && (
+          <button
+            onClick={() => setManagerOpen(true)}
+            className="text-xs text-primary hover:underline"
+          >
+            + Skapa första taggen
+          </button>
+        )}
+      </PermissionGate>
+
+      <TagManagerDialog open={managerOpen} onClose={() => setManagerOpen(false)} />
     </div>
   );
 }
@@ -826,17 +1065,26 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
   const sendMessage = useSendMessage();
   const queryClient = useQueryClient();
 
-  const [showForm,    setShowForm]    = useState(false);
-  const [notifyId,    setNotifyId]    = useState<string | null>(null);
-  const [firstName,   setFirstName]   = useState('');
-  const [lastName,    setLastName]    = useState('');
-  const [email,       setEmail]       = useState('');
-  const [phone,       setPhone]       = useState('');
-  const [relation,    setRelation]    = useState('');
-  const [canPay,    setCanPay]    = useState(false);
-  const [generatedUrls, setGeneratedUrls] = useState<Record<string, string>>({});
-  const [copiedId,  setCopiedId]  = useState<string | null>(null);
-  const [invitedId, setInvitedId] = useState<string | null>(null);
+  const updateMut   = useUpdateGuardian();
+  const [showForm,        setShowForm]        = useState(false);
+  const [notifyId,        setNotifyId]        = useState<string | null>(null);
+  const [firstName,       setFirstName]       = useState('');
+  const [lastName,        setLastName]        = useState('');
+  const [email,           setEmail]           = useState('');
+  const [phone,           setPhone]           = useState('');
+  const [relation,        setRelation]        = useState('');
+  const [canPay,          setCanPay]          = useState(false);
+  const [generatedUrls,   setGeneratedUrls]   = useState<Record<string, string>>({});
+  const [copiedId,        setCopiedId]        = useState<string | null>(null);
+  const [invitedId,       setInvitedId]       = useState<string | null>(null);
+  const [editId,          setEditId]          = useState<string | null>(null);
+  const [editFirstName,   setEditFirstName]   = useState('');
+  const [editLastName,    setEditLastName]    = useState('');
+  const [editEmail,       setEditEmail]       = useState('');
+  const [editPhone,       setEditPhone]       = useState('');
+  const [editRelation,    setEditRelation]    = useState('');
+  const [editCanPay,      setEditCanPay]      = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   function resetForm() {
     setFirstName(''); setLastName(''); setEmail('');
@@ -862,12 +1110,55 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
   }
 
   function handleDelete(g: Guardian) {
-    if (!window.confirm(`Ta bort ${g.first_name} ${g.last_name}?`)) return;
+    setConfirmDeleteId(g.id);
+    setNotifyId(null);
+    setEditId(null);
+  }
+
+  function handleDeleteConfirmed(g: Guardian) {
     deleteMut.mutate(
       { guardianId: g.id, studentId },
       {
-        onSuccess: () => toast({ title: 'Vårdnadshavare borttagen' }),
+        onSuccess: () => { setConfirmDeleteId(null); toast({ title: 'Vårdnadshavare borttagen' }); },
         onError: (e) => toast({ title: 'Kunde inte ta bort', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function handleEditOpen(g: Guardian) {
+    setEditId(g.id);
+    setEditFirstName(g.first_name);
+    setEditLastName(g.last_name);
+    setEditEmail(g.email);
+    setEditPhone(g.phone ?? '');
+    setEditRelation(g.relation ?? '');
+    setEditCanPay(g.can_pay);
+    setNotifyId(null);
+    setConfirmDeleteId(null);
+  }
+
+  function resetEdit() {
+    setEditId(null);
+    setEditFirstName(''); setEditLastName(''); setEditEmail('');
+    setEditPhone(''); setEditRelation(''); setEditCanPay(false);
+  }
+
+  function handleUpdate() {
+    if (!editId || !editFirstName.trim() || !editLastName.trim() || !editEmail.trim()) return;
+    updateMut.mutate(
+      {
+        guardianId: editId,
+        studentId,
+        first_name: editFirstName.trim(),
+        last_name:  editLastName.trim(),
+        email:      editEmail.trim(),
+        phone:      editPhone.trim() || null,
+        relation:   editRelation.trim() || null,
+        can_pay:    editCanPay,
+      },
+      {
+        onSuccess: () => { resetEdit(); toast({ title: 'Vårdnadshavare uppdaterad' }); },
+        onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
       },
     );
   }
@@ -938,80 +1229,165 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
             const url = generatedUrls[g.id];
             return (
               <div key={g.id} className="border border-border rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">{g.first_name} {g.last_name}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {g.email}{g.phone ? ` · ${g.phone}` : ''}{g.relation ? ` · ${g.relation}` : ''}
-                      {g.can_pay && <span className="ml-1 text-green-600 font-semibold">· Betalning</span>}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {invitedId === g.id ? (
-                      <span className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-50 text-green-700 border border-green-200 flex items-center gap-1">
-                        <Check className="w-3 h-3" />
-                        Skickad!
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => handleInviteAndNotify(g)}
-                        disabled={tokenMut.isPending || sendMessage.isPending}
-                        className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center gap-1"
-                        title="Generera länk och skicka e-postinbjudan"
-                      >
-                        <Mail className="w-3 h-3" />
-                        Bjud in
+                {editId === g.id ? (
+                  /* ── Edit form ── */
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-foreground">Redigera vårdnadshavare</p>
+                      <button onClick={resetEdit} className="text-muted-foreground hover:text-foreground">
+                        <X className="w-3.5 h-3.5" />
                       </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <FieldInput label="Förnamn *" value={editFirstName} onChange={setEditFirstName} placeholder="Förnamn" />
+                      <FieldInput label="Efternamn *" value={editLastName} onChange={setEditLastName} placeholder="Efternamn" />
+                      <FieldInput label="E-post *" value={editEmail} onChange={setEditEmail} type="email" placeholder="email@example.com" fullWidth />
+                      <FieldInput label="Telefon" value={editPhone} onChange={setEditPhone} type="tel" placeholder="+46 70 000 00 00" />
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Relation</label>
+                        <select
+                          value={editRelation}
+                          onChange={(e) => setEditRelation(e.target.value)}
+                          className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                          <option value="">Välj relation</option>
+                          <option value="Förälder">Förälder</option>
+                          <option value="Vårdnadshavare">Vårdnadshavare</option>
+                          <option value="Syskon">Syskon</option>
+                          <option value="Annan">Annan</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" id={`edit-canpay-${g.id}`} checked={editCanPay} onChange={(e) => setEditCanPay(e.target.checked)} className="rounded" />
+                      <label htmlFor={`edit-canpay-${g.id}`} className="text-xs text-muted-foreground cursor-pointer">Kan se ekonomiinformation</label>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <GreenBtn
+                        onClick={handleUpdate}
+                        disabled={!editFirstName.trim() || !editLastName.trim() || !editEmail.trim() || updateMut.isPending}
+                      >
+                        {updateMut.isPending ? 'Sparar...' : 'Spara ändringar'}
+                      </GreenBtn>
+                      <button
+                        onClick={resetEdit}
+                        className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded transition-colors"
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── View mode ── */
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">{g.first_name} {g.last_name}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {g.email}{g.phone ? ` · ${g.phone}` : ''}{g.relation ? ` · ${g.relation}` : ''}
+                          {g.can_pay && <span className="ml-1 text-green-600 font-semibold">· Betalning</span>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {invitedId === g.id ? (
+                          <span className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-50 text-green-700 border border-green-200 flex items-center gap-1">
+                            <Check className="w-3 h-3" />
+                            Skickad!
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleInviteAndNotify(g)}
+                            disabled={tokenMut.isPending || sendMessage.isPending}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                            title="Generera länk och skicka e-postinbjudan"
+                          >
+                            <Mail className="w-3 h-3" />
+                            Bjud in
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
+                          className={cn(
+                            'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
+                            notifyId === g.id
+                              ? 'bg-primary/10 text-primary border border-primary/30'
+                              : 'bg-muted text-muted-foreground hover:bg-accent',
+                          )}
+                          title="Skicka meddelande"
+                        >
+                          <Mail className="w-3 h-3" />
+                          Notifiera
+                        </button>
+                        <button
+                          onClick={() => handleGenerateToken(g)}
+                          disabled={tokenMut.isPending}
+                          className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                          title="Generera portallänk (manuell kopiering)"
+                        >
+                          <Link2 className="w-3 h-3" />
+                          Länk
+                        </button>
+                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                          <button
+                            onClick={() => handleEditOpen(g)}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors flex items-center gap-1"
+                            title="Redigera"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            Redigera
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                          <button
+                            onClick={() => handleDelete(g)}
+                            disabled={deleteMut.isPending}
+                            className="w-6 h-6 flex items-center justify-center rounded text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40 transition-colors"
+                            title="Ta bort"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </PermissionGate>
+                      </div>
+                    </div>
+                    {confirmDeleteId === g.id && (
+                      <div className="flex items-center justify-between gap-2 bg-red-50 dark:bg-red-950/20 rounded p-2 border border-red-100 dark:border-red-900/50">
+                        <p className="text-xs text-red-700 dark:text-red-400">Ta bort {g.first_name} {g.last_name}?</p>
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => handleDeleteConfirmed(g)}
+                            disabled={deleteMut.isPending}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                          >
+                            {deleteMut.isPending ? 'Tar bort...' : 'Ta bort'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded border border-border text-muted-foreground hover:bg-accent transition-colors"
+                          >
+                            Avbryt
+                          </button>
+                        </div>
+                      </div>
                     )}
-                    <button
-                      onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
-                      className={cn(
-                        'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
-                        notifyId === g.id
-                          ? 'bg-primary/10 text-primary border border-primary/30'
-                          : 'bg-muted text-muted-foreground hover:bg-accent',
-                      )}
-                      title="Skicka meddelande"
-                    >
-                      <Mail className="w-3 h-3" />
-                      Notifiera
-                    </button>
-                    <button
-                      onClick={() => handleGenerateToken(g)}
-                      disabled={tokenMut.isPending}
-                      className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
-                      title="Generera portallänk (manuell kopiering)"
-                    >
-                      <Link2 className="w-3 h-3" />
-                      Länk
-                    </button>
-                    <button
-                      onClick={() => handleDelete(g)}
-                      disabled={deleteMut.isPending}
-                      className="w-6 h-6 flex items-center justify-center rounded text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40 transition-colors"
-                      title="Ta bort"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-                {notifyId === g.id && (
-                  <GuardianNotifyDialog
-                    guardian={g}
-                    onClose={() => setNotifyId(null)}
-                  />
-                )}
-                {url && (
-                  <div className="flex items-center gap-2 bg-muted/40 rounded px-2 py-1.5">
-                    <p className="text-[10px] font-mono text-muted-foreground truncate flex-1">{url}</p>
-                    <button
-                      onClick={() => handleCopy(g.id, url)}
-                      className="shrink-0 text-[10px] font-medium text-blue-600 hover:underline flex items-center gap-1"
-                    >
-                      {copiedId === g.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                      {copiedId === g.id ? 'Kopierat' : 'Kopiera'}
-                    </button>
-                  </div>
+                    {notifyId === g.id && (
+                      <GuardianNotifyDialog
+                        guardian={g}
+                        onClose={() => setNotifyId(null)}
+                      />
+                    )}
+                    {url && (
+                      <div className="flex items-center gap-2 bg-muted/40 rounded px-2 py-1.5">
+                        <p className="text-[10px] font-mono text-muted-foreground truncate flex-1">{url}</p>
+                        <button
+                          onClick={() => handleCopy(g.id, url)}
+                          className="shrink-0 text-[10px] font-medium text-blue-600 hover:underline flex items-center gap-1"
+                        >
+                          {copiedId === g.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === g.id ? 'Kopierat' : 'Kopiera'}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             );
@@ -1065,13 +1441,15 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
           </div>
         </div>
       ) : (
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Lägg till vårdnadshavare
-        </button>
+        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+          <button
+            onClick={() => setShowForm(true)}
+            className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Lägg till vårdnadshavare
+          </button>
+        </PermissionGate>
       )}
     </div>
   );
@@ -1235,6 +1613,7 @@ function KundkortTab({
                 {age && (
                   <p className="text-xs text-muted-foreground">{age}</p>
                 )}
+                <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-mono font-medium">{pnr}</span>
                   {pnr !== '—' && <CopyBtn text={pnr} />}
@@ -1242,6 +1621,7 @@ function KundkortTab({
                     Sök
                   </button>
                 </div>
+                </PermissionGate>
               </div>
               {/* E-post placeholder */}
               <div>
@@ -3370,7 +3750,90 @@ function KommunikationsloggarPanel({ studentId }: { studentId: string }) {
   );
 }
 
-function AktivitetsloggarPanel({ studentId }: { studentId: string }) {
+// ─── Timeline types + constants ───────────────────────────────────────────────
+
+type TimelineEventType = 'booking' | 'note' | 'document' | 'tag' | 'milestone' | 'status';
+
+type TimelineEvent = {
+  id:       string;
+  at:       string;
+  type:     TimelineEventType;
+  title:    string;
+  subtitle: string;
+};
+
+const TIMELINE_FILTERS: { key: TimelineEventType | 'all'; label: string }[] = [
+  { key: 'all',       label: 'Alla' },
+  { key: 'booking',   label: 'Lektioner' },
+  { key: 'note',      label: 'Anteckningar' },
+  { key: 'document',  label: 'Dokument' },
+  { key: 'tag',       label: 'Taggar' },
+  { key: 'milestone', label: 'Milstolpar' },
+  { key: 'status',    label: 'Status' },
+];
+
+const TIMELINE_TYPE_COLOR: Record<TimelineEventType, string> = {
+  booking:   'bg-blue-500',
+  note:      'bg-amber-500',
+  document:  'bg-emerald-500',
+  tag:       'bg-purple-500',
+  milestone: 'bg-sky-500',
+  status:    'bg-slate-400',
+};
+
+const TIMELINE_TYPE_ICON: Record<TimelineEventType, React.ComponentType<{ className?: string }>> = {
+  booking:   Calendar,
+  note:      MessageSquare,
+  document:  FileText,
+  tag:       Tag,
+  milestone: BookOpen,
+  status:    ClipboardList,
+};
+
+const DOC_CATEGORY_SV: Record<string, string> = {
+  identity_document:   'ID-handling',
+  medical_clearance:   'Läkarintyg',
+  theory_result:       'Kunskapsprov',
+  risk_education:      'Riskutbildning',
+  practical_result:    'Körprov',
+  licence_copy:        'Körkortskopia',
+  enrollment_contract: 'Inskrivningsavtal',
+  other:               'Övrigt',
+};
+
+const TIMELINE_MILESTONE_SV: Record<string, string> = {
+  risk1_booked:          'Risk 1 bokat',
+  risk1_completed:       'Risk 1 genomfört',
+  risk2_booked:          'Risk 2 bokat',
+  risk2_completed:       'Risk 2 genomfört',
+  theory_exam_booked:    'Kunskapsprov bokat',
+  theory_passed:         'Kunskapsprov godkänt',
+  practical_exam_booked: 'Körprov bokat',
+  practical_passed:      'Körprov godkänt',
+  licence_issued:        'Körkort utfärdat',
+};
+
+const STUDENT_STATUS_SV: Record<string, string> = {
+  lead:       'Prospekt',
+  onboarding: 'Onboarding',
+  active:     'Aktiv',
+  paused:     'Pausad',
+  completed:  'Avklarad',
+  withdrawn:  'Avhopp',
+  archived:   'Arkiverad',
+};
+
+// ─── Student Timeline Panel ───────────────────────────────────────────────────
+
+function StudentTimelinePanel({
+  student,
+}: {
+  student: NonNullable<ReturnType<typeof useStudent>['data']>;
+}) {
+  const studentId = student.id;
+  const [typeFilter, setTypeFilter] = useState<TimelineEventType | 'all'>('all');
+  const [search, setSearch] = useState('');
+
   const { data: bookingData } = useQuery<BookingLogRow[]>({
     queryKey: ['student-all-bookings', studentId],
     queryFn: async () => {
@@ -3380,64 +3843,243 @@ function AktivitetsloggarPanel({ studentId }: { studentId: string }) {
         .eq('student_id', studentId)
         .is('deleted_at', null)
         .order('starts_at', { ascending: false })
-        .limit(50);
+        .limit(100);
       return (rows ?? []) as BookingLogRow[];
     },
     staleTime: 2 * 60_000,
   });
-  const { data: msgData } = useStudentMessages(studentId);
 
-  const events = useMemo(() => {
-    type ActivityEvent = {
-      id: string; at: string; type: 'booking' | 'message';
-      label: string; sub: string; status: string;
-    };
-    const items: ActivityEvent[] = [];
+  const { data: notes = [] } = useStudentNotes(studentId);
+
+  const { data: docData } = useQuery<{ id: string; category: string; file_name: string; created_at: string }[]>({
+    queryKey: ['student-timeline-docs', studentId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('student_documents')
+        .select('id, category, file_name, created_at')
+        .eq('student_id', studentId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as { id: string; category: string; file_name: string; created_at: string }[];
+    },
+    staleTime: 30_000,
+  });
+
+  const { data: tagAssignments } = useQuery<{ tag_id: string; assigned_at: string; tag_name: string }[]>({
+    queryKey: ['student-timeline-tags', studentId],
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_tag_assignments')
+        .select('tag_id, assigned_at, student_tags(name)')
+        .eq('student_id', studentId)
+        .order('assigned_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as Array<{
+        tag_id:       string;
+        assigned_at:  string;
+        student_tags: { name: string } | null;
+      }>).map(r => ({
+        tag_id:      r.tag_id,
+        assigned_at: r.assigned_at,
+        tag_name:    r.student_tags?.name ?? '–',
+      }));
+    },
+    staleTime: 2 * 60_000,
+  });
+
+  const { data: milestones = [] } = useStudentMilestones(studentId);
+
+  const allEvents = useMemo<TimelineEvent[]>(() => {
+    const items: TimelineEvent[] = [];
+
+    items.push({
+      id:       `status-created-${studentId}`,
+      at:       student.created_at,
+      type:     'status',
+      title:    'Elev registrerad',
+      subtitle: `Status: ${STUDENT_STATUS_SV[student.status] ?? student.status}`,
+    });
+    if (student.enrolled_at) {
+      items.push({
+        id:       `status-enrolled-${studentId}`,
+        at:       student.enrolled_at,
+        type:     'status',
+        title:    'Elev inskriven',
+        subtitle: 'Inskrivningsdatum registrerat',
+      });
+    }
+    if (student.status_changed_at && student.status_changed_at !== student.created_at) {
+      items.push({
+        id:       `status-changed-${studentId}`,
+        at:       student.status_changed_at,
+        type:     'status',
+        title:    'Status ändrad',
+        subtitle: `Nuvarande: ${STUDENT_STATUS_SV[student.status] ?? student.status}`,
+      });
+    }
 
     for (const b of bookingData ?? []) {
-      const dateStr  = new Date(b.starts_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
+      const dateStr  = new Date(b.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short' });
+      const timeStr  = `${formatTime(b.starts_at)}–${formatTime(b.ends_at)}`;
       const statusSv = BOOKING_STATUS_SV[b.status]?.label ?? b.status;
-      items.push({ id: b.id, at: b.created_at, type: 'booking', label: `Lektion ${dateStr}`, sub: statusSv, status: b.status });
+      items.push({
+        id:       `booking-${b.id}`,
+        at:       b.starts_at,
+        type:     'booking',
+        title:    `Körlektion ${dateStr}`,
+        subtitle: `${timeStr} · ${statusSv}`,
+      });
     }
-    for (const m of msgData?.data ?? []) {
-      const chanLabel = m.channel === 'email' ? 'E-post' : m.channel === 'sms' ? 'SMS' : m.channel;
-      const preview   = m.body.length > 60 ? m.body.slice(0, 60) + '…' : m.body;
-      items.push({ id: m.id, at: m.created_at, type: 'message', label: `${chanLabel} skickat`, sub: preview, status: m.status });
-    }
-    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 60);
-  }, [bookingData, msgData]);
 
-  if (!events.length) {
-    return <LogEmptyState icon={ClipboardList} text="Ingen aktivitetshistorik registrerad." />;
-  }
+    for (const n of notes) {
+      const cat     = NOTE_CATEGORY_LABELS[n.category] ?? n.category;
+      const preview = n.body.length > 80 ? n.body.slice(0, 80) + '…' : n.body;
+      items.push({
+        id:       `note-${n.id}`,
+        at:       n.created_at,
+        type:     'note',
+        title:    `Anteckning — ${cat}${n.is_pinned ? ' (nålad)' : ''}`,
+        subtitle: preview,
+      });
+    }
+
+    for (const d of docData ?? []) {
+      const cat = DOC_CATEGORY_SV[d.category] ?? d.category;
+      items.push({
+        id:       `doc-${d.id}`,
+        at:       d.created_at,
+        type:     'document',
+        title:    `Dokument uppladdad — ${cat}`,
+        subtitle: d.file_name,
+      });
+    }
+
+    for (const t of tagAssignments ?? []) {
+      items.push({
+        id:       `tag-${t.tag_id}`,
+        at:       t.assigned_at,
+        type:     'tag',
+        title:    'Tagg tilldelad',
+        subtitle: t.tag_name,
+      });
+    }
+
+    for (const m of milestones) {
+      items.push({
+        id:       `milestone-${m.id}`,
+        at:       m.achieved_at,
+        type:     'milestone',
+        title:    `Milstolpe — ${TIMELINE_MILESTONE_SV[m.milestone] ?? m.milestone}`,
+        subtitle: m.notes ?? `Kategori ${m.licence_category}`,
+      });
+    }
+
+    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  }, [student, studentId, bookingData, notes, docData, tagAssignments, milestones]);
+
+  const filtered = useMemo(() => {
+    let items = allEvents;
+    if (typeFilter !== 'all') items = items.filter(e => e.type === typeFilter);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      items = items.filter(e =>
+        e.title.toLowerCase().includes(q) || e.subtitle.toLowerCase().includes(q),
+      );
+    }
+    return items;
+  }, [allEvents, typeFilter, search]);
+
+  const grouped = useMemo(() => {
+    const groups: { month: string; events: TimelineEvent[] }[] = [];
+    let currentMonth = '';
+    for (const ev of filtered) {
+      const month = new Date(ev.at).toLocaleDateString('sv-SE', { year: 'numeric', month: 'long' });
+      if (month !== currentMonth) {
+        currentMonth = month;
+        groups.push({ month, events: [] });
+      }
+      const lastGroup = groups.at(-1);
+      if (lastGroup) lastGroup.events.push(ev);
+    }
+    return groups;
+  }, [filtered]);
 
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-border bg-muted/20">
-        <p className="text-xs font-semibold text-muted-foreground">{events.length} händelser</p>
-      </div>
-      <div className="divide-y divide-border">
-        {events.map((ev, idx) => (
-          <div key={`${ev.id}-${idx}`} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/10 transition-colors">
-            <div className={cn(
-              'mt-1.5 w-2 h-2 rounded-full shrink-0',
-              ev.type === 'booking' ? 'bg-blue-500' : 'bg-emerald-500',
-            )} />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-foreground">{ev.label}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{ev.sub}</p>
-            </div>
-            <p className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
-              {new Date(ev.at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
-            </p>
-          </div>
+    <div className="space-y-4">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {TIMELINE_FILTERS.map(f => (
+          <button
+            key={f.key}
+            onClick={() => setTypeFilter(f.key)}
+            className={cn(
+              'px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors',
+              typeFilter === f.key
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-card text-muted-foreground border-border hover:border-foreground/30',
+            )}
+          >
+            {f.label}
+          </button>
         ))}
       </div>
+
+      <div className="relative">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Sök i tidslinje…"
+          className="w-full h-8 pl-8 pr-3 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+      </div>
+
+      {filtered.length === 0 && (
+        <LogEmptyState icon={ClipboardList} text="Inga händelser matchar filtret." />
+      )}
+
+      {grouped.map(group => (
+        <div key={group.month}>
+          <div className="flex items-center gap-2 mb-2">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider capitalize">
+              {group.month}
+            </p>
+            <div className="flex-1 h-px bg-border" />
+            <p className="text-[10px] text-muted-foreground">{group.events.length}</p>
+          </div>
+          <div className="bg-card border border-border rounded-lg overflow-hidden divide-y divide-border">
+            {group.events.map(ev => {
+              const Icon = TIMELINE_TYPE_ICON[ev.type];
+              const dot  = TIMELINE_TYPE_COLOR[ev.type];
+              return (
+                <div key={ev.id} className="flex items-start gap-3 px-4 py-2.5 hover:bg-muted/10 transition-colors">
+                  <div className={cn('mt-0.5 w-6 h-6 rounded-full shrink-0 flex items-center justify-center', dot)}>
+                    <Icon className="w-3 h-3 text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-foreground leading-snug">{ev.title}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{ev.subtitle}</p>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap mt-0.5">
+                    {new Date(ev.at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-function LoggarTab({ studentId }: { studentId: string }) {
+function LoggarTab({
+  student,
+}: {
+  student: NonNullable<ReturnType<typeof useStudent>['data']>;
+}) {
   const [subTab, setSubTab] = useState<LogSubTab>('bokningsloggar');
 
   const SUB_TABS: { key: LogSubTab; label: string }[] = [
@@ -3450,9 +4092,9 @@ function LoggarTab({ studentId }: { studentId: string }) {
     <div>
       <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
       <div className="pt-4">
-        {subTab === 'bokningsloggar'       && <BokningsloggarPanel studentId={studentId} />}
-        {subTab === 'kommunikationsloggar' && <KommunikationsloggarPanel studentId={studentId} />}
-        {subTab === 'aktivitetsloggar'     && <AktivitetsloggarPanel studentId={studentId} />}
+        {subTab === 'bokningsloggar'       && <BokningsloggarPanel studentId={student.id} />}
+        {subTab === 'kommunikationsloggar' && <KommunikationsloggarPanel studentId={student.id} />}
+        {subTab === 'aktivitetsloggar'     && <StudentTimelinePanel student={student} />}
       </div>
     </div>
   );
@@ -4265,6 +4907,11 @@ function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: stri
   const [description, setDescription] = useState('');
   const [uploading, setUploading]   = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [renameId,     setRenameId]    = useState<string | null>(null);
+  const [renameValue,  setRenameValue]  = useState('');
+  const [confirmDelId, setConfirmDelId] = useState<string | null>(null);
+  const [previewUrl,   setPreviewUrl]   = useState<string | null>(null);
+  const [previewName,  setPreviewName]  = useState('');
 
   const { data: docs, isLoading } = useQuery({
     queryKey: ['student-documents', studentId],
@@ -4296,6 +4943,23 @@ function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: stri
       toast({ title: 'Dokument borttaget' });
     },
     onError: () => toast({ title: 'Kunde inte ta bort dokumentet', variant: 'destructive' }),
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const { error } = await supabase
+        .from('student_documents')
+        .update({ file_name: name } as never)
+        .eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['student-documents', studentId] });
+      toast({ title: 'Fil omdöpt' });
+      setRenameId(null);
+      setRenameValue('');
+    },
+    onError: () => toast({ title: 'Kunde inte döpa om filen', variant: 'destructive' }),
   });
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -4355,6 +5019,22 @@ function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: stri
       a.href = data.signedUrl;
       a.download = doc.file_name;
       a.click();
+    }
+  }
+
+  async function handlePreview(doc: StudentDoc) {
+    const { data } = await supabase.storage
+      .from(doc.storage_bucket)
+      .createSignedUrl(doc.storage_path, 300);
+    if (!data?.signedUrl) {
+      toast({ title: 'Kan inte förhandsgranska', variant: 'destructive' });
+      return;
+    }
+    if (doc.mime_type?.startsWith('image/')) {
+      setPreviewName(doc.file_name);
+      setPreviewUrl(data.signedUrl);
+    } else {
+      window.open(data.signedUrl, '_blank');
     }
   }
 
@@ -4427,53 +5107,143 @@ function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: stri
       {!isLoading && docs && docs.length > 0 && (
         <div className="space-y-1">
           {docs.map(doc => {
-            const Icon = DOC_ICON[doc.category] ?? FileText;
+            const Icon            = DOC_ICON[doc.category] ?? FileText;
+            const isRenaming      = renameId === doc.id;
+            const isConfirmDelete = confirmDelId === doc.id;
             return (
-              <div key={doc.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border bg-card hover:bg-accent/20 transition-colors">
-                <Icon className="w-4 h-4 text-muted-foreground shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{doc.file_name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {DOC_CATEGORY_LABELS[doc.category] ?? doc.category}
-                    {doc.description && ` — ${doc.description}`}
-                    {doc.file_size_bytes && ` · ${fmtBytes(doc.file_size_bytes)}`}
-                  </p>
+              <div key={doc.id} className="rounded-lg border border-border bg-card overflow-hidden">
+                <div className={cn('flex items-center gap-3 px-3 py-2.5 transition-colors', !isRenaming && !isConfirmDelete && 'hover:bg-accent/20')}>
+                  <Icon className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    {isRenaming ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && renameValue.trim()) {
+                            renameMutation.mutate({ id: doc.id, name: renameValue.trim() });
+                          }
+                          if (e.key === 'Escape') { setRenameId(null); setRenameValue(''); }
+                        }}
+                        className="w-full h-7 px-2 text-sm rounded border border-primary bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                    ) : (
+                      <p className="text-sm font-medium truncate">{doc.file_name}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      {DOC_CATEGORY_LABELS[doc.category] ?? doc.category}
+                      {doc.description && ` — ${doc.description}`}
+                      {doc.file_size_bytes && ` · ${fmtBytes(doc.file_size_bytes)}`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isRenaming ? (
+                      <>
+                        <button
+                          onClick={() => { if (renameValue.trim()) renameMutation.mutate({ id: doc.id, name: renameValue.trim() }); }}
+                          disabled={renameMutation.isPending || !renameValue.trim()}
+                          className="p-1.5 rounded text-green-600 hover:bg-green-50 dark:hover:bg-green-950/30 transition-colors"
+                          title="Spara"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => { setRenameId(null); setRenameValue(''); }}
+                          className="p-1.5 rounded text-muted-foreground hover:bg-accent transition-colors"
+                          title="Avbryt"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => void handlePreview(doc)}
+                          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                          title="Förhandsgranska"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        <PermissionGate permission={Permissions.DOCUMENTS_UPDATE}>
+                          <button
+                            onClick={() => { setRenameId(doc.id); setRenameValue(doc.file_name); setConfirmDelId(null); }}
+                            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                            title="Döp om"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </PermissionGate>
+                        <button
+                          onClick={() => void handleDownload(doc)}
+                          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                          title="Ladda ned"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                        <PermissionGate permission={Permissions.DOCUMENTS_DELETE}>
+                          <button
+                            onClick={() => { setConfirmDelId(doc.id); setRenameId(null); setRenameValue(''); }}
+                            disabled={deleteMutation.isPending}
+                            className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                            title="Ta bort"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </PermissionGate>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => void handleDownload(doc)}
-                    className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    title="Ladda ned"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                  </button>
-                  <PermissionGate permission={Permissions.DOCUMENTS_DELETE}>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Ta bort "${doc.file_name}"?`)) {
-                          deleteMutation.mutate(doc);
-                        }
-                      }}
-                      disabled={deleteMutation.isPending}
-                      className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                      title="Ta bort"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </PermissionGate>
-                </div>
+                {isConfirmDelete && (
+                  <div className="flex items-center justify-between gap-2 bg-red-50 dark:bg-red-950/20 px-3 py-2 border-t border-red-100 dark:border-red-900/50">
+                    <span className="text-xs text-red-700 dark:text-red-400 truncate">Ta bort "{doc.file_name}"?</span>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => { deleteMutation.mutate(doc); setConfirmDelId(null); }}
+                        disabled={deleteMutation.isPending}
+                        className="text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 transition-colors"
+                      >
+                        {deleteMutation.isPending ? 'Tar bort…' : 'Ta bort'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelId(null)}
+                        className="text-xs px-2 py-1 rounded text-muted-foreground hover:bg-accent transition-colors"
+                      >
+                        Avbryt
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Image preview modal */}
+      <Dialog open={!!previewUrl} onOpenChange={() => setPreviewUrl(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="truncate text-sm font-medium">{previewName}</DialogTitle>
+          </DialogHeader>
+          {previewUrl && (
+            <div className="flex justify-center">
+              <img src={previewUrl} alt={previewName} className="max-h-[60vh] w-full rounded object-contain" />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPreviewUrl(null)}>Stäng</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-// ─── Övrigt tab (Bokningar + Teorimaterial + Loggar + Dokument) ───────────────
+// ─── Övrigt tab (Bokningar + Anteckningar + Teorimaterial + Loggar + Dokument) ─
 
-type OvrigtSubTab = 'bokningar' | 'teorimaterial' | 'loggar' | 'dokument';
+type OvrigtSubTab = 'bokningar' | 'anteckningar' | 'teorimaterial' | 'loggar' | 'dokument';
 
 function OvrigtTab({
   student, fullName, upcomingBookings, onNewBooking, licenceCat,
@@ -4487,10 +5257,11 @@ function OvrigtTab({
   const [subTab, setSubTab] = useState<OvrigtSubTab>('bokningar');
 
   const SUB_TABS: { key: OvrigtSubTab; label: string }[] = [
-    { key: 'bokningar',    label: 'Bokningar' },
+    { key: 'bokningar',     label: 'Bokningar' },
+    { key: 'anteckningar',  label: 'Anteckningar' },
     { key: 'teorimaterial', label: 'Teorimaterial' },
-    { key: 'loggar',       label: 'Loggar' },
-    { key: 'dokument',     label: 'Dokument' },
+    { key: 'loggar',        label: 'Loggar' },
+    { key: 'dokument',      label: 'Dokument' },
   ];
 
   return (
@@ -4505,14 +5276,365 @@ function OvrigtTab({
             onNewBooking={onNewBooking}
           />
         )}
+        {subTab === 'anteckningar' && (
+          <AnteckningarTab studentId={student.id} />
+        )}
         {subTab === 'teorimaterial' && (
           <TeorimaterialTab licenceCat={licenceCat} />
         )}
-        {subTab === 'loggar' && <LoggarTab studentId={student.id} />}
+        {subTab === 'loggar' && <LoggarTab student={student} />}
         {subTab === 'dokument' && (
           <DokumentAdminTab studentId={student.id} orgId={student.organization_id} />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Anteckningar tab ─────────────────────────────────────────────────────────
+
+const NOTE_CATEGORIES: NoteCategory[] = ['general','instructional','medical','administrative','behavioral','other'];
+
+function AnteckningarTab({ studentId }: { studentId: string }) {
+  const { data: notes = [], isLoading, error, refetch } = useStudentNotes(studentId);
+  const createNote   = useCreateNote();
+  const updateNote   = useUpdateNote();
+  const deleteNote   = useDeleteNote();
+
+  const [search,       setSearch]       = useState('');
+  const [showInternal, setShowInternal] = useState(true);
+  const [composing,    setComposing]    = useState(false);
+  const [draft,        setDraft]        = useState('');
+  const [draftCat,     setDraftCat]     = useState<NoteCategory>('general');
+  const [draftInternal, setDraftInternal] = useState(false);
+  const [editId,       setEditId]       = useState<string | null>(null);
+  const [editContent,  setEditContent]  = useState('');
+  const [editCat,      setEditCat]      = useState<NoteCategory>('general');
+  const [confirmDelId, setConfirmDelId] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const base = notes.filter((n) => showInternal || !n.is_internal);
+    if (!search.trim()) return base;
+    const q = search.trim().toLowerCase();
+    return base.filter((n) =>
+      n.body.toLowerCase().includes(q) ||
+      NOTE_CATEGORY_LABELS[n.category].toLowerCase().includes(q),
+    );
+  }, [notes, search, showInternal]);
+
+  async function handleCreate() {
+    if (!draft.trim()) return;
+    try {
+      await createNote.mutateAsync({
+        student_id:  studentId,
+        body:        draft,
+        category:    draftCat,
+        is_internal: draftInternal,
+      });
+      toast({ title: 'Anteckning sparad' });
+      setDraft('');
+      setDraftCat('general');
+      setDraftInternal(false);
+      setComposing(false);
+    } catch {
+      toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' });
+    }
+  }
+
+  async function handleUpdate(note: StudentNote) {
+    if (!editContent.trim()) return;
+    try {
+      await updateNote.mutateAsync({
+        id:         note.id,
+        student_id: studentId,
+        body:       editContent,
+        category:   editCat,
+      });
+      toast({ title: 'Anteckning uppdaterad' });
+      setEditId(null);
+    } catch {
+      toast({ title: 'Kunde inte uppdatera anteckning', variant: 'destructive' });
+    }
+  }
+
+  async function handleTogglePin(note: StudentNote) {
+    try {
+      await updateNote.mutateAsync({
+        id:         note.id,
+        student_id: studentId,
+        is_pinned:  !note.is_pinned,
+      });
+    } catch {
+      toast({ title: 'Kunde inte fästa anteckning', variant: 'destructive' });
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteNote.mutateAsync({ id, student_id: studentId });
+      toast({ title: 'Anteckning borttagen' });
+      setConfirmDelId(null);
+    } catch {
+      toast({ title: 'Kunde inte ta bort anteckning', variant: 'destructive' });
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-16 text-center">
+        <p className="text-sm text-destructive">Kunde inte hämta anteckningar.</p>
+        <button
+          onClick={() => void refetch()}
+          className="text-xs text-primary underline underline-offset-2"
+        >
+          Försök igen
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[160px]">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Sök anteckningar…"
+            className="w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+        <button
+          onClick={() => setShowInternal(!showInternal)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors',
+            showInternal
+              ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-400'
+              : 'border-input bg-background text-muted-foreground hover:bg-muted/50',
+          )}
+        >
+          <Lock className="h-3 w-3" />
+          {showInternal ? 'Visar interna' : 'Döljer interna'}
+        </button>
+        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+          <button
+            onClick={() => setComposing(true)}
+            className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Ny anteckning
+          </button>
+        </PermissionGate>
+      </div>
+
+      {/* Compose form */}
+      {composing && (
+        <div className="rounded-lg border border-primary/30 bg-card p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <select
+              value={draftCat}
+              onChange={(e) => setDraftCat(e.target.value as NoteCategory)}
+              className="rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {NOTE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{NOTE_CATEGORY_LABELS[c]}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={draftInternal}
+                onChange={(e) => setDraftInternal(e.target.checked)}
+                className="rounded border-input"
+              />
+              <Lock className="h-3 w-3" />
+              Intern
+            </label>
+          </div>
+          <textarea
+            autoFocus
+            rows={4}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Skriv anteckning…"
+            className="w-full rounded border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setComposing(false); setDraft(''); setDraftCat('general'); setDraftInternal(false); }}
+              className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors"
+            >
+              Avbryt
+            </button>
+            <button
+              onClick={() => void handleCreate()}
+              disabled={!draft.trim() || createNote.isPending}
+              className="flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              {createNote.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              Spara
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Notes list */}
+      {filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+          <FileText className="h-10 w-10 text-muted-foreground/30" />
+          <p className="text-sm text-muted-foreground">
+            {search ? 'Inga anteckningar matchar sökningen.' : 'Inga anteckningar än.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((note) => {
+            const isEditing = editId === note.id;
+            return (
+              <div
+                key={note.id}
+                className={cn(
+                  'rounded-lg border bg-card overflow-hidden',
+                  note.is_pinned && 'border-amber-300 dark:border-amber-700',
+                  note.is_internal && 'border-blue-200 dark:border-blue-800',
+                )}
+              >
+                {/* Note header */}
+                <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 bg-muted/20">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">
+                      {NOTE_CATEGORY_LABELS[note.category]}
+                    </span>
+                    {note.is_internal && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                        <Lock className="h-2.5 w-2.5" />
+                        Intern
+                      </span>
+                    )}
+                    {note.is_pinned && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        <Pin className="h-2.5 w-2.5" />
+                        Fäst
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                      {new Date(note.created_at).toLocaleDateString('sv-SE')}
+                    </span>
+                    <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                      <button
+                        onClick={() => void handleTogglePin(note)}
+                        title={note.is_pinned ? 'Ta bort fästning' : 'Fäst anteckning'}
+                        className="rounded p-1 text-muted-foreground hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors"
+                      >
+                        {note.is_pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditId(note.id);
+                          setEditContent(note.body);
+                          setEditCat(note.category);
+                        }}
+                        title="Redigera"
+                        className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    </PermissionGate>
+                    <PermissionGate permission={Permissions.STUDENTS_DELETE}>
+                      <button
+                        onClick={() => setConfirmDelId(confirmDelId === note.id ? null : note.id)}
+                        title="Ta bort"
+                        className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </PermissionGate>
+                  </div>
+                </div>
+
+                {/* Inline delete confirm */}
+                {confirmDelId === note.id && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 bg-destructive/5 border-b border-destructive/20 text-xs">
+                    <span className="text-destructive font-medium">Ta bort anteckning?</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setConfirmDelId(null)}
+                        className="rounded px-2 py-1 text-muted-foreground hover:bg-muted transition-colors"
+                      >
+                        Avbryt
+                      </button>
+                      <button
+                        onClick={() => void handleDelete(note.id)}
+                        disabled={deleteNote.isPending}
+                        className="flex items-center gap-1 rounded bg-destructive px-2 py-1 text-white hover:bg-destructive/90 disabled:opacity-50 transition-colors"
+                      >
+                        {deleteNote.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                        Ta bort
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Note body */}
+                <div className="px-3 py-2.5">
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <select
+                          value={editCat}
+                          onChange={(e) => setEditCat(e.target.value as NoteCategory)}
+                          className="rounded border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                          {NOTE_CATEGORIES.map((c) => (
+                            <option key={c} value={c}>{NOTE_CATEGORY_LABELS[c]}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <textarea
+                        autoFocus
+                        rows={3}
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="w-full rounded border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => setEditId(null)}
+                          className="rounded px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors"
+                        >
+                          Avbryt
+                        </button>
+                        <button
+                          onClick={() => void handleUpdate(note)}
+                          disabled={!editContent.trim() || updateNote.isPending}
+                          className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                        >
+                          {updateNote.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                          Spara
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{note.body}</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

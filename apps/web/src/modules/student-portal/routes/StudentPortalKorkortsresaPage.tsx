@@ -3,7 +3,7 @@ import { CheckCircle, Lock, AlertCircle } from 'lucide-react';
 import { usePortalProgress, usePortalMe } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
-const BRAND = '#1055C9';
+const BRAND = '#684EFF';
 
 function formatDate(iso: string | null): string {
   if (!iso) return '';

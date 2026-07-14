@@ -1,4 +1,4 @@
-import type { InstructorEmploymentType } from '@platform/types';
+import type { InstructorEmploymentType, CertificationStatus } from '@platform/types';
 
 export function employmentTypeLabel(type: InstructorEmploymentType): string {
   switch (type) {
@@ -39,4 +39,13 @@ export function formatDateTime(iso: string | null | undefined): string {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
+}
+
+export function computeCertStatus(expiresAt: string | null | undefined): CertificationStatus {
+  if (!expiresAt) return 'active';
+  const now = Date.now();
+  const exp = new Date(expiresAt).getTime();
+  if (exp < now) return 'expired';
+  if (exp - now < 60 * 86_400_000) return 'expiring_soon';
+  return 'active';
 }

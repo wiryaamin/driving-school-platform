@@ -12,6 +12,7 @@ import {
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js';
 import { useFinancialPeriods } from '../hooks/useReconciliation.js';
 import { formatCurrency, formatDate } from '../lib/financeUtils.js';
@@ -913,6 +914,7 @@ export function PayrollPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:payroll:run">
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
@@ -1033,6 +1035,7 @@ export function PayrollPage() {
             )}
           </TabsContent>
         </Tabs>
+        </SubscriptionGate>
       </PageContent>
 
       {/* Sheets & dialogs */}

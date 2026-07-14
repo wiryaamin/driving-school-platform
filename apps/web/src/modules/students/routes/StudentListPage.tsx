@@ -11,7 +11,7 @@ import {
 } from '@platform/ui';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
-import { useStudentList } from '../hooks/useStudents.js';
+import { useStudentList, useOrgStudentTags, useStudentIdsByTag } from '../hooks/useStudents.js';
 import type { Student, StudentStatus, PermitStage } from '../hooks/useStudents.js';
 import { useInstructorList } from '@modules/instructors/index.js';
 import { StudentStatusBadge } from '../components/StudentStatusBadge.js';
@@ -52,6 +52,7 @@ interface FilterDraft {
   alderTill:              string;
   fritextSearch:          string;
   bokningFilter:          string;
+  tagId:                  string;
 }
 
 const DEFAULT_FILTER: FilterDraft = {
@@ -64,14 +65,18 @@ const DEFAULT_FILTER: FilterDraft = {
   alderTill:              '',
   fritextSearch:          '',
   bokningFilter:          '',
+  tagId:                  '',
 };
 
 interface AppliedFilterQuery {
-  status?:           StudentStatus;
-  search?:           string;
-  licence_category?: string;
-  permit_stage?:     PermitStage;
-  instructor_id?:    string;
+  status?:              StudentStatus;
+  search?:              string;
+  licence_category?:    string;
+  not_licence_category?: string;
+  permit_stage?:        PermitStage;
+  instructor_id?:       string;
+  age_from?:            number;
+  age_to?:              number;
 }
 
 function filterToQuery(f: FilterDraft): AppliedFilterQuery {
@@ -80,9 +85,14 @@ function filterToQuery(f: FilterDraft): AppliedFilterQuery {
   if (f.kundgrupp === 'arkiverade') q.status = 'archived';
   if (f.kundgrupp === 'skuldsatta') q.status = 'active';
   if (f.fritextSearch)              q.search  = f.fritextSearch;
-  if (f.licenceCategoryHar)         q.licence_category = f.licenceCategoryHar;
-  if (f.permitStage)                q.permit_stage     = f.permitStage as PermitStage;
-  if (f.instructorId)               q.instructor_id    = f.instructorId;
+  if (f.licenceCategoryHar)         q.licence_category     = f.licenceCategoryHar;
+  if (f.licenceCategoryHarInte)     q.not_licence_category = f.licenceCategoryHarInte;
+  if (f.permitStage)                q.permit_stage         = f.permitStage as PermitStage;
+  if (f.instructorId)               q.instructor_id        = f.instructorId;
+  const from = parseInt(f.alderFran, 10);
+  const to   = parseInt(f.alderTill, 10);
+  if (f.alderFran && !isNaN(from)) q.age_from = from;
+  if (f.alderTill && !isNaN(to))   q.age_to   = to;
   return q;
 }
 
@@ -179,18 +189,20 @@ function buildColumns(onEdit: (s: Student) => void): ColumnDef<Student>[] {
       cell: ({ row }) => {
         const pnr = formatPersonnummer(row.original);
         return (
-          <div className="flex items-center gap-1.5 font-mono text-xs group/cell">
-            <span className="text-foreground">{pnr}</span>
-            {row.original.personnummer_last4 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(pnr); }}
-                className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                title="Kopiera personnummer"
-              >
-                <Copy className="w-3 h-3" />
-              </button>
-            )}
-          </div>
+          <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
+            <div className="flex items-center gap-1.5 font-mono text-xs group/cell">
+              <span className="text-foreground">{pnr}</span>
+              {row.original.personnummer_last4 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(pnr); }}
+                  className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                  title="Kopiera personnummer"
+                >
+                  <Copy className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </PermissionGate>
         );
       },
       enableSorting: false,
@@ -302,6 +314,7 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
   }
 
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
+  const { data: orgTags } = useOrgStudentTags();
   const allInstructors = instructorsData?.data ?? [];
 
   return (
@@ -490,6 +503,36 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
         </Select>
       </section>
 
+      {/* ── 7. Filtrera efter tagg ────────────────────────────────────────── */}
+      {(orgTags ?? []).length > 0 && (
+        <section>
+          <h3 className="mb-3 text-sm font-semibold text-foreground">
+            <span className="mr-1 text-muted-foreground">7.</span> Filtrera efter tagg
+          </h3>
+          <Select
+            value={draft.tagId || 'ALL'}
+            onValueChange={(v) => set('tagId', v === 'ALL' ? '' : v)}
+          >
+            <SelectTrigger className="w-[220px] text-sm">
+              <SelectValue placeholder="Alla taggar" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Alla taggar</SelectItem>
+              {(orgTags ?? []).map((t) => (
+                <SelectItem key={t.id} value={t.id}>
+                  <span className="flex items-center gap-2">
+                    {t.color && (
+                      <span className="w-2 h-2 rounded-full shrink-0 inline-block" style={{ backgroundColor: t.color }} />
+                    )}
+                    {t.name}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </section>
+      )}
+
       {/* Apply */}
       <div>
         <Button onClick={onApply} className="px-8">
@@ -542,7 +585,20 @@ export function StudentListPage() {
       };
 
   const { data, isLoading, error, refetch } = useStudentList(query);
-  const students = data?.data ?? [];
+
+  // Tag filter: post-filter current page against students assigned to the selected tag
+  const activeTagId = isFilterTab ? (appliedFilter.tagId || null) : null;
+  const { data: tagStudentIds } = useStudentIdsByTag(activeTagId);
+  const tagIdSet = useMemo(
+    () => tagStudentIds ? new Set(tagStudentIds) : null,
+    [tagStudentIds],
+  );
+
+  const students = useMemo(() => {
+    const raw = data?.data ?? [];
+    if (!activeTagId || !tagIdSet) return raw;
+    return raw.filter((s) => tagIdSet.has(s.id));
+  }, [data, activeTagId, tagIdSet]);
 
   const columns = useMemo(
     () => buildColumns((s) => { setEditStudent(s); setFormOpen(true); }),

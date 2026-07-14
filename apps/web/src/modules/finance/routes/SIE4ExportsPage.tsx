@@ -9,6 +9,7 @@ import {
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useSIE4List, useSIE4Detail, useGenerateSIE4 } from '../hooks/useSIE4.js';
 import { useExportRuns } from '../hooks/useFinancialReports.js';
@@ -266,6 +267,7 @@ export function SIE4ExportsPage() {
       />
 
       <PageContent>
+        <SubscriptionGate feature="finance:sie4:export">
         <PermissionGate permission={Permissions.FINANCE_SIE4_READ}>
           {isLoading ? (
             <div className="space-y-2">
@@ -336,6 +338,7 @@ export function SIE4ExportsPage() {
             </div>
           )}
         </PermissionGate>
+        </SubscriptionGate>
       </PageContent>
 
       <SIE4DetailSheet id={detailId} onClose={() => setDetailId(null)} />

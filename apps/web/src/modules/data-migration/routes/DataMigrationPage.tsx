@@ -8,6 +8,7 @@ import {
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import {
   useMigrationSessions,
   useCreateMigrationSession,
@@ -535,6 +536,7 @@ export function DataMigrationPage() {
       />
 
       <PageContent>
+      <SubscriptionGate feature="admin:data-migration:run">
         {showTemplates && <TemplatesPanel onShowSchema={setSchemaEntity} />}
 
         {isLoading ? (
@@ -568,6 +570,7 @@ export function DataMigrationPage() {
             ))}
           </div>
         )}
+      </SubscriptionGate>
       </PageContent>
 
       <CreateSessionDialog
