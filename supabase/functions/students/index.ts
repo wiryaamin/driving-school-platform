@@ -5,6 +5,7 @@ import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { getPersonLookupProvider, isValidPersonnummerFormat } from '../_shared/person-lookup.ts';
+import { hashPersonalNumber, identityCryptoConfigured } from '../_shared/bankid-crypto.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline Zod schemas (Deno can't import workspace packages) ───────────────
@@ -14,6 +15,30 @@ const PERMIT_STAGES = ['not_started', 'theory_study', 'risk1_booked', 'risk1_com
 const IDENTITY_TYPES = ['personnummer', 'samordningsnummer', 'passport', 'national_id', 'none'] as const;
 const PERSONNUMMER_HASH_RE = /^[a-f0-9]{64}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ─── Server-side personnummer hash (Action 5) ─────────────────────────────────
+//
+// Duplicate detection previously only ran when a client happened to supply a
+// pre-computed personnummer_hash — the frontend never did, so it was dead
+// code (see bankid-crypto.ts's own provenance note, written during ADR-007
+// Phase 3's Existing Implementation Review). Both
+// date_of_birth (already normalized to ISO YYYY-MM-DD, whatever raw
+// YYYYMMDD-XXXX/YYMMDD+XXXX/etc. format the receptionist originally typed —
+// existing frontend parsing, unchanged) and personnummer_last4 together
+// reconstruct the exact same 12-digit personnummer regardless of the
+// original input format, so hashing their concatenation server-side is a
+// canonical, client-independent duplicate key. Reuses the existing generic
+// HMAC-SHA256 helper from _shared/bankid-crypto.ts (IDENTITY_HASH_KEY) rather
+// than duplicating hashing logic — the same primitive already used for
+// auth_identity_links.external_subject_hash.
+async function computePersonnummerHash(dateOfBirth: string, last4: string): Promise<string | undefined> {
+  if (!identityCryptoConfigured()) {
+    logger.error('students.personnummer_hash_unavailable', { reason: 'IDENTITY_HASH_KEY not configured' });
+    return undefined;
+  }
+  const canonical = `${dateOfBirth.replace(/-/g, '')}${last4}`;
+  return await hashPersonalNumber(canonical);
+}
 
 const CreateStudentSchema = z.object({
   first_name:  z.string().trim().min(1).max(100),
@@ -226,6 +251,15 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   const dto = parsed.data;
+
+  // Duplicate detection must not depend on the client supplying a hash —
+  // compute it server-side from the same (date_of_birth, personnummer_last4)
+  // pair the client already sends today, overriding any client-supplied value.
+  if (dto.date_of_birth !== undefined && dto.personnummer_last4 !== undefined) {
+    const computed = await computePersonnummerHash(dto.date_of_birth, dto.personnummer_last4);
+    if (computed !== undefined) dto.personnummer_hash = computed;
+  }
+
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate checks in parallel
@@ -434,6 +468,14 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   const dto = parsed.data;
+
+  // Same server-side hash recomputation as handleCreate — only when this
+  // update actually supplies both source fields together.
+  if (dto.date_of_birth !== undefined && dto.personnummer_last4 !== undefined) {
+    const computed = await computePersonnummerHash(dto.date_of_birth, dto.personnummer_last4);
+    if (computed !== undefined) dto.personnummer_hash = computed;
+  }
+
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   // Duplicate checks for mutable unique fields (parallel)
