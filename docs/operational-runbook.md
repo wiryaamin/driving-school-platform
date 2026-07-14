@@ -372,3 +372,47 @@ Monitoring is environment-aware and **off by default**:
 
 ### Finding errors
 Once activated: Sentry project → Issues, filtered by `environment` (`production`/`staging`) and the `organization_id`/`role` tags for tenant-specific triage. Correlate with backend Edge Function logs (Section 5 above) using the timestamp and, where the error originated from an API call, the `X-Correlation-ID`.
+
+---
+
+## 12. Stripe Payment Webhook Configuration
+
+`supabase/functions/stripe-webhook/index.ts` verifies Stripe's HMAC-SHA256 request signature and, on `checkout.session.completed`, calls `record_payment()` to settle the invoice. The implementation is correct (signature verification, 5-minute replay window, idempotency on `payment_request.status`) — it fails closed with `503 {"error":"Webhook not configured"}` when its one required secret is absent, which is the current live state on this project: `STRIPE_WEBHOOK_SECRET` does not exist in `supabase secrets list` for `ulgsndzfksphquqakelq`. Checkout *session creation* (`student-portal/index.ts`, uses the org's own `stripe_secret_key`) is unaffected by this — customers can still be redirected to Stripe and charged. What's blocked is exclusively the confirmation step: the platform never learns the payment succeeded, so the invoice/wallet is never updated automatically, and reconciliation must currently be manual.
+
+### Required configuration (not yet performed — no Stripe account/credentials available to this runbook's author at the time of writing)
+1. In the Stripe Dashboard → Developers → Webhooks, add an endpoint: `https://ulgsndzfksphquqakelq.supabase.co/functions/v1/stripe-webhook`.
+2. Select events: `checkout.session.completed`, `checkout.session.expired`.
+3. Copy the endpoint's signing secret (starts `whsec_`).
+4. Set it: `supabase secrets set STRIPE_WEBHOOK_SECRET="whsec_<value>" --project-ref ulgsndzfksphquqakelq`.
+5. Trigger a real test event from the Stripe Dashboard ("Send test webhook") and confirm `stripe-webhook`'s logs (Edge Functions → Logs) show `stripe-webhook: payment settled`, and that the corresponding `payment_request` row's `status` becomes `completed`.
+
+No code change is required — this is an operational configuration gap only.
+
+---
+
+## 13. GDPR — Data Subject Requests (Manual Procedure)
+
+No automated data-subject-request workflow exists in Version 1.0 (by design — see Handbook Technical Debt Register). This section is the actual, current, staff-executed procedure. It intentionally requires direct Supabase Dashboard / SQL Editor access — do not build a self-service flow against this section without an Architecture Review.
+
+### Consent (already implemented, no manual step needed)
+`students.data_processing_consent`, `marketing_consent`, `gdpr_consent_given_at`, `gdpr_consent_version` are captured automatically at registration/enrollment (`students/index.ts`, `enrollments/index.ts`). Nothing to do here.
+
+### Access / export requests
+1. Verify the requester's identity through the driving school (organization) that holds the relationship — TrafikskolaOS is a data processor for the school, not the controller; the school (org_owner/org_admin) is the first point of contact for its own students/guardians/instructors and should be looped in before platform staff act directly.
+2. In the Supabase Dashboard SQL Editor, query the subject's rows scoped to their `organization_id`: `students`, `student_guardians` (if the subject is a guardian), `instructors` (if the subject is an instructor), plus related tables (`lesson_bookings`, `invoices`, `student_documents`, etc.) filtered by their id.
+3. Export the result set (CSV/JSON from the SQL Editor) and provide it to the organization to relay to the data subject, or directly if the organization has authorized platform staff to do so.
+4. Respond within the statutory window (ordinarily one month under GDPR Article 12(3), extendable by two further months for complex requests — notify the subject if extending).
+
+### Right to erasure requests
+Financial/accounting records (`invoices`, `ledger` journal entries, `payments`, payroll-related instructor records) are **not erasable** — Swedish Bokföringslagen requires a minimum 7-year retention, and GDPR Article 17(3)(b) explicitly exempts records retained for compliance with a legal obligation. Erasure applies to the subject's *personal* data outside that scope:
+
+- **Students** (`supabase/migrations/20260528000001_phase2a_domain_foundation.sql:142-145`): set `status = 'archived'`, NULL out `personnummer_encrypted`, `personnummer_hash`, `personnummer_last4`, name, email, phone, and address fields. The row itself (id, dates, permit milestones) may be retained for operational reporting per the organization's retention policy.
+- **Student emergency contacts** (`student_emergency_contacts`, third-party PII): erase on the student's own erasure request.
+- **Student guardians** (`student_guardians`, third-party PII): same treatment as emergency contacts — erase on the student's own erasure request, or independently if the guardian themself is the requester and has no other student relationship.
+- **Instructors** (`supabase/migrations/20260528000001_phase2a_domain_foundation.sql:441-445`): **always consult legal before executing** — active-employee payroll records carry the same 7-year Bokföringslagen retention as financial records, so an erasure request from a current or recently-departed instructor requires legal review to determine what, if anything, can be erased versus retained.
+- **Demo/lead requests** (`demo_requests`): no `deleted_at` column, no self-service delete path by design — remove manually via SQL Editor on request.
+
+Execute the NULL-out via the Supabase Dashboard SQL Editor, scoped precisely to the requesting subject's row(s) by id — never a bulk operation. Log the action (who requested it, when, what was erased) outside the platform (e.g. in the organization's own records) until/unless a future Version formalizes this.
+
+### Escalation
+Legal review is mandatory before any instructor erasure. For ambiguous cases (a request spanning both erasable and retention-locked data), default to retaining and consult legal rather than erasing prematurely.

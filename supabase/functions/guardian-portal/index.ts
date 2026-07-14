@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
@@ -18,6 +19,23 @@ function ok<T>(data: T, status = 200): Response {
 
 function fail(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), { status, headers: JSON_CT });
+}
+
+// ─── Authorization ────────────────────────────────────────────────────────────
+//
+// Staff-facing management routes (generate-token, guardians CRUD) require the
+// same permission already used to gate editing the rest of a student's record
+// elsewhere in the platform (StudentDetailPage.tsx, students/index.ts)  —
+// guardians are managed as part of a student's record, not a separate
+// resource with its own access tier. Mirrors the requirePerm() pattern
+// already established in students/index.ts and every other Category D
+// Edge Function: platform admins bypass, otherwise the caller's JWT-derived
+// permissions (ctx.permissions) must include the required code.
+function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) return fail(403, 'Organization context required');
+  if (!ctx.permissions.includes(code)) return fail(403, `Requires permission: ${code}`);
+  return null;
 }
 
 // ─── Crypto helpers ───────────────────────────────────────────────────────────
@@ -71,6 +89,35 @@ async function resolveGuardianToken(req: Request): Promise<GuardianSession | nul
   return data as GuardianSession;
 }
 
+// ─── Access audit logging ──────────────────────────────────────────────────────
+//
+// Guardian read access to a student's data was previously untracked. Reuses
+// the existing insert_activity_log() RPC (enterprise_foundation migration —
+// "Inserts an activity log entry. Called from Edge Functions via service
+// role.") rather than audit_logs/insert_audit_log(), whose `operation` enum
+// is locked to INSERT/UPDATE/DELETE/RESTORE and has no value for a read.
+// Fire-and-forget (not awaited), matching the existing last_used_at update
+// pattern above — logging must never add latency to the guardian's request.
+// No PII is logged: only UUIDs (organization/student/guardian ids) and the
+// action name.
+function logGuardianAccess(
+  svc: ReturnType<typeof createServiceClient>,
+  session: GuardianSession,
+  action: string,
+): void {
+  void svc.rpc('insert_activity_log', {
+    p_organization_id: session.organization_id,
+    p_user_id:         null,
+    p_user_email:       null,
+    p_action:           action,
+    p_entity_type:      'student',
+    p_entity_id:        session.student_id,
+    p_metadata:         { guardian_id: session.guardian_id },
+  }).then(({ error }: { error: { message: string } | null }) => {
+    if (error) logger.error('guardian-portal: audit log write failed', { error: error.message, action });
+  });
+}
+
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const CreateGuardianSchema = z.object({
@@ -104,6 +151,8 @@ Deno.serve((req: Request) =>
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
       if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:update');
+      if (permGuard) return permGuard;
 
       const body   = await req.json().catch(() => null);
       const parsed = GenerateTokenSchema.safeParse(body);
@@ -159,6 +208,8 @@ Deno.serve((req: Request) =>
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
       if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:update');
+      if (permGuard) return permGuard;
 
       const body   = await req.json().catch(() => null);
       const parsed = CreateGuardianSchema.safeParse(body);
@@ -188,6 +239,8 @@ Deno.serve((req: Request) =>
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
       if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:read');
+      if (permGuard) return permGuard;
 
       const studentId = url.searchParams.get('student_id');
       if (!studentId) return fail(400, 'student_id required');
@@ -212,6 +265,8 @@ Deno.serve((req: Request) =>
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
       if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:update');
+      if (permGuard) return permGuard;
 
       const svc = createServiceClient();
       const { error } = await svc
@@ -260,6 +315,7 @@ Deno.serve((req: Request) =>
       }
 
       const loc = locationRes.data as { phone: string | null; email: string | null } | null;
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_me');
       return ok({
         guardian:     guardianRes.data,
         student:      studentRes.data,
@@ -291,6 +347,7 @@ Deno.serve((req: Request) =>
       const sorted = ((bookings ?? []) as unknown as BookingRow[]).sort((a, b) =>
         (b.lesson_slots?.starts_at ?? '').localeCompare(a.lesson_slots?.starts_at ?? ''));
 
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_bookings');
       return ok(sorted);
     }
 
@@ -339,6 +396,7 @@ Deno.serve((req: Request) =>
         package_offerings: { name: string; package_type: string } | null;
       };
 
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_balance');
       return ok({
         balance:  balRes.data ?? { balance_sek: 0, credit_used_sek: 0, total_paid_sek: 0 },
         invoices: invRes.data ?? [],
@@ -371,6 +429,7 @@ Deno.serve((req: Request) =>
       if (!studentRes.data) return fail(500, 'Failed to load student progress');
 
       const allBookings = (statsRes.data ?? []) as Array<{ status: string }>;
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_progress');
       return ok({
         ...studentRes.data,
         completed_count: allBookings.filter(b => b.status === 'completed').length,
@@ -401,6 +460,7 @@ Deno.serve((req: Request) =>
         instructors: { first_name: string; last_name: string } | null;
       };
 
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_assessments');
       return ok(((data ?? []) as AssRow[]).map(a => ({
         id:              a.id,
         instructor_name: a.instructors
@@ -445,6 +505,7 @@ Deno.serve((req: Request) =>
         };
       }));
 
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_documents');
       return ok(withUrls);
     }
 

@@ -1,6 +1,7 @@
 import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
+import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
@@ -52,6 +53,21 @@ function ok<T>(data: T, status = 200): Response {
 
 function fail(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: message }), { status, headers: JSON_CT });
+}
+
+// ─── Authorization ────────────────────────────────────────────────────────────
+//
+// POST /generate-token is a staff-facing management route — it requires the
+// same permission already used to gate editing a student's record elsewhere
+// in the platform (students/index.ts, guardian-portal/index.ts). Mirrors the
+// requirePerm() pattern already established across the codebase: platform
+// admins bypass, otherwise the caller's JWT-derived permissions must include
+// the required code.
+function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) return fail(403, 'Organization context required');
+  if (!ctx.permissions.includes(code)) return fail(403, `Requires permission: ${code}`);
+  return null;
 }
 
 // ─── Crypto helpers ───────────────────────────────────────────────────────────
@@ -147,7 +163,8 @@ Deno.serve((req: Request) =>
       if (!ctxResult.ok) return ctxResult.response;
       const { ctx } = ctxResult;
 
-      if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:update');
+      if (permGuard) return permGuard;
 
       const body   = await req.json().catch(() => null);
       const parsed = GenerateTokenSchema.safeParse(body);

@@ -46,7 +46,26 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code = 'E
   return buildErrorResponse(ctx, status, code, message);
 }
 
-const ADMIN_ROLES = new Set(['admin', 'manager', 'owner']);
+// ─── Authorization ────────────────────────────────────────────────────────────
+//
+// Every data-migration operation is a bulk, org-wide administrative action —
+// creating a session, uploading PII-bearing rows, inspecting staged rows, and
+// running the import all require the same permission already used to gate
+// other high-privilege organization-administration actions (CompanySettingsPage
+// et al.), effectively org_owner/org_admin only. Mirrors the requirePerm()
+// pattern already established in students/index.ts and guardian-portal/index.ts:
+// platform admins bypass, otherwise the caller's JWT-derived permissions
+// (ctx.permissions) must include the required code. Templates (GET
+// /templates/:entity) are excluded — they return a static, no-PII example CSV,
+// not organization data.
+const DATA_MIGRATION_PERMISSION = 'administration:organization:update';
+
+function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (ctx.organizationId === null) return err(ctx, 'Organisationskontext krävs', 403, 'FORBIDDEN');
+  if (!ctx.permissions.includes(code)) return err(ctx, `Kräver behörighet: ${code}`, 403, 'FORBIDDEN');
+  return null;
+}
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -873,11 +892,7 @@ async function resolveInstructorByEmail(supabase: any, orgId: string, email: str
 
 // ─── Import handler ───────────────────────────────────────────────────────────
 
-async function handleImport(supabase: any, orgId: string, id: string, role: string | null, ctx: EdgeRequestContext): Promise<Response> {
-  if (!role || !ADMIN_ROLES.has(role)) {
-    return err(ctx, 'Endast admin, manager eller owner kan köra import', 403, 'FORBIDDEN');
-  }
-
+async function handleImport(supabase: any, orgId: string, id: string, ctx: EdgeRequestContext): Promise<Response> {
   const { data: session, error: sessErr } = await supabase
     .from('data_migration_sessions').select('*').eq('id', id).eq('organization_id', orgId).is('deleted_at', null).maybeSingle();
 
@@ -1354,7 +1369,6 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
   const orgId  = ctx.organizationId!;
   const userId = ctx.actorId!;
-  const role   = ctx.actorRole;
 
   const supabaseClient = createServiceClient();
 
@@ -1368,6 +1382,9 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   try {
     if (req.method === 'GET' && first === 'templates' && second) return handleTemplate(second, ctx);
 
+    const permGuard = requirePerm(ctx, DATA_MIGRATION_PERMISSION);
+    if (permGuard) return permGuard;
+
     if (!first) {
       if (req.method === 'GET')  return await handleListSessions(supabaseClient, orgId, url, ctx);
       if (req.method === 'POST') return await handleCreateSession(supabaseClient, orgId, userId, req, ctx);
@@ -1378,7 +1395,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     if (second === 'upload' && req.method === 'POST') return await handleUploadRows(supabaseClient, orgId, sessionId, req, ctx);
     if (second === 'rows'   && req.method === 'GET')  return await handleListRows(supabaseClient, orgId, sessionId, url, ctx);
-    if (second === 'import' && req.method === 'POST') return await handleImport(supabaseClient, orgId, sessionId, role, ctx);
+    if (second === 'import' && req.method === 'POST') return await handleImport(supabaseClient, orgId, sessionId, ctx);
 
     if (!second) {
       if (req.method === 'GET')    return await handleGetSession(supabaseClient, orgId, sessionId, ctx);
