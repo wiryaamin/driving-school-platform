@@ -1022,7 +1022,8 @@ async function handleValidatePhase5d(client: any, ctx: EdgeRequestContext): Prom
 // ── Phase 5E: PKI Trust Infrastructure & Authority Authenticity ───────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegisterTrustAnchor(client: any, req: Request): Promise<Response> {
+async function handleRegisterTrustAnchor(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   const { data, error } = await client.rpc('register_trust_anchor', {
     p_anchor_id:           body.anchor_id,
@@ -1050,7 +1051,8 @@ async function handleGetTrustAnchors(client: any, ctx: EdgeRequestContext): Prom
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegisterCertificateChain(client: any, req: Request): Promise<Response> {
+async function handleRegisterCertificateChain(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   const { data, error } = await client.rpc('register_certificate_chain', {
     p_chain_id:            body.chain_id,
@@ -1081,7 +1083,8 @@ async function handleGetCertificateChains(client: any, ctx: EdgeRequestContext):
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleValidateCertificateChain(client: any, req: Request): Promise<Response> {
+async function handleValidateCertificateChain(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.chain_id) return err(ctx, 'chain_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('validate_certificate_chain', { p_chain_id: body.chain_id });
@@ -1090,7 +1093,8 @@ async function handleValidateCertificateChain(client: any, req: Request): Promis
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyRevocationStatus(client: any, req: Request): Promise<Response> {
+async function handleVerifyRevocationStatus(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.chain_id) return err(ctx, 'chain_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_revocation_status', { p_chain_id: body.chain_id });
@@ -1099,7 +1103,8 @@ async function handleVerifyRevocationStatus(client: any, req: Request): Promise<
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegisterSignedReceipt(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleRegisterSignedReceipt(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.authority_receipt_id || !body.detached_signature) return err(ctx, 'authority_receipt_id and detached_signature required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('register_signed_authority_receipt', {
@@ -1127,7 +1132,8 @@ async function handleGetSignedReceipts(client: any, ctx: EdgeRequestContext, org
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyAuthoritySignature(client: any, req: Request): Promise<Response> {
+async function handleVerifyAuthoritySignature(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.signed_receipt_id) return err(ctx, 'signed_receipt_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_authority_signature', { p_signed_receipt_id: body.signed_receipt_id });
@@ -1136,7 +1142,8 @@ async function handleVerifyAuthoritySignature(client: any, req: Request): Promis
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyTransportAuthenticity(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleVerifyTransportAuthenticity(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.entity_type || !body.entity_id) return err(ctx, 'entity_type and entity_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_transport_authenticity', {
@@ -1159,7 +1166,8 @@ async function handleValidatePhase5e(client: any, ctx: EdgeRequestContext): Prom
 // ── Phase 5F: Temporal Evidence & Cryptographic Replay Integrity ──────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegisterTimestampAuthority(client: any, req: Request): Promise<Response> {
+async function handleRegisterTimestampAuthority(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   const { data, error } = await client.rpc('register_timestamp_authority', {
     p_authority_id:        body.authority_id,
@@ -1187,7 +1195,8 @@ async function handleGetTimestampAuthorities(client: any, ctx: EdgeRequestContex
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleIssueTimestampEvidence(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleIssueTimestampEvidence(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.entity_type || !body.entity_id || !body.authority_id || !body.timestamp_value || !body.timestamp_signature) {
     return err(ctx, 'entity_type, entity_id, authority_id, timestamp_value, timestamp_signature required', 400, 'MISSING_PARAM');
@@ -1218,7 +1227,8 @@ async function handleGetTemporalEvidence(client: any, ctx: EdgeRequestContext, o
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyTimestampSignature(client: any, req: Request): Promise<Response> {
+async function handleVerifyTimestampSignature(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.evidence_id) return err(ctx, 'evidence_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_timestamp_signature', { p_evidence_id: body.evidence_id });
@@ -1227,7 +1237,8 @@ async function handleVerifyTimestampSignature(client: any, req: Request): Promis
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyTemporalNonrepudiation(client: any, req: Request): Promise<Response> {
+async function handleVerifyTemporalNonrepudiation(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.evidence_id) return err(ctx, 'evidence_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_temporal_nonrepudiation', { p_evidence_id: body.evidence_id });
@@ -1247,7 +1258,8 @@ async function handleGetChronologyLineage(client: any, ctx: EdgeRequestContext, 
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleVerifyChainIntegrity(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleVerifyChainIntegrity(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.entity_type || !body.entity_id) return err(ctx, 'entity_type and entity_id required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('verify_temporal_chain_integrity', {
@@ -1260,7 +1272,8 @@ async function handleVerifyChainIntegrity(client: any, req: Request, orgId: stri
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleCreateTemporalSnapshot(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleCreateTemporalSnapshot(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.entity_type || !body.entity_id || !body.at_timestamp) return err(ctx, 'entity_type, entity_id, at_timestamp required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('create_temporal_snapshot', {
@@ -1286,7 +1299,8 @@ async function handleGetTemporalSnapshots(client: any, ctx: EdgeRequestContext, 
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleGenerateTemporalReplayCertificate(client: any, req: Request, orgId: string): Promise<Response> {
+async function handleGenerateTemporalReplayCertificate(client: any, ctx: EdgeRequestContext, req: Request, orgId: string): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.entity_type || !body.entity_id || !body.at_timestamp) return err(ctx, 'entity_type, entity_id, at_timestamp required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('generate_temporal_replay_certificate', {
@@ -1312,7 +1326,8 @@ async function handleGetReplayValidationSnapshots(client: any, ctx: EdgeRequestC
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleValidateCertAtTimestamp(client: any, req: Request): Promise<Response> {
+async function handleValidateCertAtTimestamp(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json();
   if (!body.chain_id || !body.at_timestamp) return err(ctx, 'chain_id and at_timestamp required', 400, 'MISSING_PARAM');
   const { data, error } = await client.rpc('validate_certificate_at_timestamp', {
@@ -1334,7 +1349,8 @@ async function handleValidatePhase5f(client: any, ctx: EdgeRequestContext): Prom
 // ── Phase 5F-Audit handlers ────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRegisterSerializerProfile(client: any, req: Request): Promise<Response> {
+async function handleRegisterSerializerProfile(client: any, ctx: EdgeRequestContext, req: Request): Promise<Response> {
+  if (!hasPermission(ctx, 'finance:compliance:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
   const body = await req.json().catch(() => ({}));
   const {
     serializer_key, serializer_version, canonicalization_strategy, introduced_phase,
@@ -1994,37 +2010,37 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (seg1 === 'pki') {
     // Trust anchors
     if (seg2 === 'anchors' && seg3 === 'register' && method === 'POST') {
-      return handleRegisterTrustAnchor(client, req);
+      return handleRegisterTrustAnchor(client, ctx, req);
     }
     if (seg2 === 'anchors' && seg3 === '' && method === 'GET') {
       return handleGetTrustAnchors(client, ctx);
     }
     // Certificate chains
     if (seg2 === 'chains' && seg3 === 'register' && method === 'POST') {
-      return handleRegisterCertificateChain(client, req);
+      return handleRegisterCertificateChain(client, ctx, req);
     }
     if (seg2 === 'chains' && seg3 === '' && method === 'GET') {
       return handleGetCertificateChains(client, ctx);
     }
     if (seg2 === 'chains' && seg3 === 'validate' && method === 'POST') {
-      return handleValidateCertificateChain(client, req);
+      return handleValidateCertificateChain(client, ctx, req);
     }
     if (seg2 === 'chains' && seg3 === 'revocation' && method === 'POST') {
-      return handleVerifyRevocationStatus(client, req);
+      return handleVerifyRevocationStatus(client, ctx, req);
     }
     // Signed authority receipts
     if (seg2 === 'signed-receipts' && seg3 === 'register' && method === 'POST') {
-      return handleRegisterSignedReceipt(client, req, orgId);
+      return handleRegisterSignedReceipt(client, ctx, req, orgId);
     }
     if (seg2 === 'signed-receipts' && seg3 === '' && method === 'GET') {
       return handleGetSignedReceipts(client, ctx, orgId);
     }
     if (seg2 === 'signed-receipts' && seg3 === 'verify' && method === 'POST') {
-      return handleVerifyAuthoritySignature(client, req);
+      return handleVerifyAuthoritySignature(client, ctx, req);
     }
     // Transport authenticity
     if (seg2 === 'authenticity' && method === 'POST') {
-      return handleVerifyTransportAuthenticity(client, req, orgId);
+      return handleVerifyTransportAuthenticity(client, ctx, req, orgId);
     }
   }
 
@@ -2036,52 +2052,52 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   if (seg1 === 'temporal') {
     // Timestamp authorities
     if (seg2 === 'authorities' && seg3 === 'register' && method === 'POST') {
-      return handleRegisterTimestampAuthority(client, req);
+      return handleRegisterTimestampAuthority(client, ctx, req);
     }
     if (seg2 === 'authorities' && seg3 === '' && method === 'GET') {
       return handleGetTimestampAuthorities(client, ctx);
     }
     // Temporal evidence
     if (seg2 === 'evidence' && seg3 === 'issue' && method === 'POST') {
-      return handleIssueTimestampEvidence(client, req, orgId);
+      return handleIssueTimestampEvidence(client, ctx, req, orgId);
     }
     if (seg2 === 'evidence' && seg3 === '' && method === 'GET') {
       return handleGetTemporalEvidence(client, ctx, orgId, req);
     }
     if (seg2 === 'evidence' && seg3 === 'verify-signature' && method === 'POST') {
-      return handleVerifyTimestampSignature(client, req);
+      return handleVerifyTimestampSignature(client, ctx, req);
     }
     if (seg2 === 'evidence' && seg3 === 'verify-nonrepudiation' && method === 'POST') {
-      return handleVerifyTemporalNonrepudiation(client, req);
+      return handleVerifyTemporalNonrepudiation(client, ctx, req);
     }
     // Chronology lineage
     if (seg2 === 'chronology' && seg3 === '' && method === 'GET') {
       return handleGetChronologyLineage(client, ctx, orgId, req);
     }
     if (seg2 === 'chronology' && seg3 === 'integrity' && method === 'POST') {
-      return handleVerifyChainIntegrity(client, req, orgId);
+      return handleVerifyChainIntegrity(client, ctx, req, orgId);
     }
     // Temporal snapshots
     if (seg2 === 'snapshots' && seg3 === 'create' && method === 'POST') {
-      return handleCreateTemporalSnapshot(client, req, orgId);
+      return handleCreateTemporalSnapshot(client, ctx, req, orgId);
     }
     if (seg2 === 'snapshots' && seg3 === '' && method === 'GET') {
       return handleGetTemporalSnapshots(client, ctx, orgId, req);
     }
     // Replay certificates
     if (seg2 === 'replay' && seg3 === 'certificate' && method === 'POST') {
-      return handleGenerateTemporalReplayCertificate(client, req, orgId);
+      return handleGenerateTemporalReplayCertificate(client, ctx, req, orgId);
     }
     if (seg2 === 'replay' && seg3 === '' && method === 'GET') {
       return handleGetReplayValidationSnapshots(client, ctx, orgId, req);
     }
     // Certificate validation at timestamp
     if (seg2 === 'validate-at-timestamp' && method === 'POST') {
-      return handleValidateCertAtTimestamp(client, req);
+      return handleValidateCertAtTimestamp(client, ctx, req);
     }
     // Phase 5F-Audit: Serializer registry
     if (seg2 === 'serializers' && seg3 === 'register' && method === 'POST') {
-      return handleRegisterSerializerProfile(client, req);
+      return handleRegisterSerializerProfile(client, ctx, req);
     }
     if (seg2 === 'serializers' && seg3 === '' && method === 'GET') {
       return handleGetSerializerRegistry(client, ctx);
