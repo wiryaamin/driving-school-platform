@@ -4,6 +4,7 @@ import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline schemas (Deno cannot import workspace packages) ──────────────────
@@ -210,45 +211,17 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   // Finds the student's oldest non-expired active package for the slot category.
   // If active packages exist but none have remaining credits → reject booking.
   // Students with no active packages are allowed (billed separately, no package).
-  let creditAssignmentId: string | null = null;
-  let creditCategory:     string | null = null;
+  const preflight = await resolveLessonPackageCredit(client, {
+    organizationId: ctx.organizationId,
+    studentId:      dto.student_id,
+    lessonTypeId:   slot.lesson_type_id ?? null,
+  });
 
-  if (slot.lesson_type_id) {
-    const { data: lt } = await (client as any)
-      .from('lesson_types')
-      .select('category')
-      .eq('id', slot.lesson_type_id)
-      .maybeSingle();
-
-    if (lt?.category) {
-      const { data: asgnRows } = await (client as any)
-        .from('student_package_assignments')
-        .select('id, package_quantity, lessons_used, expires_at')
-        .eq('student_id',      dto.student_id)
-        .eq('organization_id', ctx.organizationId)
-        .eq('lesson_category', lt.category as string)
-        .eq('status',          'active')
-        .order('assigned_at',  { ascending: true });
-
-      const now = new Date().toISOString();
-      const activeValid: Array<{ id: string; package_quantity: number; lessons_used: number; expires_at: string | null }> =
-        (asgnRows ?? []).filter(
-          (r: any) => r.expires_at === null || (r.expires_at as string) > now
-        );
-
-      if (activeValid.length > 0) {
-        // Student has active packages — credits are required for this booking
-        const firstWithCredits = activeValid.find(r => r.lessons_used < r.package_quantity);
-        if (!firstWithCredits) {
-          return errorResp(ctx, 409, 'INSUFFICIENT_CREDITS',
-            'Eleven saknar lektionstillgodokvitton för det här passet',
-            { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
-          );
-        }
-        creditAssignmentId = firstWithCredits.id;
-        creditCategory     = lt.category as string;
-      }
-    }
+  if (preflight.kind === 'insufficient') {
+    return errorResp(ctx, 409, 'INSUFFICIENT_CREDITS',
+      'Eleven saknar lektionstillgodokvitton för det här passet',
+      { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
+    );
   }
 
   const insertPayload: Record<string, unknown> = {
@@ -262,11 +235,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   };
   if (dto.price_sek !== undefined) insertPayload['price_sek'] = dto.price_sek;
 
-  const { data: booking, error } = await (client as any)
-    .from('lesson_bookings')
-    .insert(insertPayload)
-    .select()
-    .single();
+  const { data: booking, error } = await insertLessonBooking(client, insertPayload);
 
   if (error) {
     logger.error('bookings.create_failed', { correlation_id: ctx.correlationId, error: error.message });
@@ -276,38 +245,26 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   // ── C1: Consume package credit (post-insert) ──────────────────────────────────
-  // consume_lesson_credit() uses FOR UPDATE — safe under concurrent load.
   // Race edge case: pre-flight passed but concurrent booking exhausted the last
   // credit between our check and this insert. Compensate by cancelling the new booking.
-  if (creditAssignmentId !== null) {
-    const { error: consumeErr } = await (client as any).rpc('consume_lesson_credit', {
-      p_assignment_id:   creditAssignmentId,
-      p_organization_id: ctx.organizationId,
-      p_booking_id:      booking.id,
-      p_lesson_category: creditCategory,
-      p_actor_id:        ctx.actorId,
-      p_actor_email:     null,
+  if (preflight.kind === 'available') {
+    const consumeResult = await consumeLessonPackageCreditOrCompensate(client, {
+      assignmentId:   preflight.assignmentId,
+      category:       preflight.category,
+      organizationId: ctx.organizationId,
+      bookingId:      booking.id,
+      actorId:        ctx.actorId,
+      actorEmail:     null,
     });
 
-    if (consumeErr) {
+    if (!consumeResult.ok) {
       logger.warn('bookings.credit_consume_failed', {
         correlation_id: ctx.correlationId,
         booking_id:     booking.id,
         student_id:     dto.student_id,
-        assignment_id:  creditAssignmentId,
-        error:          consumeErr.message,
+        assignment_id:  preflight.assignmentId,
+        error:          consumeResult.errorMessage,
       });
-      await (client as any)
-        .from('lesson_bookings')
-        .update({
-          status:            'cancelled',
-          status_changed_at: new Date().toISOString(),
-          cancelled_at:      new Date().toISOString(),
-          cancelled_by:      ctx.actorId,
-          updated_by:        ctx.actorId,
-        })
-        .eq('id', booking.id)
-        .eq('organization_id', ctx.organizationId);
       return errorResp(ctx, 409, 'INSUFFICIENT_CREDITS',
         'Eleven saknar lektionstillgodokvitton för det här passet',
         { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
@@ -320,8 +277,8 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
       org_id:          ctx.organizationId,
       booking_id:      booking.id,
       student_id:      dto.student_id,
-      assignment_id:   creditAssignmentId,
-      lesson_category: creditCategory,
+      assignment_id:   preflight.assignmentId,
+      lesson_category: preflight.category,
     });
   }
 

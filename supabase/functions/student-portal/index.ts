@@ -5,6 +5,7 @@ import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -446,7 +447,7 @@ Deno.serve((req: Request) =>
       // Verify slot exists and has capacity
       const { data: slot } = await supabase
         .from('lesson_slots')
-        .select('id, status, current_bookings, max_bookings')
+        .select('id, status, current_bookings, max_bookings, lesson_type_id')
         .eq('id', slot_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
@@ -470,11 +471,24 @@ Deno.serve((req: Request) =>
 
       if (existing) return fail(409, 'Du har redan en bokning för detta pass');
 
-      const { data: booking, error: insertErr } = await supabase
-        .from('lesson_bookings')
-        .insert({ organization_id, slot_id, student_id, status: 'reserved' })
-        .select('id, slot_id, student_id, status, created_at')
-        .single();
+      // Package credit pre-flight — same rule the staff booking path enforces,
+      // via the shared implementation in _shared/lesson-credits.ts. This
+      // endpoint previously never checked package credit at all (ISSUE-1).
+      const preflight = await resolveLessonPackageCredit(supabase, {
+        organizationId: organization_id,
+        studentId:      student_id,
+        lessonTypeId:   (slot as { lesson_type_id: string | null }).lesson_type_id,
+      });
+
+      if (preflight.kind === 'insufficient') {
+        return fail(409, 'Eleven saknar lektionstillgodokvitton för det här passet');
+      }
+
+      const { data: booking, error: insertErr } = await insertLessonBooking(
+        supabase,
+        { organization_id, slot_id, student_id, status: 'reserved' },
+        'id, slot_id, student_id, status, created_at',
+      );
 
       if (insertErr) {
         // 23505 = unique_violation: duplicate booking (TOCTOU race — same student, same slot)
@@ -483,6 +497,27 @@ Deno.serve((req: Request) =>
         if (insertErr.code === '23P01') return fail(409, 'Platsen är fullbokad');
         logger.error('student-portal: booking insert failed', { error: insertErr.message });
         return fail(500, 'Booking failed — please try again');
+      }
+
+      if (preflight.kind === 'available') {
+        const consumeResult = await consumeLessonPackageCreditOrCompensate(supabase, {
+          assignmentId:   preflight.assignmentId,
+          category:       preflight.category,
+          organizationId: organization_id,
+          bookingId:      (booking as { id: string }).id,
+          actorId:        null,
+          actorEmail:     null,
+        });
+
+        if (!consumeResult.ok) {
+          logger.warn('student-portal: credit consume failed', {
+            booking_id:    (booking as { id: string }).id,
+            student_id,
+            assignment_id: preflight.assignmentId,
+            error:         consumeResult.errorMessage,
+          });
+          return fail(409, 'Eleven saknar lektionstillgodokvitton för det här passet');
+        }
       }
 
       return ok(booking, 201);
