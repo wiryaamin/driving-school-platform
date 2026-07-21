@@ -193,7 +193,7 @@ async function handleUpdate(req: Request, client: any, orgId: string, ctx: EdgeR
       p_actor_id:        actorId,
       p_actor_email:     actorEmail,
       p_metadata:        { notes_updated: true },
-    }).catch(() => {/* non-critical */});
+    }).then(undefined, () => {/* non-critical */});
 
     return json({ data });
   }

@@ -364,7 +364,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
       p_organization_id: ctx.organizationId,
       p_actor_id:        ctx.actorId ?? null,
       p_actor_email:     null,
-    }).catch((e: unknown) => {
+    }).then(undefined, (e: unknown) => {
       logger.warn('booking.record_lesson_completed_failed', {
         correlation_id: ctx.correlationId,
         booking_id:     id,

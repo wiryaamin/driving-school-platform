@@ -394,7 +394,7 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
             p_payload:         commPayload,
             p_organization_id: orgId,
             p_causation_id:    event.id,
-          }).catch((enqueueErr: unknown) => {
+          }).then(undefined, (enqueueErr: unknown) => {
             logger.warn('booking_confirmed.enqueue_failed', { event_id: event.id, booking_id: bookingId, error: String(enqueueErr) });
           });
         }
@@ -410,7 +410,7 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
     await (client as any).rpc('record_lesson_booked_event', {
       p_booking_id:      bookingId,
       p_organization_id: orgId,
-    }).catch((e: unknown) => {
+    }).then(undefined, (e: unknown) => {
       logger.warn('handler.lesson_created.record_lesson_booked_failed', {
         event_id:   event.id,
         booking_id: bookingId,
@@ -512,7 +512,7 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
             p_payload:         commPayload,
             p_organization_id: orgId,
             p_causation_id:    event.id,
-          }).catch((enqueueErr: unknown) => {
+          }).then(undefined, (enqueueErr: unknown) => {
             logger.warn('booking_cancelled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
           });
       }
@@ -593,7 +593,7 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
               p_payload:         commPayload,
               p_organization_id: orgId,
               p_causation_id:    event.id,
-            }).catch((enqueueErr: unknown) => {
+            }).then(undefined, (enqueueErr: unknown) => {
               logger.warn('booking_rescheduled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
             });
           }
@@ -657,7 +657,7 @@ async function handleWaitlistPromoted(event: OutboxEvent, client: any): Promise<
           p_payload:         commPayload,
           p_organization_id: orgId,
           p_causation_id:    event.id,
-        }).catch((enqueueErr: unknown) => {
+        }).then(undefined, (enqueueErr: unknown) => {
           logger.warn('waitlist_promoted.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
         });
 
@@ -764,7 +764,7 @@ async function handleInvoiceIssued(event: OutboxEvent, client: any): Promise<Han
           p_payload:         commPayload,
           p_organization_id: orgId,
           p_causation_id:    event.id,
-        }).catch((enqueueErr: unknown) => {
+        }).then(undefined, (enqueueErr: unknown) => {
           logger.warn('invoice_issued.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
         });
       }
@@ -943,7 +943,7 @@ async function handleInvoiceOverdue(event: OutboxEvent, client: any): Promise<Ha
           p_payload:         commPayload,
           p_organization_id: orgId,
           p_causation_id:    event.id,
-        }).catch((enqueueErr: unknown) => {
+        }).then(undefined, (enqueueErr: unknown) => {
           logger.warn('invoice_overdue.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
         });
       }
@@ -1081,7 +1081,7 @@ async function handleCommunicationRequested(event: OutboxEvent, client: any): Pr
       .from('notifications')
       .update({ status: 'sent', status_changed_at: new Date().toISOString(), sent_at: new Date().toISOString() })
       .eq('id', notifId)
-      .catch((e: unknown) => {
+      .then(undefined, (e: unknown) => {
         logger.warn('handler.communication_requested.update_notification_failed', {
           event_id: event.id,
           notif_id: notifId,
@@ -1238,7 +1238,7 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
         p_payload:         commPayload,
         p_organization_id: orgId,
         p_target_id:       reminderId,
-      }).catch((enqueueErr: unknown) => {
+      }).then(undefined, (enqueueErr: unknown) => {
         logger.warn('reminder.enqueue_failed', { worker_id: workerId, reminder_id: reminderId, error: String(enqueueErr) });
       });
 
@@ -1598,7 +1598,7 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
         p_run_id:       workerRunId,
         p_status:       'failed',
         p_error_summary: claimError.message,
-      }).catch(() => {});
+      }).then(undefined, () => {});
     }
     return metrics;
   }
@@ -1738,7 +1738,7 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
       p_retry_count:       0,
       p_dead_letter_count: metrics.events_dead_lettered,
       p_metadata:          metrics,
-    }).catch((completeErr: unknown) => {
+    }).then(undefined, (completeErr: unknown) => {
       logger.warn('worker.run_log_complete_failed', {
         worker_id: workerId,
         error:     completeErr instanceof Error ? completeErr.message : String(completeErr),

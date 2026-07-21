@@ -173,7 +173,7 @@ async function runMaintenanceTick(supabase: any, correlationId: string, requestI
       p_retry_count:       counts.retried,
       p_dead_letter_count: 0,
       p_error_summary:     error ?? null,
-    }).catch(() => {});
+    }).then(undefined, () => {});
   };
 
   // Claim scheduled messages (uses FOR UPDATE SKIP LOCKED)

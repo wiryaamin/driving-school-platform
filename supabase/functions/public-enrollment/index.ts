@@ -395,7 +395,7 @@ async function handleSubmit(req: Request, client: any, orgId: string): Promise<R
   // ── Increment coupon redemption count (non-critical; enrollment already committed) ──
   if (resolvedCouponId) {
     await client.rpc('increment_coupon_redemptions', { p_coupon_id: resolvedCouponId })
-      .catch(() => {
+      .then(undefined, () => {
         console.warn('Could not increment coupon redemption count for', resolvedCouponId);
       });
   }
@@ -406,7 +406,7 @@ async function handleSubmit(req: Request, client: any, orgId: string): Promise<R
     p_enrollment_id:   enrollment.id,
     p_event_type:      'submitted',
     p_metadata:        { source: 'public_catalog' },
-  }).catch(() => {
+  }).then(undefined, () => {
     console.warn('Could not emit submitted enrollment event for', enrollment.id);
   });
 
