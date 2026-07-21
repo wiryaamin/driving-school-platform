@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import { vehicleKeys } from './useVehicles.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ async function fetchInspections(vehicleId?: string): Promise<VehicleInspection[]
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
-async function createInspection(input: CreateInspectionInput): Promise<void> {
+async function createInspection(input: CreateInspectionInput & { organization_id: string }): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabase as unknown as any)
     .from('vehicle_inspections')
@@ -101,8 +102,13 @@ export function useVehicleInspections(vehicleId?: string) {
 
 export function useCreateInspection() {
   const qc = useQueryClient();
+  const { organization } = useSession();
+  const orgId = organization?.id;
   return useMutation({
-    mutationFn: createInspection,
+    mutationFn: (input: CreateInspectionInput) => {
+      if (!orgId) throw new Error('Ingen organisation');
+      return createInspection({ ...input, organization_id: orgId });
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: inspectionKeys.lists() });
       void qc.invalidateQueries({ queryKey: vehicleKeys.list() });

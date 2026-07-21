@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ async function fetchLocations(): Promise<OrgLocation[]> {
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
-async function createLocation(input: CreateLocationInput): Promise<void> {
+async function createLocation(input: CreateLocationInput & { organization_id: string }): Promise<void> {
   const { error } = await supabase
     .from('organization_locations')
     .insert(input as never);
@@ -76,8 +77,13 @@ export function useLocations() {
 
 export function useCreateLocation() {
   const qc = useQueryClient();
+  const { organization } = useSession();
+  const orgId = organization?.id;
   return useMutation({
-    mutationFn: createLocation,
+    mutationFn: (input: CreateLocationInput) => {
+      if (!orgId) throw new Error('Ingen organisation');
+      return createLocation({ ...input, organization_id: orgId });
+    },
     onSuccess:  () => qc.invalidateQueries({ queryKey: locationKeys.list() }),
   });
 }

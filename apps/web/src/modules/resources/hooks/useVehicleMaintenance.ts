@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import { vehicleKeys } from './useVehicles.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ async function fetchMaintenanceRecords(vehicleId?: string): Promise<VehicleMaint
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
-async function createMaintenanceRecord(input: CreateMaintenanceInput): Promise<void> {
+async function createMaintenanceRecord(input: CreateMaintenanceInput & { organization_id: string }): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabase as unknown as any)
     .from('vehicle_maintenance')
@@ -141,8 +142,13 @@ export function useVehicleMaintenanceRecords(vehicleId?: string) {
 
 export function useCreateMaintenanceRecord() {
   const qc = useQueryClient();
+  const { organization } = useSession();
+  const orgId = organization?.id;
   return useMutation({
-    mutationFn: createMaintenanceRecord,
+    mutationFn: (input: CreateMaintenanceInput) => {
+      if (!orgId) throw new Error('Ingen organisation');
+      return createMaintenanceRecord({ ...input, organization_id: orgId });
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: maintenanceKeys.lists() });
       void qc.invalidateQueries({ queryKey: vehicleKeys.list() });

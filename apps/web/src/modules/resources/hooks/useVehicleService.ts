@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import { vehicleKeys } from './useVehicles.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ async function fetchServiceRecords(vehicleId?: string): Promise<VehicleServiceRe
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
-async function createServiceRecord(input: CreateServiceRecordInput): Promise<void> {
+async function createServiceRecord(input: CreateServiceRecordInput & { organization_id: string }): Promise<void> {
   const { error } = await supabase
     .from('vehicle_service_records')
     .insert(input as never);
@@ -109,8 +110,13 @@ export function useVehicleServiceRecords(vehicleId?: string) {
 
 export function useCreateServiceRecord() {
   const qc = useQueryClient();
+  const { organization } = useSession();
+  const orgId = organization?.id;
   return useMutation({
-    mutationFn: createServiceRecord,
+    mutationFn: (input: CreateServiceRecordInput) => {
+      if (!orgId) throw new Error('Ingen organisation');
+      return createServiceRecord({ ...input, organization_id: orgId });
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: serviceKeys.lists() });
       void qc.invalidateQueries({ queryKey: vehicleKeys.list() });
