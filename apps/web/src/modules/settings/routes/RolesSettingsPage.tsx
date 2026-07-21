@@ -194,7 +194,7 @@ export function RolesSettingsPage() {
     staleTime: 30_000,
   });
 
-  const { data: memberships = [] } = useQuery<MembershipRow[]>({
+  const { data: memberships = [], isLoading: membershipsLoading } = useQuery<MembershipRow[]>({
     queryKey: ['settings-roles-memberships', orgId],
     queryFn: async () => {
       if (!orgId) return [];
@@ -210,20 +210,26 @@ export function RolesSettingsPage() {
     staleTime: 30_000,
   });
 
+  // profiles has no organization_id column (removed in Phase 1B.2 — org
+  // context flows through memberships only, see packages/types/auth.types.ts;
+  // same fix already applied to UsersSettingsPage.tsx). Scope by the member
+  // ids resolved above, not a direct org filter.
+  const memberIds = useMemo(() => memberships.map(m => m.user_id), [memberships]);
+
   const { data: profiles = [] } = useQuery<ProfileRow[]>({
-    queryKey: ['settings-roles-profiles', orgId],
+    queryKey: ['settings-roles-profiles', orgId, memberIds],
     queryFn: async () => {
-      if (!orgId) return [];
+      if (memberIds.length === 0) return [];
       const { data, error } = await supabase
         .from('profiles')
         .select('id, first_name, last_name, email')
-        .eq('organization_id', orgId)
+        .in('id', memberIds)
         .is('deleted_at', null)
         .order('first_name');
       if (error) throw error;
       return (data ?? []) as ProfileRow[];
     },
-    enabled: !!orgId,
+    enabled: !!orgId && !membershipsLoading,
     staleTime: 30_000,
   });
 

@@ -124,23 +124,6 @@ export function UsersSettingsPage() {
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
-  const { data: profiles = [], isLoading: profilesLoading } = useQuery<ProfileRow[]>({
-    queryKey: ['settings-users-profiles', orgId],
-    queryFn: async () => {
-      if (!orgId) return [];
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, first_name, last_name, email, phone, is_active, last_seen_at, created_at')
-        .eq('organization_id', orgId)
-        .is('deleted_at', null)
-        .order('first_name');
-      if (error) throw error;
-      return (data ?? []) as ProfileRow[];
-    },
-    enabled: !!orgId,
-    staleTime: 30_000,
-  });
-
   const { data: memberships = [], isLoading: membershipsLoading } = useQuery<MembershipRow[]>({
     queryKey: ['settings-users-memberships', orgId],
     queryFn: async () => {
@@ -154,6 +137,28 @@ export function UsersSettingsPage() {
       return (data ?? []) as MembershipRow[];
     },
     enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
+  // profiles has no organization_id column (removed in Phase 1B.2 — org
+  // context flows through memberships only, see packages/types/auth.types.ts).
+  // Scope by the member ids already resolved above, not a direct org filter.
+  const memberIds = useMemo(() => memberships.map(m => m.user_id), [memberships]);
+
+  const { data: profiles = [], isLoading: profilesLoading } = useQuery<ProfileRow[]>({
+    queryKey: ['settings-users-profiles', orgId, memberIds],
+    queryFn: async () => {
+      if (memberIds.length === 0) return [];
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, first_name, last_name, email, phone, is_active, last_seen_at, created_at')
+        .in('id', memberIds)
+        .is('deleted_at', null)
+        .order('first_name');
+      if (error) throw error;
+      return (data ?? []) as ProfileRow[];
+    },
+    enabled: !!orgId && !membershipsLoading,
     staleTime: 30_000,
   });
 
@@ -195,6 +200,9 @@ export function UsersSettingsPage() {
       if (!orgId || !editTarget) return;
       const errors = validateEdit(editForm);
       if (Object.keys(errors).length > 0) { setEditErrors(errors); throw new Error('validation'); }
+      // No organization_id filter here (see the profiles query above for why) —
+      // editTarget only ever comes from this page's already org-scoped `users`
+      // list, so there is no cross-tenant risk in targeting by id alone.
       const { error } = await supabase
         .from('profiles')
         .update({
@@ -203,8 +211,7 @@ export function UsersSettingsPage() {
           phone:      editForm.phone.trim() || null,
           is_active:  editForm.is_active,
         } as never)
-        .eq('id', editTarget.id)
-        .eq('organization_id', orgId);
+        .eq('id', editTarget.id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -224,8 +231,7 @@ export function UsersSettingsPage() {
       const { error } = await supabase
         .from('profiles')
         .update({ is_active: active } as never)
-        .eq('id', id)
-        .eq('organization_id', orgId);
+        .eq('id', id);
       if (error) throw error;
     },
     onSuccess: (_, vars) => {
