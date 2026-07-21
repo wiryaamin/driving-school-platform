@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { CalendarRange } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -34,9 +34,27 @@ export function RescheduleBookingDialog({
 }: RescheduleBookingDialogProps) {
   const [selectedSlot, setSelectedSlot] = useState<LessonSlot | null>(null);
 
-  const now  = new Date();
-  const from = now.toISOString();
-  const to   = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString();
+  // Computed once per dialog open, not on every render — from/to feed the
+  // query key, and fresh Date objects on every render would change that key
+  // every render, causing an unbounded refetch loop.
+  //
+  // `open` is intentionally listed as a dependency even though it's never
+  // read inside the callback below — it's a deliberate recompute trigger,
+  // not an input value. This component is always mounted by its parent
+  // (SlotDetailSheet.tsx renders it unconditionally, toggling only the
+  // `open` prop), so it never remounts between dialog opens; a `[]`
+  // dependency array would freeze `from`/`to` at whatever moment the parent
+  // sheet first mounted, silently shrinking the 90-day lookahead window for
+  // every reschedule attempted in a long-lived session (a sheet left open
+  // for review before rescheduling is normal usage here, not an edge case).
+  const { from, to } = useMemo(() => {
+    const now = new Date();
+    return {
+      from: now.toISOString(),
+      to:   new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const { data: slotsData, isLoading } = useSlotList(
     { status: 'open', from, to, per_page: 50, sort_by: 'starts_at', sort_dir: 'asc' },
