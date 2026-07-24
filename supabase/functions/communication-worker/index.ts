@@ -321,6 +321,16 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
       errorMsg   = result.error;
     }
 
+    // An immediate-dispatch failure must still be retry-eligible: without
+    // retry_after set here, claim_retry_messages() (which requires
+    // retry_after IS NOT NULL) can never reclaim this row, so it would stay
+    // 'failed' forever with no automatic recovery — confirmed live: 4 real
+    // Resend failures from this exact path, all retry_count=0/retry_after=
+    // null, never retried. retry_count starts at 1 since this dispatch
+    // attempt already happened; formula matches dispatchClaimed()'s own
+    // 2^retry_count-minutes backoff.
+    const failedImmediately = status === 'failed';
+
     // Insert into outbound_messages (service role bypasses RLS)
     const { error: insertErr } = await supabase
       .from('outbound_messages')
@@ -336,6 +346,8 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
         provider:            cfg?.provider ?? null,
         provider_message_id: providerId,
         error_message:       errorMsg,
+        retry_count:         failedImmediately ? 1 : 0,
+        retry_after:         failedImmediately ? new Date(Date.now() + 2 * 60 * 1000).toISOString() : null,
         sent_at:             status === 'sent' ? new Date().toISOString() : null,
         metadata:            { trigger_event, rule_id: rule.id },
         created_by:          null,

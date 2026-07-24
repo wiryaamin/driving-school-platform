@@ -447,6 +447,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         errorMsg       = result.error;
       }
 
+      // An immediate-dispatch failure must still be retry-eligible: without
+      // retry_after set here, the /communication-worker maintenance tick's
+      // claim_retry_messages() (which requires retry_after IS NOT NULL) can
+      // never reclaim this row automatically — it would only ever recover
+      // via a staff member manually calling PATCH .../retry. retry_count
+      // starts at 1 since this dispatch attempt already happened; formula
+      // matches the retry endpoint's own 2^retry_count-minutes backoff.
+      const failedImmediately = dispatchStatus === 'failed';
+
       const { data: msg, error: insertErr } = await supabase
         .from('outbound_messages')
         .insert({
@@ -462,6 +471,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           provider:            cfg?.provider ?? null,
           provider_message_id: providerId,
           error_message:       errorMsg,
+          retry_count:         failedImmediately ? 1 : 0,
+          retry_after:         failedImmediately ? new Date(Date.now() + 2 * 60 * 1000).toISOString() : null,
           scheduled_at:        body.scheduled_at ?? null,
           sent_at:             dispatchStatus === 'sent' ? new Date().toISOString() : null,
           metadata:            body.metadata ?? {},
