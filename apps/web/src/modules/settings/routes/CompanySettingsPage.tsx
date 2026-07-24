@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight, Eye, EyeOff, Upload } from 'lucide-react';
+import { Building2, ChevronRight, Upload } from 'lucide-react';
 import {
   Button, Skeleton,
   Card, CardContent, CardHeader, CardTitle, CardFooter,
@@ -29,7 +29,6 @@ interface OrgSettings {
   customer_email?:   string;
   customer_phone?:   string;
   swish_number?:     string;
-  stripe_secret_key?: string;
   nets_secret_key?:  string;
   nets_checkout_key?: string;
   instagram?:        string;
@@ -54,7 +53,7 @@ type FormFields = {
   customer_email: string; customer_phone: string;
   postal_address: string; postal_zip: string; postal_city: string;
   visit_address: string; visit_zip: string; visit_city: string;
-  swish_number: string; stripe_secret_key: string;
+  swish_number: string;
   nets_secret_key: string; nets_checkout_key: string;
   instagram: string; facebook: string; tiktok: string; youtube: string;
 };
@@ -119,7 +118,7 @@ export function CompanySettingsPage() {
     customer_email: '', customer_phone: '',
     postal_address: '', postal_zip: '', postal_city: '',
     visit_address: '', visit_zip: '', visit_city: '',
-    swish_number: '', stripe_secret_key: '', nets_secret_key: '', nets_checkout_key: '',
+    swish_number: '', nets_secret_key: '', nets_checkout_key: '',
     instagram: '', facebook: '', tiktok: '', youtube: '',
   });
 
@@ -150,7 +149,6 @@ export function CompanySettingsPage() {
       visit_zip:         s.visit_zip ?? '',
       visit_city:        s.visit_city ?? '',
       swish_number:      s.swish_number ?? '',
-      stripe_secret_key: s.stripe_secret_key ?? '',
       nets_secret_key:   s.nets_secret_key ?? '',
       nets_checkout_key: s.nets_checkout_key ?? '',
       instagram:         s.instagram ?? '',
@@ -243,6 +241,51 @@ export function CompanySettingsPage() {
     onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
   });
 
+  // Stripe credentials — status/masked display only, never the real value
+  // (ADR-022: server-side, encrypted, write-only from the client's
+  // perspective). Saved through the dedicated stripe-credentials function,
+  // not a direct table write, unlike the rest of this page's fields.
+  interface StripeCredentialStatus {
+    stripe_secret_key_configured:     boolean;
+    stripe_secret_key_masked:         string | null;
+    stripe_webhook_secret_configured: boolean;
+    stripe_webhook_secret_masked:     string | null;
+  }
+
+  const { data: stripeStatus, isLoading: stripeStatusLoading } = useQuery<StripeCredentialStatus | null>({
+    queryKey: ['stripe-credentials-status', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data, error } = await supabase.functions.invoke<{ data: StripeCredentialStatus }>(
+        'stripe-credentials', { method: 'GET' },
+      );
+      if (error) return null;
+      return data?.data ?? null;
+    },
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
+  const [stripeKeyInput,     setStripeKeyInput]     = useState('');
+  const [stripeWebhookInput, setStripeWebhookInput] = useState('');
+
+  const saveStripeCredentials = useMutation({
+    mutationFn: async (fields: { stripe_secret_key?: string; stripe_webhook_secret?: string }) => {
+      const { error, data } = await supabase.functions.invoke<{ data: StripeCredentialStatus }>(
+        'stripe-credentials', { method: 'POST', body: fields },
+      );
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['stripe-credentials-status', orgId] });
+      setStripeKeyInput('');
+      setStripeWebhookInput('');
+      toast({ title: 'Stripe-uppgifter sparades' });
+    },
+    onError: () => toast({ title: 'Kunde inte spara Stripe-uppgifter — kontrollera nyckeln', variant: 'destructive' }),
+  });
+
   const updatePaymentGateways = useMutation({
     mutationFn: async () => {
       if (!orgId) return;
@@ -251,7 +294,6 @@ export function CompanySettingsPage() {
         settings: {
           ...cur,
           swish_number:      form.swish_number      || undefined,
-          stripe_secret_key: form.stripe_secret_key || undefined,
           nets_secret_key:   form.nets_secret_key   || undefined,
           nets_checkout_key: form.nets_checkout_key || undefined,
         },
@@ -416,22 +458,84 @@ export function CompanySettingsPage() {
           </div>
 
           {/* Stripe */}
-          <div className="space-y-2 pt-4 border-t border-border">
+          <div className="space-y-3 pt-4 border-t border-border">
             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Stripe (kortbetalning)</p>
-            <SecretField
-              id="stripe_secret_key"
-              label="Stripe Secret Key"
-              placeholder="sk_live_… eller sk_test_…"
-              value={form.stripe_secret_key}
-              onChange={v => setForm(prev => ({ ...prev, stripe_secret_key: v }))}
-            />
+
+            {/* Secret Key */}
+            <div className="space-y-1.5">
+              <Label htmlFor="stripe_secret_key_input">Stripe Secret Key</Label>
+              <p className="text-[11px] text-muted-foreground">
+                {stripeStatusLoading ? 'Kontrollerar status…'
+                  : stripeStatus?.stripe_secret_key_configured
+                    ? stripeStatus.stripe_secret_key_masked
+                      ? <>Konfigurerad: <span className="font-mono">{stripeStatus.stripe_secret_key_masked}</span></>
+                      : 'Konfigurerad'
+                    : 'Inte konfigurerad'}
+                {' '}— värdet visas aldrig igen efter att det sparats; ange ett nytt för att ersätta det.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  id="stripe_secret_key_input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={stripeKeyInput}
+                  onChange={e => setStripeKeyInput(e.target.value)}
+                  placeholder="sk_live_… eller sk_test_…"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!stripeKeyInput.trim() || saveStripeCredentials.isPending}
+                  onClick={() => saveStripeCredentials.mutate({ stripe_secret_key: stripeKeyInput.trim() })}
+                >
+                  {saveStripeCredentials.isPending ? 'Verifierar…' : 'Spara'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Webhook Signing Secret */}
+            <div className="space-y-1.5">
+              <Label htmlFor="stripe_webhook_secret_input">Stripe Webhook Signing Secret</Label>
+              <p className="text-[11px] text-muted-foreground">
+                {stripeStatusLoading ? 'Kontrollerar status…'
+                  : stripeStatus?.stripe_webhook_secret_configured
+                    ? stripeStatus.stripe_webhook_secret_masked
+                      ? <>Konfigurerad: <span className="font-mono">{stripeStatus.stripe_webhook_secret_masked}</span></>
+                      : 'Konfigurerad'
+                    : 'Inte konfigurerad'}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  id="stripe_webhook_secret_input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={stripeWebhookInput}
+                  onChange={e => setStripeWebhookInput(e.target.value)}
+                  placeholder="whsec_…"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!stripeWebhookInput.trim() || saveStripeCredentials.isPending}
+                  onClick={() => saveStripeCredentials.mutate({ stripe_webhook_secret: stripeWebhookInput.trim() })}
+                >
+                  {saveStripeCredentials.isPending ? 'Sparar…' : 'Spara'}
+                </Button>
+              </div>
+            </div>
+
             <p className="text-[11px] text-muted-foreground">
-              Hämtas från{' '}
-              <span className="font-medium">Stripe Dashboard → API-nycklar</span>.
-              Konfigurera även webhook-URL:en i Stripe:{' '}
-              <span className="font-mono text-[11px] bg-muted px-1 py-px rounded">/functions/v1/stripe-webhook</span>
-              {' '}(händelse:{' '}
-              <span className="font-mono text-[11px]">checkout.session.completed</span>).
+              Secret Key hämtas från{' '}
+              <span className="font-medium">Stripe Dashboard → API-nycklar</span> och verifieras mot Stripe innan den sparas.
+              Registrera denna webhook-URL i samma Stripe-konto:{' '}
+              <span className="font-mono text-[11px] bg-muted px-1 py-px rounded">
+                /functions/v1/stripe-webhook/{orgId ?? '{organisation-id}'}
+              </span>
+              {' '}(händelser:{' '}
+              <span className="font-mono text-[11px]">checkout.session.completed</span>,{' '}
+              <span className="font-mono text-[11px]">checkout.session.expired</span>) — kopiera sedan
+              webhookens signeringshemlighet (<span className="font-mono text-[11px]">whsec_…</span>) hit.
+              Utan detta fungerar kortbetalning, men bekräftelsen sker inte automatiskt.
             </p>
           </div>
 
@@ -513,48 +617,6 @@ function Field({
       <Label htmlFor={id}>{label}</Label>
       <Input id={id} type={type} value={value} onChange={onChange} placeholder={placeholder} />
       {error && <p className="text-xs text-destructive">{error}</p>}
-    </div>
-  );
-}
-
-// ─── Secret field (password visibility toggle) ────────────────────────────────
-
-function SecretField({
-  id,
-  label,
-  placeholder,
-  value,
-  onChange,
-}: {
-  id:          string;
-  label:       string;
-  placeholder: string;
-  value:       string;
-  onChange:    (v: string) => void;
-}) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>{label}</Label>
-      <div className="relative">
-        <Input
-          id={id}
-          type={show ? 'text' : 'password'}
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          placeholder={placeholder}
-          autoComplete="new-password"
-          className="pr-9"
-        />
-        <button
-          type="button"
-          onClick={() => setShow(v => !v)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-          aria-label={show ? 'Dölj nyckel' : 'Visa nyckel'}
-        >
-          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-        </button>
-      </div>
     </div>
   );
 }

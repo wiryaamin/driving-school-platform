@@ -6,6 +6,7 @@ import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
+import { decryptCredential } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1045,15 +1046,19 @@ Deno.serve((req: Request) =>
       const invoiceId = body?.invoice_id;
       if (!invoiceId) return fail(400, 'invoice_id required');
 
-      // Verify invoice belongs to this student
+      // Verify invoice belongs to this student. total_sek/deleted_at are not
+      // real columns on invoices (total_amount/outstanding_amount, void_at) —
+      // this query 400'd on every call, so `inv` was always null and this
+      // handler always returned a false "not found", meaning Stripe payment
+      // initiation from the student portal has never actually worked.
       const { data: inv } = await supabase
         .from('invoices')
-        .select('id, total_sek, invoice_number')
+        .select('id, outstanding_amount, invoice_number')
         .eq('id', invoiceId)
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
-        .in('status', ['issued', 'overdue'])
-        .is('deleted_at', null)
+        .in('status', ['issued', 'overdue', 'partially_paid'])
+        .is('void_at', null)
         .maybeSingle();
 
       if (!inv) return fail(404, 'Invoice not found or already paid');
@@ -1065,17 +1070,21 @@ Deno.serve((req: Request) =>
         .eq('id', organization_id)
         .maybeSingle();
 
-      const settings  = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
-      const stripeKey = (settings['stripe_secret_key'] as string | undefined)
-                     ?? Deno.env.get('STRIPE_SECRET_KEY')
-                     ?? '';
+      const settings   = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
+      const storedKey  = settings['stripe_secret_key'] as string | undefined;
+      // decryptCredential() transparently handles both newly-encrypted values
+      // and any pre-existing plaintext value stored before ADR-022 was
+      // applied to this field — see _shared/credential-crypto.ts.
+      const stripeKey  = storedKey !== undefined
+        ? await decryptCredential(storedKey)
+        : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
 
       if (!stripeKey) return fail(503, 'Online card payment is not configured for this school');
 
       const appUrl    = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
       const prId      = crypto.randomUUID();
       const invNum    = (inv as { invoice_number: string | null }).invoice_number;
-      const amountSek = (inv as { total_sek: number }).total_sek;
+      const amountSek = (inv as { outstanding_amount: number }).outstanding_amount;
 
       const params = new URLSearchParams({
         'mode':                                      'payment',

@@ -375,6 +375,10 @@ verify_jwt = true
 enabled = true
 verify_jwt = true
 
+[functions.stripe-credentials]
+enabled = true
+verify_jwt = true
+
 [functions.enrollments]
 enabled = true
 verify_jwt = true
