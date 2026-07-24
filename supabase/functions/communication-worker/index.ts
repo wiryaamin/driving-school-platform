@@ -123,7 +123,14 @@ async function dispatchClaimed(supabase: any, msg: OutboundRow, cfg: ChannelConf
   });
 
   const failed        = result.status === 'failed';
-  const newRetryCount = failed ? msg.retry_count + 1 : msg.retry_count;
+  // dispatchMessage() also returns 'queued' when the channel has no provider
+  // configured yet (see its own "channel active but not yet wired" comment)
+  // — that is not a delivery and must not be recorded as one. Previously
+  // this function only distinguished failed/not-failed, so a still-queued
+  // result was written back as status: 'sent' with sent_at set, silently
+  // reporting an undelivered message as delivered.
+  const stillQueued    = result.status === 'queued';
+  const newRetryCount  = failed ? msg.retry_count + 1 : msg.retry_count;
 
   // Exponential backoff with ±20% jitter to avoid thundering-herd on retry tick
   const baseBackoffMs = Math.pow(2, newRetryCount) * 60 * 1000;
@@ -133,12 +140,12 @@ async function dispatchClaimed(supabase: any, msg: OutboundRow, cfg: ChannelConf
   await supabase
     .from('outbound_messages')
     .update({
-      status:              failed ? 'failed' : 'sent',
+      status:              failed ? 'failed' : stillQueued ? 'queued' : 'sent',
       provider_message_id: result.providerId,
       error_message:       result.error,
       retry_count:         newRetryCount,
       retry_after:         failed ? new Date(Date.now() + backoffMs).toISOString() : null,
-      sent_at:             failed ? null : new Date().toISOString(),
+      sent_at:             (failed || stillQueued) ? null : new Date().toISOString(),
     })
     .eq('id', msg.id);
 
