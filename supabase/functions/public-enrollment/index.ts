@@ -12,8 +12,14 @@
  * Security:
  *   - UUID validation on all ID params
  *   - Rate limiting: max 3 submissions per email per org per hour
+ *   - Rejects submissions for a suspended or deleted organization, or one
+ *     that has disabled its public catalog/enrollment (settings
+ *     .public_catalog_enabled === false)
  *   - Verifies package is still active + website/public visible
  *   - Verifies coupon is valid before accepting submission
+ *   - Honeypot field ("website") returns the same error already used for a
+ *     genuine insert failure, so a bot gets no distinct "spam blocked"
+ *     signal and a false-positive-caught real visitor sees a real error
  *   - Never exposes internal_notes, metadata, or private fields
  *
  * CORS: Access-Control-Allow-Origin: * (same as public-catalog)
@@ -21,14 +27,18 @@
 
 import { createServiceClient } from '../_shared/supabase.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
+import { dispatchMessage }     from '../_shared/comm-providers.ts';
 
 const UUID_RE  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// See public-catalog/index.ts for why this list must be kept in sync with
+// the frontend's actual request headers manually — same duplicated-CORS-list
+// pattern, same fix.
 const PUBLIC_CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'content-type, apikey, authorization, x-client-info',
+  'Access-Control-Allow-Headers': 'content-type, apikey, authorization, x-client-info, x-correlation-id, x-app-env, x-app-version',
   'Access-Control-Max-Age':       '86400',
 };
 const JSON_CT = { 'Content-Type': 'application/json', ...PUBLIC_CORS };
@@ -208,6 +218,19 @@ async function handleSubmit(req: Request, client: any, orgId: string): Promise<R
     return err('Invalid JSON body', 400, 'INVALID_JSON');
   }
 
+  // ── Honeypot spam check ──────────────────────────────────────────────────
+  // "website" is never rendered as a visible field to a real user; a bot
+  // filling every input on the form will typically populate it. Responds
+  // with the exact same error already used for a genuine insert failure
+  // below — indistinguishable from an ordinary transient error to a bot
+  // (no distinct "spam blocked" signal to learn from), while a real visitor
+  // caught by a false positive (e.g. aggressive browser autofill on a
+  // hidden field) sees a real, visible error and can retry, rather than a
+  // fabricated success for a submission that was never saved.
+  if (trimStr(body['website']) !== '') {
+    return err('Anmälan kunde inte sparas', 500, 'INSERT_FAILED');
+  }
+
   // ── Required fields ─────────────────────────────────────────────────────
   const packageId   = trimStr(body['package_offering_id']);
   const firstName   = trimStr(body['first_name']);
@@ -253,6 +276,24 @@ async function handleSubmit(req: Request, client: any, orgId: string): Promise<R
 
   if ((recentCount ?? 0) >= 3) {
     return err('För många anmälningar. Vänta en stund och försök igen.', 429, 'RATE_LIMITED');
+  }
+
+  // ── Verify organization is active and has public enrollment enabled ─────────
+  // (mirrors public-catalog / public-booking)
+  const { data: org, error: orgErr } = await client
+    .from('organizations')
+    .select('id, name, settings')
+    .eq('id', orgId)
+    .eq('status', 'active')
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (orgErr) return err('Internt serverfel', 500, 'INTERNAL_ERROR');
+  if (!org)   return err('Trafikskolan hittades inte', 404, 'ORG_NOT_FOUND');
+
+  const orgSettings = ((org as { settings?: Record<string, unknown> }).settings) ?? {};
+  if (orgSettings['public_catalog_enabled'] === false) {
+    return err('Trafikskolan hittades inte', 404, 'ORG_NOT_FOUND');
   }
 
   // ── Load and verify package ──────────────────────────────────────────────
@@ -409,6 +450,80 @@ async function handleSubmit(req: Request, client: any, orgId: string): Promise<R
   }).then(undefined, () => {
     console.warn('Could not emit submitted enrollment event for', enrollment.id);
   });
+
+  // ── Confirmation email to the applicant (best-effort) ──────────────────────
+  // Tenant notification (Kommunikation → Automatiska notifieringar,
+  // 'enrollment_request_created') is handled automatically by
+  // trg_enrollment_requests_emit_created — not duplicated here.
+  const orgName = (org.name as string) || 'trafikskolan';
+  try {
+    const result = await dispatchMessage({
+      channel:  'email',
+      provider: 'resend',
+      to:       email,
+      from:     'Trafikcloud <info@trafikcloud.se>',
+      subject:  `Tack för din anmälan till ${pkg.name as string}`,
+      body: `
+        <div style="font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; color: #0f172a;">
+          <h2 style="font-size: 18px; margin-top: 0;">Tack för din anmälan, ${firstName}!</h2>
+          <p>Vi har tagit emot din anmälan till <strong>${pkg.name as string}</strong> hos <strong>${orgName}</strong>.</p>
+          <p><strong>Vad händer nu?</strong></p>
+          <p>${orgName} granskar din anmälan och återkommer inom kort med bekräftelse och betalningsinformation.</p>
+          <p>Har du frågor under tiden är du varmt välkommen att kontakta ${orgName} direkt.</p>
+          <p>Vänliga hälsningar,<br>${orgName}</p>
+        </div>
+      `.trim(),
+    });
+    if (result.status !== 'sent') {
+      console.error('public-enrollment.confirmation_email_failed', enrollment.id, result.error);
+    }
+  } catch (e) {
+    console.error('public-enrollment.confirmation_email_threw', enrollment.id, e instanceof Error ? e.message : String(e));
+  }
+
+  // ── Platform Administration notification (best-effort) ─────────────────────
+  try {
+    const { data: admins, error: adminsErr } = await client
+      .from('platform_admins')
+      .select('user_id')
+      .eq('is_active', true);
+
+    if (adminsErr) {
+      console.error('public-enrollment.platform_admin_lookup_failed', enrollment.id, adminsErr.message);
+    } else {
+      const adminIds = (admins ?? []).map((a: { user_id: string }) => a.user_id);
+      const { data: adminProfiles } = adminIds.length > 0
+        ? await client.from('profiles').select('email').in('id', adminIds)
+        : { data: [] as { email: string | null }[] };
+
+      const recipients = (adminProfiles ?? [])
+        .map((p: { email: string | null }) => p.email)
+        .filter((e: unknown): e is string => typeof e === 'string' && e.length > 0);
+
+      for (const adminEmail of recipients) {
+        await dispatchMessage({
+          channel:  'email',
+          provider: 'resend',
+          to:       adminEmail,
+          from:     'Trafikcloud <info@trafikcloud.se>',
+          subject:  `Ny anmälan: ${orgName}`,
+          body: `
+            <p>En ny anmälan har kommit in via den publika kurskatalogen.</p>
+            <ul>
+              <li><strong>Trafikskola:</strong> ${orgName}</li>
+              <li><strong>Namn:</strong> ${firstName} ${lastName}</li>
+              <li><strong>Paket:</strong> ${pkg.name as string}</li>
+              <li><strong>Belopp:</strong> ${finalPriceInclVat} kr</li>
+              <li><strong>E-post:</strong> ${email}</li>
+              <li><strong>Telefon:</strong> ${phone}</li>
+            </ul>
+          `.trim(),
+        });
+      }
+    }
+  } catch (e) {
+    console.error('public-enrollment.platform_admin_notification_threw', enrollment.id, e instanceof Error ? e.message : String(e));
+  }
 
   return json({
     enrollment_id:       enrollment.id,

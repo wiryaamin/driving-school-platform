@@ -62,7 +62,7 @@ async function handleList(req: Request, client: any, orgId: string, ctx: EdgeReq
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handlePurchase(req: Request, client: any, orgId: string, ctx: EdgeRequestContext): Promise<Response> {
-  if (!hasPermission(ctx, 'finance:package:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+  if (!hasPermission(ctx, 'finance:package:create')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return err(ctx, 'Invalid JSON body', 400, 'VALIDATION_ERROR'); }

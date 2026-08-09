@@ -2,8 +2,8 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import { Outlet, NavLink, useSearchParams, Link } from 'react-router-dom';
 import {
   Home, CalendarDays, CalendarCheck, Users, ChartBar,
-  Settings, Menu, X, LogOut, Loader2, Shield, MessageSquare,
-  CheckSquare, TrendingUp, Headphones, Bell, Plus, ChevronRight,
+  Settings, Menu, X, LogOut, Loader2, Shield,
+  CheckSquare, Headphones, Bell, ChevronRight,
 } from 'lucide-react';
 import {
   getStoredInstructorSession, storeInstructorSession, clearInstructorSession,
@@ -39,14 +39,17 @@ export function useInstructorPortalSession(): InstructorPortalSession {
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
+// Meddelanden and Ekonomi removed from pilot nav (2026-08-06 Portal UX
+// review): neither has a backing route/feature — both fell through to the
+// admin app's catch-all before the routing fix, and even now would only
+// show a generic "Under uppbyggnad" placeholder with no pilot business
+// value. Re-add once each has a real implementation.
 const NAV_ITEMS = [
   { to: '/instructor-portal',                 label: 'Översikt',       Icon: Home,          end: true,  badge: 0 },
   { to: '/instructor-portal/elever',          label: 'Elever',         Icon: Users,         end: false, badge: 0 },
   { to: '/instructor-portal/bokningar',       label: 'Lektioner',      Icon: CalendarCheck, end: false, badge: 0 },
-  { to: '/instructor-portal/meddelanden',     label: 'Meddelanden',    Icon: MessageSquare, end: false, badge: 3 },
   { to: '/instructor-portal/utbildningskort', label: 'Uppgifter',      Icon: CheckSquare,   end: false, badge: 0 },
   { to: '/instructor-portal/schema',          label: 'Kalender',       Icon: CalendarDays,  end: false, badge: 0 },
-  { to: '/instructor-portal/ekonomi',         label: 'Ekonomi',        Icon: TrendingUp,    end: false, badge: 0 },
   { to: '/instructor-portal/statistik',       label: 'Rapporter',      Icon: ChartBar,      end: false, badge: 0 },
   { to: '/instructor-portal/installningar',   label: 'Inställningar',  Icon: Settings,      end: false, badge: 0 },
 ] as const;
@@ -235,17 +238,19 @@ function BottomTabBar({ onMenuOpen }: { onMenuOpen: () => void }) {
           )}
         </NavLink>
 
-        {/* Center FAB — Ny lektion */}
+        {/* Center FAB — Kalender (matches the "Kalender" tab's own destination;
+            previously labeled "Ny lektion" though it only navigates to the
+            read-only calendar and creates nothing) */}
         <div className="flex flex-col items-center -mt-5">
           <NavLink to="/instructor-portal/schema">
             <div
               className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg"
               style={{ background: PRIMARY }}
             >
-              <Plus className="w-6 h-6 text-white" strokeWidth={2.5} />
+              <CalendarDays className="w-6 h-6 text-white" strokeWidth={2.5} />
             </div>
           </NavLink>
-          <span className="text-[10px] font-semibold text-gray-400 mt-1">Ny lektion</span>
+          <span className="text-[10px] font-semibold text-gray-400 mt-1">Kalender</span>
         </div>
 
         {/* Kalender */}
@@ -372,22 +377,20 @@ export function InstructorPortalLayout() {
                 <p className="text-sm text-gray-400 mt-0.5">Här är din översikt för idag.</p>
               </div>
               <div className="flex items-center gap-3">
-                <button className="relative p-2.5 rounded-xl text-gray-400 hover:bg-gray-100 transition-colors">
+                <Link
+                  to="/instructor-portal/installningar"
+                  className="relative p-2.5 rounded-xl text-gray-400 hover:bg-gray-100 transition-colors"
+                  aria-label="Aviseringsinställningar"
+                >
                   <Bell className="w-5 h-5" strokeWidth={1.75} />
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
-                    style={{ background: PRIMARY }}
-                  >
-                    2
-                  </span>
-                </button>
+                </Link>
                 <Link
                   to="/instructor-portal/schema"
                   className="flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold text-white"
                   style={{ background: PRIMARY }}
                 >
-                  <Plus className="w-4 h-4" strokeWidth={2.5} />
-                  Ny lektion
+                  <CalendarDays className="w-4 h-4" strokeWidth={2.5} />
+                  Kalender
                 </Link>
               </div>
             </div>

@@ -17,6 +17,10 @@ export const baseTailwindConfig = {
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',
+          hover: 'hsl(var(--primary-hover))',
+          active: 'hsl(var(--primary-active))',
+          light: 'hsl(var(--primary-light))',
+          dark: 'hsl(var(--primary-dark))',
         },
         secondary: {
           DEFAULT: 'hsl(var(--secondary))',
@@ -25,6 +29,22 @@ export const baseTailwindConfig = {
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
           foreground: 'hsl(var(--destructive-foreground))',
+        },
+        success: {
+          DEFAULT: 'hsl(var(--success))',
+          foreground: 'hsl(var(--success-foreground))',
+        },
+        warning: {
+          DEFAULT: 'hsl(var(--warning))',
+          foreground: 'hsl(var(--warning-foreground))',
+        },
+        info: {
+          DEFAULT: 'hsl(var(--info))',
+          foreground: 'hsl(var(--info-foreground))',
+        },
+        disabled: {
+          DEFAULT: 'hsl(var(--disabled))',
+          foreground: 'hsl(var(--disabled-foreground))',
         },
         muted: {
           DEFAULT: 'hsl(var(--muted))',
@@ -42,18 +62,22 @@ export const baseTailwindConfig = {
           DEFAULT: 'hsl(var(--popover))',
           foreground: 'hsl(var(--popover-foreground))',
         },
-        // Brand — Swedish Blue
+        surface: 'hsl(var(--surface))',
+        divider: 'hsl(var(--divider))',
+        selection: 'hsl(var(--selection))',
+        'foreground-secondary': 'hsl(var(--foreground-secondary))',
+        // Brand — Trafikcloud
         brand: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#006AA7',
-          600: '#005a8e',
-          700: '#004a75',
-          800: '#003a5c',
-          900: '#1e3a5f',
+          50: '#eef5ff',
+          100: '#dbe9fe',
+          200: '#bcd7fd',
+          300: '#8dbdfb',
+          400: '#579af6',
+          500: '#2B7DE9',
+          600: '#1c63cc',
+          700: '#194fa5',
+          800: '#194485',
+          900: '#0F2C59',
         },
         // Sidebar
         sidebar: {

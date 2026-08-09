@@ -1,4 +1,22 @@
-import type { DemoRequestStatus } from '../hooks/useDemoRequests.js';
+import type { DemoRequestStatus, DemoRequestRejectionReason } from '../hooks/useDemoRequests.js';
+
+// Standard B2B lead-rejection taxonomy — matches
+// supabase/functions/platform-admin/index.ts's REJECTION_REASONS exactly.
+export const REJECTION_REASON_LABEL: Record<DemoRequestRejectionReason, string> = {
+  duplicate_email:           'E-postadressen är redan registrerad',
+  duplicate_request:         'Dubblettförfrågan',
+  spam_or_fraud:             'Spam eller bedräglig förfrågan',
+  incomplete_invalid_info:   'Ofullständig eller felaktig information',
+  not_target_market:         'Passar inte plattformens målgrupp',
+  unable_to_verify_business: 'Kunde inte verifiera verksamheten',
+  outside_service_area:      'Utanför vårt verksamhetsområde',
+  other:                     'Annat',
+};
+
+export const REJECTION_REASON_OPTIONS: DemoRequestRejectionReason[] = [
+  'duplicate_email', 'duplicate_request', 'spam_or_fraud', 'incomplete_invalid_info',
+  'not_target_market', 'unable_to_verify_business', 'outside_service_area', 'other',
+];
 
 export const STATUS_LABEL: Record<DemoRequestStatus, string> = {
   new:             'Ny',

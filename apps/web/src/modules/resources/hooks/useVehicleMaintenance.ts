@@ -78,6 +78,10 @@ export interface UpdateMaintenanceStatusInput {
   started_at?:   string | null;
 }
 
+export interface UpdateMaintenanceRecordInput extends CreateMaintenanceInput {
+  id: string;
+}
+
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 export const maintenanceKeys = {
@@ -99,6 +103,7 @@ async function fetchMaintenanceRecords(vehicleId?: string): Promise<VehicleMaint
       invoice_reference, next_service_due_at, next_service_km,
       created_by, updated_by, created_at, updated_at
     `)
+    .is('deleted_at', null)
     .order('scheduled_at', { ascending: false });
 
   if (vehicleId) q = q.eq('vehicle_id', vehicleId);
@@ -126,6 +131,29 @@ async function updateMaintenanceStatus(input: UpdateMaintenanceStatusInput): Pro
   const { error } = await (supabase as unknown as any)
     .from('vehicle_maintenance')
     .update(fields)
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ─── Update record (edit) ──────────────────────────────────────────────────────
+
+async function updateMaintenanceRecord(input: UpdateMaintenanceRecordInput): Promise<void> {
+  const { id, ...fields } = input;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as unknown as any)
+    .from('vehicle_maintenance')
+    .update(fields)
+    .eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ─── Delete (soft) ──────────────────────────────────────────────────────────────
+
+async function deleteMaintenanceRecord(id: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as unknown as any)
+    .from('vehicle_maintenance')
+    .update({ deleted_at: new Date().toISOString() })
     .eq('id', id);
   if (error) throw new Error(error.message);
 }
@@ -160,6 +188,26 @@ export function useUpdateMaintenanceStatus() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: updateMaintenanceStatus,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: maintenanceKeys.lists() });
+    },
+  });
+}
+
+export function useUpdateMaintenanceRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: updateMaintenanceRecord,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: maintenanceKeys.lists() });
+    },
+  });
+}
+
+export function useDeleteMaintenanceRecord() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteMaintenanceRecord,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: maintenanceKeys.lists() });
     },

@@ -3,45 +3,49 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ChevronRight, Users, Search, Pencil, UserX, UserCheck,
-  Mail, Plus, Loader2,
+  Mail, Plus, Loader2, RotateCw, Ban, KeyRound, History, AlertTriangle,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Skeleton, Label, Switch,
   Card, CardContent,
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   toast,
 } from '@platform/ui';
+import type { InvitableRole } from '@platform/validation';
 import { cn } from '@/lib/utils.js';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { invokeFunctionWithRetry, isGatewayRoutingError } from '@shared/lib/edgeFunctionRetry.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type MembershipStatus = 'active' | 'suspended' | 'removed';
+type InvitationStatus = 'pending' | 'accepted' | 'expired';
 
-interface ProfileRow {
-  id:           string;
-  first_name:   string;
-  last_name:    string;
-  email:        string;
-  phone:        string | null;
-  is_active:    boolean;
-  last_seen_at: string | null;
-  created_at:   string;
+interface StaffRow {
+  user_id:           string;
+  email:             string;
+  first_name:        string;
+  last_name:         string;
+  is_active:         boolean;
+  role:              string;
+  role_display:      string;
+  membership_status: string;
+  invitation_status: 'pending' | 'accepted';
+  invited_at:        string | null;
+  last_sign_in_at:   string | null;
+  joined_at:         string;
 }
 
-interface MembershipRow {
-  user_id:   string;
-  status:    MembershipStatus;
-  joined_at: string;
-}
-
-interface UserRow extends ProfileRow {
-  membership: MembershipRow | undefined;
+interface IdentityEventRow {
+  id:          string;
+  event_type:  string;
+  severity:    string;
+  occurred_at: string;
+  metadata:    Record<string, unknown>;
 }
 
 interface EditForm {
@@ -55,7 +59,48 @@ interface InviteForm {
   email:      string;
   first_name: string;
   last_name:  string;
+  role:       InvitableRole;
 }
+
+const ROLE_LABELS: Record<InvitableRole, string> = {
+  org_admin:         'Administratör',
+  org_manager:       'Chef',
+  instructor:        'Lärare',
+  instructor_senior: 'Lärare (Senior)',
+  receptionist:      'Receptionist',
+  finance_admin:     'Ekonomi',
+  student_admin:     'Elevadmin',
+  reporting_viewer:  'Rapportläsare',
+  corporate_contact: 'Företagskontakt',
+};
+
+// Invite links created via auth.admin.inviteUserByEmail / generateLink expire
+// 24h after issuance on this project's Supabase Auth configuration — matches
+// the same threshold documented for the platform-admin equivalent. Purely a
+// display heuristic (not enforced here); the real expiry is Supabase's.
+const INVITATION_EXPIRY_HOURS = 24;
+
+const INVITATION_STATUS_LABEL: Record<InvitationStatus, string> = {
+  pending:  'Väntar',
+  accepted: 'Accepterad',
+  expired:  'Utgången',
+};
+
+const INVITATION_STATUS_CLASS: Record<InvitationStatus, string> = {
+  pending:  'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  accepted: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+  expired:  'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+};
+
+const IDENTITY_EVENT_LABEL: Record<string, string> = {
+  'invite.created':          'Inbjudan skickad',
+  'invite.resent':           'Inbjudan skickad igen',
+  'invite.cancelled':        'Inbjudan avbruten',
+  'invite.email_changed':    'E-postadress ändrad',
+  'invite.existing_user_added': 'Tillagd i organisationen',
+  'password_reset.sent':     'Lösenordsåterställning skickad',
+  'password_reset.forced':   'Lösenord tvångsåterställt',
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -64,7 +109,7 @@ const EMPTY_EDIT: EditForm = {
 };
 
 const EMPTY_INVITE: InviteForm = {
-  email: '', first_name: '', last_name: '',
+  email: '', first_name: '', last_name: '', role: 'instructor',
 };
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -87,9 +132,15 @@ function validateInvite(f: InviteForm): Record<string, string> {
   return e;
 }
 
+function validateEmail(email: string): string | undefined {
+  if (!email.trim()) return 'E-postadress krävs.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return 'Ange en giltig e-postadress.';
+  return undefined;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getInitials(u: ProfileRow): string {
+function getInitials(u: StaffRow): string {
   return `${u.first_name[0] ?? ''}${u.last_name[0] ?? ''}`.toUpperCase();
 }
 
@@ -106,6 +157,31 @@ function formatLastSeen(ts: string | null): string {
   return new Date(ts).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
 }
 
+function formatDateTime(ts: string | null): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function computeInvitationStatus(u: StaffRow): InvitationStatus {
+  if (u.invitation_status === 'accepted') return 'accepted';
+  if (u.invited_at) {
+    const ageHours = (Date.now() - new Date(u.invited_at).getTime()) / 3_600_000;
+    if (ageHours > INVITATION_EXPIRY_HOURS) return 'expired';
+  }
+  return 'pending';
+}
+
+async function extractFunctionErrorMessage(error: unknown, fallback: string): Promise<string> {
+  const context = (error as { context?: Response } | undefined)?.context;
+  if (context && typeof context.json === 'function') {
+    try {
+      const body = await context.json() as { message?: string };
+      if (body.message) return body.message;
+    } catch { /* fall through to fallback */ }
+  }
+  return fallback;
+}
+
 // ─── UsersSettingsPage ────────────────────────────────────────────────────────
 
 export function UsersSettingsPage() {
@@ -115,82 +191,65 @@ export function UsersSettingsPage() {
 
   const [search,        setSearch]       = useState('');
   const [sheetOpen,     setSheetOpen]    = useState(false);
-  const [editTarget,    setEditTarget]   = useState<UserRow | null>(null);
+  const [editTarget,    setEditTarget]   = useState<StaffRow | null>(null);
   const [editForm,      setEditForm]     = useState<EditForm>(EMPTY_EDIT);
   const [editErrors,    setEditErrors]   = useState<Record<string, string>>({});
   const [inviteOpen,    setInviteOpen]   = useState(false);
   const [inviteForm,    setInviteForm]   = useState<InviteForm>(EMPTY_INVITE);
   const [inviteErrors,  setInviteErrors] = useState<Record<string, string>>({});
+  const [emailEditing,  setEmailEditing] = useState(false);
+  const [emailDraft,    setEmailDraft]   = useState('');
+  const [emailError,    setEmailError]   = useState<string | undefined>(undefined);
+  const [historyOpen,   setHistoryOpen]  = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
-  const { data: memberships = [], isLoading: membershipsLoading } = useQuery<MembershipRow[]>({
-    queryKey: ['settings-users-memberships', orgId],
+  const { data: staff = [], isLoading } = useQuery<StaffRow[]>({
+    queryKey: ['settings-staff-invitations', orgId],
     queryFn: async () => {
-      if (!orgId) return [];
-      const { data, error } = await supabase
-        .from('memberships')
-        .select('user_id, status, joined_at')
-        .eq('organization_id', orgId)
-        .neq('status', 'removed');
-      if (error) throw error;
-      return (data ?? []) as MembershipRow[];
+      const { data, error } = await supabase.functions.invoke<{ data: StaffRow[] }>(
+        'invite-user/list',
+        { method: 'GET' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte hämta användare'));
+      return data?.data ?? [];
     },
     enabled: !!orgId,
     staleTime: 30_000,
   });
 
-  // profiles has no organization_id column (removed in Phase 1B.2 — org
-  // context flows through memberships only, see packages/types/auth.types.ts).
-  // Scope by the member ids already resolved above, not a direct org filter.
-  const memberIds = useMemo(() => memberships.map(m => m.user_id), [memberships]);
-
-  const { data: profiles = [], isLoading: profilesLoading } = useQuery<ProfileRow[]>({
-    queryKey: ['settings-users-profiles', orgId, memberIds],
-    queryFn: async () => {
-      if (memberIds.length === 0) return [];
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, first_name, last_name, email, phone, is_active, last_seen_at, created_at')
-        .in('id', memberIds)
-        .is('deleted_at', null)
-        .order('first_name');
-      if (error) throw error;
-      return (data ?? []) as ProfileRow[];
-    },
-    enabled: !!orgId && !membershipsLoading,
-    staleTime: 30_000,
-  });
-
-  const isLoading = profilesLoading || membershipsLoading;
-
-  const users = useMemo<UserRow[]>(() => {
-    const memberMap = new Map<string, MembershipRow>(
-      memberships.map(m => [m.user_id, m])
-    );
-    return profiles.map(p => ({
-      ...p,
-      membership: memberMap.get(p.id),
-    }));
-  }, [profiles, memberships]);
-
   const filtered = useMemo(() =>
     !search.trim()
-      ? users
-      : users.filter(u =>
+      ? staff
+      : staff.filter(u =>
           `${u.first_name} ${u.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
           u.email.toLowerCase().includes(search.toLowerCase())
         ),
-    [users, search]
+    [staff, search]
   );
 
-  const activeCount = users.filter(u => u.is_active).length;
+  const activeCount = staff.filter(u => u.is_active).length;
+
+  const { data: historyEvents = [], isLoading: historyLoading } = useQuery<IdentityEventRow[]>({
+    queryKey: ['settings-staff-history', editTarget?.user_id],
+    queryFn: async () => {
+      if (!editTarget) return [];
+      const { data, error } = await supabase
+        .from('identity_security_events')
+        .select('id, event_type, severity, occurred_at, metadata')
+        .eq('user_id', editTarget.user_id)
+        .order('occurred_at', { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      return (data ?? []) as IdentityEventRow[];
+    },
+    enabled: historyOpen && !!editTarget,
+  });
 
   // ── Invalidation ─────────────────────────────────────────────────────────
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ['settings-users-profiles', orgId] });
-    void queryClient.invalidateQueries({ queryKey: ['settings-users-memberships', orgId] });
+    void queryClient.invalidateQueries({ queryKey: ['settings-staff-invitations', orgId] });
   }
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -200,9 +259,6 @@ export function UsersSettingsPage() {
       if (!orgId || !editTarget) return;
       const errors = validateEdit(editForm);
       if (Object.keys(errors).length > 0) { setEditErrors(errors); throw new Error('validation'); }
-      // No organization_id filter here (see the profiles query above for why) —
-      // editTarget only ever comes from this page's already org-scoped `users`
-      // list, so there is no cross-tenant risk in targeting by id alone.
       const { error } = await supabase
         .from('profiles')
         .update({
@@ -211,7 +267,7 @@ export function UsersSettingsPage() {
           phone:      editForm.phone.trim() || null,
           is_active:  editForm.is_active,
         } as never)
-        .eq('id', editTarget.id);
+        .eq('id', editTarget.user_id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -227,7 +283,6 @@ export function UsersSettingsPage() {
 
   const toggleActive = useMutation({
     mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
-      if (!orgId) return;
       const { error } = await supabase
         .from('profiles')
         .update({ is_active: active } as never)
@@ -245,46 +300,110 @@ export function UsersSettingsPage() {
     mutationFn: async () => {
       const errors = validateInvite(inviteForm);
       if (Object.keys(errors).length > 0) { setInviteErrors(errors); throw new Error('validation'); }
-      const { error } = await supabase.functions.invoke('invite-user', {
-        body: {
-          email:           inviteForm.email.trim(),
-          first_name:      inviteForm.first_name.trim(),
-          last_name:       inviteForm.last_name.trim(),
-          organization_id: orgId,
+
+      const { data, errorBody, opaqueFailure } = await invokeFunctionWithRetry<
+        { data: { status: 'invited' | 'added_existing_user' } },
+        { code?: string; message?: string }
+      >(
+        'invite-user',
+        {
+          email:      inviteForm.email.trim(),
+          first_name: inviteForm.first_name.trim(),
+          last_name:  inviteForm.last_name.trim(),
+          role:       inviteForm.role,
         },
-      });
-      if (error) throw error;
+        isGatewayRoutingError,
+      );
+
+      if (opaqueFailure) throw new Error('Kunde inte nå invite-user-funktionen. Försök igen.');
+      if (errorBody) throw new Error(errorBody.message ?? 'Inbjudan misslyckades.');
+      return data?.data.status ?? 'invited';
     },
-    onSuccess: () => {
+    onSuccess: (status) => {
       invalidate();
       setInviteOpen(false);
       setInviteForm(EMPTY_INVITE);
-      toast({
-        title: 'Inbjudan skickad',
-        description: `En inbjudan har skickats till ${inviteForm.email}.`,
-      });
+      toast(
+        status === 'added_existing_user'
+          ? {
+              title: 'Användare tillagd',
+              description: `${inviteForm.email} har redan ett konto och har lagts till i organisationen direkt.`,
+            }
+          : {
+              title: 'Inbjudan skickad',
+              description: `En inbjudan har skickats till ${inviteForm.email}.`,
+            },
+      );
     },
     onError: (e: Error) => {
-      if (e.message !== 'validation')
-        toast({
-          title:       'Fel vid inbjudan',
-          description: 'Kontrollera att invite-user-funktionen är driftsatt.',
-          variant:     'destructive',
-        });
+      if (e.message === 'validation') return;
+      toast({ title: 'Fel vid inbjudan', description: e.message, variant: 'destructive' });
     },
+  });
+
+  const resendInvitation = useMutation({
+    mutationFn: async (userId: string) => {
+      const { error } = await supabase.functions.invoke(`invite-user/${userId}/resend-invitation`, { method: 'POST' });
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skicka inbjudan igen'));
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: 'Inbjudan skickad igen' });
+    },
+    onError: (e: Error) => toast({ title: 'Fel', description: e.message, variant: 'destructive' }),
+  });
+
+  const cancelInvitation = useMutation({
+    mutationFn: async (userId: string) => {
+      const { error } = await supabase.functions.invoke(`invite-user/${userId}/cancel-invitation`, { method: 'POST' });
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte avbryta inbjudan'));
+    },
+    onSuccess: () => {
+      invalidate();
+      setSheetOpen(false);
+      toast({ title: 'Inbjudan avbruten' });
+    },
+    onError: (e: Error) => toast({ title: 'Fel', description: e.message, variant: 'destructive' }),
+  });
+
+  const sendPasswordReset = useMutation({
+    mutationFn: async (userId: string) => {
+      const { error } = await supabase.functions.invoke(`invite-user/${userId}/send-password-reset`, { method: 'POST' });
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skicka lösenordsåterställning'));
+    },
+    onSuccess: () => toast({ title: 'Lösenordsåterställning skickad' }),
+    onError: (e: Error) => toast({ title: 'Fel', description: e.message, variant: 'destructive' }),
+  });
+
+  const changeEmail = useMutation({
+    mutationFn: async ({ userId, email }: { userId: string; email: string }) => {
+      const { error } = await supabase.functions.invoke(`invite-user/${userId}/change-email`, { method: 'POST', body: { email } });
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte ändra e-postadressen'));
+    },
+    onSuccess: (_, vars) => {
+      invalidate();
+      setEmailEditing(false);
+      setEditTarget(prev => prev ? { ...prev, email: vars.email } : prev);
+      toast({ title: 'E-postadress ändrad', description: 'En ny inbjudan har skickats till den nya adressen.' });
+    },
+    onError: (e: Error) => toast({ title: 'Fel', description: e.message, variant: 'destructive' }),
   });
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  function openEdit(u: UserRow) {
+  function openEdit(u: StaffRow) {
     setEditTarget(u);
     setEditForm({
       first_name: u.first_name,
       last_name:  u.last_name,
-      phone:      u.phone ?? '',
+      phone:      '',
       is_active:  u.is_active,
     });
     setEditErrors({});
+    setEmailEditing(false);
+    setEmailDraft(u.email);
+    setEmailError(undefined);
+    setHistoryOpen(false);
     setSheetOpen(true);
   }
 
@@ -292,6 +411,13 @@ export function UsersSettingsPage() {
     setInviteForm(EMPTY_INVITE);
     setInviteErrors({});
     setInviteOpen(true);
+  }
+
+  function handleSaveEmail() {
+    if (!editTarget) return;
+    const err = validateEmail(emailDraft);
+    if (err) { setEmailError(err); return; }
+    changeEmail.mutate({ userId: editTarget.user_id, email: emailDraft.trim() });
   }
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
@@ -305,6 +431,8 @@ export function UsersSettingsPage() {
       </div>
     );
   }
+
+  const editStatus = editTarget ? computeInvitationStatus(editTarget) : 'pending';
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -333,7 +461,7 @@ export function UsersSettingsPage() {
           </div>
           <div className="flex items-center gap-4 shrink-0">
             <div className="text-right hidden sm:block">
-              <p className="text-xl font-semibold tabular-nums text-foreground">{users.length}</p>
+              <p className="text-xl font-semibold tabular-nums text-foreground">{staff.length}</p>
               <p className="text-xs text-muted-foreground">{activeCount} aktiva</p>
             </div>
             <Button size="sm" onClick={openInvite}>
@@ -380,7 +508,8 @@ export function UsersSettingsPage() {
               <tr>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">Namn</th>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide hidden sm:table-cell">E-post</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</th>
+                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">Inbjudan</th>
+                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide">Konto</th>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide hidden md:table-cell">Senast aktiv</th>
                 <th scope="col" className="px-4 py-3 text-right" aria-label="Åtgärder" />
               </tr>
@@ -388,10 +517,10 @@ export function UsersSettingsPage() {
             <tbody className="divide-y divide-border bg-background">
               {filtered.map(u => (
                 <UserListRow
-                  key={u.id}
+                  key={u.user_id}
                   user={u}
                   onEdit={() => openEdit(u)}
-                  onToggleActive={() => toggleActive.mutate({ id: u.id, active: !u.is_active })}
+                  onToggleActive={() => toggleActive.mutate({ id: u.user_id, active: !u.is_active })}
                   isMutating={toggleActive.isPending}
                 />
               ))}
@@ -400,19 +529,143 @@ export function UsersSettingsPage() {
         </div>
       )}
 
-      {/* ── Edit Sheet ──────────────────────────────────────────────────────── */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="right" className="sm:max-w-md flex flex-col overflow-hidden p-0">
-          <SheetHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0 pr-12">
-            <SheetTitle>Redigera användare</SheetTitle>
+      {/* ── Edit Dialog ─────────────────────────────────────────────────────── */}
+      <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
+        <DialogContent className="w-full sm:max-w-md max-h-[85vh] flex flex-col overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0 pr-12">
+            <DialogTitle>Redigera användare</DialogTitle>
             {editTarget && (
-              <SheetDescription>
-                {editTarget.first_name} {editTarget.last_name}
-              </SheetDescription>
+              <DialogDescription>
+                {editTarget.first_name} {editTarget.last_name} · {editTarget.role_display}
+              </DialogDescription>
             )}
-          </SheetHeader>
+          </DialogHeader>
 
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+
+            {/* Invitation & Access */}
+            {editTarget && (
+              <section aria-label="Inbjudan och åtkomst" className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Inbjudan &amp; åtkomst
+                  </p>
+                  <span className={cn(
+                    'inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded leading-none',
+                    INVITATION_STATUS_CLASS[editStatus],
+                  )}>
+                    {INVITATION_STATUS_LABEL[editStatus]}
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-sm rounded-lg border border-border p-3 bg-muted/20">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">Inbjudan skickad</span>
+                    <span className="text-foreground">{formatDateTime(editTarget.invited_at)}</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">
+                      {editStatus === 'accepted' ? 'Aktiverad / senast inloggad' : 'Aktiverad'}
+                    </span>
+                    <span className="text-foreground">{formatDateTime(editTarget.last_sign_in_at)}</span>
+                  </div>
+                </div>
+
+                {/* Pending-only actions */}
+                {editStatus !== 'accepted' && (
+                  <div className="space-y-2">
+                    {emailEditing ? (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="edit_pending_email" className="text-xs">Ny e-postadress</Label>
+                        <div className="flex gap-2">
+                          <input
+                            id="edit_pending_email"
+                            type="email"
+                            value={emailDraft}
+                            onChange={e => { setEmailDraft(e.target.value); setEmailError(undefined); }}
+                            className="flex-1 h-9 px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                          />
+                          <Button size="sm" onClick={handleSaveEmail} disabled={changeEmail.isPending}>
+                            {changeEmail.isPending ? 'Sparar…' : 'Spara'}
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => { setEmailEditing(false); setEmailDraft(editTarget.email); setEmailError(undefined); }}>
+                            Avbryt
+                          </Button>
+                        </div>
+                        {emailError && <p className="text-xs text-destructive" role="alert">{emailError}</p>}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          size="sm" variant="outline"
+                          onClick={() => resendInvitation.mutate(editTarget.user_id)}
+                          disabled={resendInvitation.isPending}
+                        >
+                          <RotateCw className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                          Skicka igen
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          onClick={() => setEmailEditing(true)}
+                        >
+                          <Mail className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                          Byt e-post
+                        </Button>
+                      </div>
+                    )}
+                    <Button
+                      size="sm" variant="outline"
+                      className="w-full text-destructive hover:text-destructive"
+                      onClick={() => cancelInvitation.mutate(editTarget.user_id)}
+                      disabled={cancelInvitation.isPending}
+                    >
+                      <Ban className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                      {cancelInvitation.isPending ? 'Avbryter…' : 'Avbryt inbjudan'}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Accepted-only action */}
+                {editStatus === 'accepted' && (
+                  <Button
+                    size="sm" variant="outline" className="w-full"
+                    onClick={() => sendPasswordReset.mutate(editTarget.user_id)}
+                    disabled={sendPasswordReset.isPending}
+                  >
+                    <KeyRound className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                    {sendPasswordReset.isPending ? 'Skickar…' : 'Skicka lösenordsåterställning'}
+                  </Button>
+                )}
+
+                {/* Invitation history */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen(v => !v)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <History className="w-3.5 h-3.5" aria-hidden="true" />
+                    {historyOpen ? 'Dölj inbjudningshistorik' : 'Visa inbjudningshistorik'}
+                  </button>
+                  {historyOpen && (
+                    <div className="mt-2 space-y-1.5 max-h-40 overflow-y-auto rounded-lg border border-border p-2.5 bg-muted/10">
+                      {historyLoading ? (
+                        <p className="text-xs text-muted-foreground">Laddar…</p>
+                      ) : historyEvents.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">Ingen historik ännu.</p>
+                      ) : (
+                        historyEvents.map(ev => (
+                          <div key={ev.id} className="flex items-center justify-between gap-3 text-xs">
+                            <span className="text-foreground">{IDENTITY_EVENT_LABEL[ev.event_type] ?? ev.event_type}</span>
+                            <span className="text-muted-foreground shrink-0">{formatDateTime(ev.occurred_at)}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
 
             {/* Personuppgifter */}
             <section aria-label="Personuppgifter" className="space-y-4">
@@ -455,10 +708,10 @@ export function UsersSettingsPage() {
               </Field>
             </section>
 
-            {/* Åtkomst */}
-            <section aria-label="Åtkomst" className="space-y-4">
+            {/* Kontostatus */}
+            <section aria-label="Kontostatus" className="space-y-4">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Åtkomst
+                Kontostatus
               </p>
               <div className="flex items-center justify-between gap-4">
                 <div>
@@ -474,6 +727,13 @@ export function UsersSettingsPage() {
                   aria-label="Aktiv status"
                 />
               </div>
+              {editStatus !== 'accepted' && editForm.is_active === false && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                  Denna användare har inte aktiverat sitt konto än — inaktivering blockerar inloggning
+                  men avbryter inte själva inbjudan. Använd &quot;Avbryt inbjudan&quot; ovan för att helt ta bort den.
+                </p>
+              )}
             </section>
 
             {/* Info (read-only) */}
@@ -489,14 +749,12 @@ export function UsersSettingsPage() {
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Senast aktiv</span>
-                    <span className="text-foreground">{formatLastSeen(editTarget.last_seen_at)}</span>
+                    <span className="text-foreground">{formatLastSeen(editTarget.last_sign_in_at)}</span>
                   </div>
                   <div className="flex justify-between gap-4">
                     <span className="text-muted-foreground">Medlem sedan</span>
                     <span className="text-foreground">
-                      {editTarget.membership?.joined_at
-                        ? new Date(editTarget.membership.joined_at).toLocaleDateString('sv-SE')
-                        : '—'}
+                      {new Date(editTarget.joined_at).toLocaleDateString('sv-SE')}
                     </span>
                   </div>
                 </div>
@@ -504,14 +762,14 @@ export function UsersSettingsPage() {
             )}
           </div>
 
-          <SheetFooter className="px-6 py-4 border-t border-border shrink-0 gap-2">
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0 gap-2">
             <Button variant="outline" size="sm" onClick={() => setSheetOpen(false)}>Avbryt</Button>
             <Button size="sm" onClick={() => updateProfile.mutate()} disabled={updateProfile.isPending}>
               {updateProfile.isPending ? 'Sparar…' : 'Spara ändringar'}
             </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Invite Dialog ───────────────────────────────────────────────────── */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
@@ -565,6 +823,21 @@ export function UsersSettingsPage() {
                 />
               </div>
             </Field>
+            <Field id="inv_role" label="Roll" required>
+              <Select
+                value={inviteForm.role}
+                onValueChange={(v) => setInviteForm(prev => ({ ...prev, role: v as InvitableRole }))}
+              >
+                <SelectTrigger id="inv_role">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
 
           <DialogFooter className="gap-2">
@@ -598,12 +871,13 @@ export function UsersSettingsPage() {
 function UserListRow({
   user, onEdit, onToggleActive, isMutating,
 }: {
-  user:           UserRow;
+  user:           StaffRow;
   onEdit:         () => void;
   onToggleActive: () => void;
   isMutating:     boolean;
 }) {
-  const isActive = user.is_active && user.membership?.status !== 'suspended';
+  const isActive = user.is_active && user.membership_status !== 'suspended';
+  const invitationStatus = computeInvitationStatus(user);
   return (
     <tr className="hover:bg-muted/30 transition-colors">
       <td className="px-4 py-3">
@@ -625,6 +899,14 @@ function UserListRow({
       <td className="px-4 py-3">
         <span className={cn(
           'inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded leading-none',
+          INVITATION_STATUS_CLASS[invitationStatus],
+        )}>
+          {INVITATION_STATUS_LABEL[invitationStatus]}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <span className={cn(
+          'inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded leading-none',
           isActive
             ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
             : 'bg-red-100   text-red-600   dark:bg-red-900/30   dark:text-red-400',
@@ -633,7 +915,7 @@ function UserListRow({
         </span>
       </td>
       <td className="px-4 py-3 text-sm text-muted-foreground hidden md:table-cell">
-        {formatLastSeen(user.last_seen_at)}
+        {formatLastSeen(user.last_sign_in_at)}
       </td>
       <td className="px-4 py-3 text-right">
         <div className="inline-flex items-center gap-1">

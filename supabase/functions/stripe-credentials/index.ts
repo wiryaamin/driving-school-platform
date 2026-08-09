@@ -51,8 +51,8 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code = 'E
 const REQUIRED_PERMISSION = 'administration:organization:update';
 
 function requirePerm(ctx: EdgeRequestContext): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return err(ctx, 'Organisationskontext krävs', 403, 'FORBIDDEN');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(REQUIRED_PERMISSION)) {
     return err(ctx, `Kräver behörighet: ${REQUIRED_PERMISSION}`, 403, 'FORBIDDEN');
   }

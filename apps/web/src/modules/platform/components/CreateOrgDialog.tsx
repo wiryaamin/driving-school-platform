@@ -7,7 +7,9 @@ import {
   Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Button, toast,
 } from '@platform/ui';
+import { AlertTriangle } from 'lucide-react';
 import { useCreateOrg } from '../hooks/usePlatformOrgMutations.js';
+import { useAdminEmailAvailability, useOrgNumberAvailability } from '../hooks/useAdminEmailAvailability.js';
 import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
 
 type FormValues = ProvisioningFormValues;
@@ -46,6 +48,12 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
 
   const tier = form.watch('subscription_tier');
   const isTrial = tier === 'trial';
+  const adminEmail = form.watch('admin_email');
+  const emailCheck = useAdminEmailAvailability(adminEmail, open);
+  const emailBlocked = emailCheck === 'self' || emailCheck === 'taken';
+  const orgNumber = form.watch('org_number');
+  const orgNumberCheck = useOrgNumberAvailability(orgNumber, open);
+  const orgNumberBlocked = orgNumberCheck === 'taken';
 
   // Reset trial_days when switching away from trial
   useEffect(() => {
@@ -137,6 +145,14 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
                   <FormLabel>Org.nummer</FormLabel>
                   <FormControl><Input placeholder="556789-1234" {...field} /></FormControl>
                   <FormMessage />
+                  {orgNumberCheck === 'taken' && (
+                    <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-800 dark:text-amber-400">
+                        Det här org.numret används redan av en annan organisation på plattformen.
+                      </p>
+                    </div>
+                  )}
                 </FormItem>
               )}
             />
@@ -223,6 +239,26 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
                     <FormLabel>E-post *</FormLabel>
                     <FormControl><Input type="email" placeholder="anna@skolan.se" {...field} /></FormControl>
                     <FormMessage />
+                    {emailCheck === 'checking' && (
+                      <p className="text-xs text-muted-foreground">Kontrollerar e-postadressen…</p>
+                    )}
+                    {emailCheck === 'self' && (
+                      <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-800 dark:text-amber-400">
+                          Det här är din egen inloggning som plattformsadministratör — den kan inte återanvändas som kundens administratörskonto.
+                          Ange en annan e-postadress för kundens administratör.
+                        </p>
+                      </div>
+                    )}
+                    {emailCheck === 'taken' && (
+                      <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                        <p className="text-xs text-amber-800 dark:text-amber-400">
+                          Det finns redan ett konto på plattformen med den här e-postadressen. Ange en annan e-postadress för att skapa kundens administratör.
+                        </p>
+                      </div>
+                    )}
                   </FormItem>
                 )}
               />
@@ -235,7 +271,11 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
               <Button type="button" variant="outline" onClick={onClose} disabled={createOrg.isPending}>
                 Avbryt
               </Button>
-              <Button type="submit" disabled={createOrg.isPending}>
+              <Button
+                type="submit"
+                disabled={createOrg.isPending || emailBlocked || orgNumberBlocked}
+                title={emailBlocked ? 'Ange en annan e-postadress innan du fortsätter' : orgNumberBlocked ? 'Ange ett annat org.nummer innan du fortsätter' : undefined}
+              >
                 {createOrg.isPending ? 'Skapar…' : 'Skapa organisation'}
               </Button>
             </DialogFooter>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, ArrowUpDown, Search } from 'lucide-react';
+import { ChevronRight, Search } from 'lucide-react';
 import { Button, Skeleton } from '@platform/ui';
 import { useLessonTypes } from '@modules/scheduling/hooks/useLessonTypes.js';
 import { cn } from '@/lib/utils.js';
@@ -48,11 +48,17 @@ export function TidmallarPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Skapa tidmall
+          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" asChild>
+            <Link to="/settings/finance/lesson-types">Hantera lektionstyper</Link>
           </Button>
         </div>
       </div>
+
+      <p className="text-xs text-muted-foreground -mt-2">
+        Detta är en översikt av lektionstyper använda i schemaläggning. Skapa, redigera och
+        prissätt lektionstyper under{' '}
+        <Link to="/settings/finance/lesson-types" className="text-primary hover:underline">Ekonomi → Lektionstyper</Link>.
+      </p>
 
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -88,26 +94,23 @@ export function TidmallarPage() {
             <thead>
               <tr className="border-b border-border bg-muted/30">
                 <Th>Behörighet</Th>
-                <Th sortable>Internt namn</Th>
-                <Th>Externt namn</Th>
-                <Th>Språk</Th>
-                <Th>Plats</Th>
+                <Th>Namn</Th>
                 <Th>Max deltagare</Th>
                 <Th>Varaktighet</Th>
-                <Th>Kopplade resurser</Th>
-                <Th>Notifikationer</Th>
+                <Th>Kräver fordon</Th>
+                <Th />
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-10 text-center text-muted-foreground text-sm">
+                  <td colSpan={6} className="py-10 text-center text-muted-foreground text-sm">
                     Inga tidmallar hittades.
                   </td>
                 </tr>
               ) : (
                 filtered.map(lt => (
-                  <tr key={lt.id} className="border-b border-border/50 last:border-0 hover:bg-accent/20 cursor-pointer">
+                  <tr key={lt.id} className="border-b border-border/50 last:border-0 hover:bg-accent/20">
                     <td className="px-4 py-3">
                       {lt.category && CATEGORY_LABELS[lt.category] ? (
                         <span className="text-xs font-semibold text-primary">
@@ -118,38 +121,23 @@ export function TidmallarPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <button type="button" className="text-primary hover:underline font-medium text-left">
+                      <Link to="/settings/finance/lesson-types" className="text-primary hover:underline font-medium">
                         {lt.name}
-                      </button>
+                      </Link>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {lt.name}
-                    </td>
-                    <td className="px-4 py-3 text-xs">
-                      <span className="text-lg leading-none">🇸🇪</span>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">–</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs text-center">
                       {lt.max_students_per_slot}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">
                       {lt.default_duration_minutes} min
                     </td>
-                    <td className="px-4 py-3">
-                      {lt.requires_vehicle ? (
-                        <span className="text-xs font-medium px-2 py-0.5 rounded bg-blue-100 text-blue-700
-                                         dark:bg-blue-900/30 dark:text-blue-400">
-                          {lt.requires_vehicle ? '1 st' : '–'}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">–</span>
-                      )}
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
+                      {lt.requires_vehicle ? 'Ja' : 'Nej'}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        <NotifBadge label="Bokningsbekräftelse" />
-                        <NotifBadge label="Bokningspåminnelse" />
-                      </div>
+                      <Link to="/settings/finance/lesson-types" aria-label={`Redigera ${lt.name}`}>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
+                      </Link>
                     </td>
                   </tr>
                 ))
@@ -181,24 +169,10 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   );
 }
 
-function Th({ children, sortable }: { children?: React.ReactNode; sortable?: boolean }) {
+function Th({ children }: { children?: React.ReactNode }) {
   return (
     <th className="px-4 py-2.5 text-left text-xs font-semibold text-foreground whitespace-nowrap">
-      {sortable ? (
-        <button type="button" className="flex items-center gap-1 hover:text-primary">
-          {children}
-          <ArrowUpDown className="w-3 h-3 opacity-50" />
-        </button>
-      ) : children}
+      {children}
     </th>
-  );
-}
-
-function NotifBadge({ label }: { label: string }) {
-  return (
-    <span className="text-[10px] font-medium px-2 py-0.5 rounded bg-green-100 text-green-700
-                     dark:bg-green-900/30 dark:text-green-400 whitespace-nowrap">
-      {label}
-    </span>
   );
 }

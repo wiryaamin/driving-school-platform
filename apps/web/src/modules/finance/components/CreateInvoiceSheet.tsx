@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useForm, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { useQuery } from '@tanstack/react-query';
 import { Plus, Trash2, Search, UserCheck } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -12,10 +13,35 @@ import {
   Button, Separator, ScrollArea, Skeleton,
   toast,
 } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import type { Student } from '@modules/students/hooks/useStudents.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import { useCreateInvoice, useAddInvoiceLine } from '../hooks/useFinance.js';
 import { formatCurrency } from '../lib/financeUtils.js';
+
+// Standard förfallodatum (Kassa-inställningar) — organizations.settings.kassa.pay_terms_days.
+// Prefills due_date; the user can still change it before saving.
+function usePayTermsDays(orgId: string | undefined) {
+  return useQuery<number | null>({
+    queryKey: ['settings-kassa-pay-terms-days', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      const settings = (data as unknown as { settings: Record<string, unknown> } | null)?.settings ?? {};
+      const kassa = (settings['kassa'] as Record<string, unknown> | undefined) ?? {};
+      return typeof kassa['pay_terms_days'] === 'number' ? kassa['pay_terms_days'] : null;
+    },
+    enabled:   !!orgId,
+    staleTime: 60_000,
+  });
+}
+
+function addDaysIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -79,6 +105,8 @@ interface CreateInvoiceSheetProps {
 
 export function CreateInvoiceSheet({ open, onOpenChange }: CreateInvoiceSheetProps) {
   const navigate = useNavigate();
+  const { organization } = useSession();
+  const { data: payTermsDays } = usePayTermsDays(organization?.id);
 
   // Student search
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
@@ -133,6 +161,13 @@ export function CreateInvoiceSheet({ open, onOpenChange }: CreateInvoiceSheetPro
       setIsSubmitting(false);
     }
   }, [open, form]);
+
+  // Prefill due_date from the org's default payment terms (Kassa-inställningar)
+  useEffect(() => {
+    if (open && payTermsDays != null && !form.getValues('due_date')) {
+      form.setValue('due_date', addDaysIso(payTermsDays));
+    }
+  }, [open, payTermsDays, form]);
 
   async function handleSubmit(values: FormValues) {
     if (!selectedStudent) {

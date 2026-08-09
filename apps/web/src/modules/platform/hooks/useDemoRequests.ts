@@ -13,6 +13,16 @@ export type DemoRequestStatus =
   | 'declined'
   | 'spam';
 
+export type DemoRequestRejectionReason =
+  | 'duplicate_email'
+  | 'duplicate_request'
+  | 'spam_or_fraud'
+  | 'incomplete_invalid_info'
+  | 'not_target_market'
+  | 'unable_to_verify_business'
+  | 'outside_service_area'
+  | 'other';
+
 export interface DemoRequest {
   id:                        string;
   name:                      string;
@@ -33,6 +43,14 @@ export interface DemoRequest {
   updated_at:                string;
   contacted_at:              string | null;
   converted_at:              string | null;
+  approved_at:               string | null;
+  approved_by:               string | null;
+  reviewed_at:               string | null;
+  reviewed_by:               string | null;
+  rejection_reason:          DemoRequestRejectionReason | null;
+  rejection_description:     string | null;
+  rejected_at:               string | null;
+  rejected_by:                string | null;
 }
 
 // ─── DB access helper ─────────────────────────────────────────────────────────
@@ -50,7 +68,8 @@ function demoRequests() { return (supabase as any).from('demo_requests'); }
 const DEMO_REQUEST_SELECT =
   'id, name, school_name, email, phone, municipality, location_count, student_count, ' +
   'current_system, message, source, status, assigned_to, internal_notes, ' +
-  'converted_organization_id, created_at, updated_at, contacted_at, converted_at';
+  'converted_organization_id, created_at, updated_at, contacted_at, converted_at, approved_at, approved_by, reviewed_at, reviewed_by, ' +
+  'rejection_reason, rejection_description, rejected_at, rejected_by';
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 

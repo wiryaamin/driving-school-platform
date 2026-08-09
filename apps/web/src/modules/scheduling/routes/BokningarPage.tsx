@@ -2,7 +2,7 @@ import { useState, useMemo, type ReactNode } from 'react';
 import { Check, X, AlertTriangle, ChevronLeft, ChevronRight, Eye, RotateCcw } from 'lucide-react';
 import {
   Skeleton, toast,
-  Sheet, SheetContent, SheetHeader, SheetTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
   ScrollArea, Separator,
 } from '@platform/ui';
 import {
@@ -281,7 +281,7 @@ function InkommandaTab({
                 </Td>
                 <Td className="whitespace-nowrap">{fmtDT(b.starts_at)}</Td>
                 <Td className="text-muted-foreground">
-                  {maps.lessonMap.get(b.lesson_type_id) ?? '—'}
+                  {maps.lessonMap.get(b.lesson_type_id ?? '') ?? '—'}
                 </Td>
                 <Td>
                   <span className={cn(
@@ -386,7 +386,7 @@ function PyramidTab({
                 <tr key={b.id} className="border-b border-border hover:bg-muted/20 transition-colors">
                   <Td className="text-muted-foreground whitespace-nowrap">{fmtDate(b.created_at)}</Td>
                   <Td className="whitespace-nowrap">{fmtDT(b.starts_at)}</Td>
-                  <Td>{maps.lessonMap.get(b.lesson_type_id) ?? '—'}</Td>
+                  <Td>{maps.lessonMap.get(b.lesson_type_id ?? '') ?? '—'}</Td>
                   <Td>Pyramid</Td>
                   <Td className="tabular-nums">{fmtSek(b.price_sek)}</Td>
                   <Td>{maps.studentMap.get(b.student_id) ?? `#${b.student_id.slice(-6)}`}</Td>
@@ -448,7 +448,7 @@ function GodkandaTab({
                 <tr key={b.id} className="border-b border-border hover:bg-muted/20 transition-colors">
                   <Td className="text-muted-foreground whitespace-nowrap">{fmtDate(b.created_at)}</Td>
                   <Td className="whitespace-nowrap">{fmtDT(b.starts_at)}</Td>
-                  <Td>{maps.lessonMap.get(b.lesson_type_id) ?? '—'}</Td>
+                  <Td>{maps.lessonMap.get(b.lesson_type_id ?? '') ?? '—'}</Td>
                   <Td>Online-bokning</Td>
                   <Td>1</Td>
                   <Td className="tabular-nums">{fmtSek(b.price_sek)}</Td>
@@ -511,7 +511,7 @@ function InstalldaTab({
                 <tr key={b.id} className="border-b border-border hover:bg-muted/20 transition-colors">
                   <Td className="text-muted-foreground whitespace-nowrap">{fmtDate(b.created_at)}</Td>
                   <Td className="whitespace-nowrap">{fmtDT(b.starts_at)}</Td>
-                  <Td>{maps.lessonMap.get(b.lesson_type_id) ?? '—'}</Td>
+                  <Td>{maps.lessonMap.get(b.lesson_type_id ?? '') ?? '—'}</Td>
                   <Td>Online</Td>
                   <Td>1</Td>
                   <Td className="tabular-nums">{fmtSek(b.price_sek)}</Td>
@@ -602,7 +602,7 @@ function AvbokningarTab({
                 <tr key={b.id} className="border-b border-border hover:bg-muted/20 transition-colors">
                   <Td className="text-muted-foreground whitespace-nowrap">{fmtDate(b.created_at)}</Td>
                   <Td className="whitespace-nowrap">{fmtDT(b.starts_at)}</Td>
-                  <Td>{maps.lessonMap.get(b.lesson_type_id) ?? '—'}</Td>
+                  <Td>{maps.lessonMap.get(b.lesson_type_id ?? '') ?? '—'}</Td>
                   <Td>{maps.studentMap.get(b.student_id) ?? `#${b.student_id.slice(-6)}`}</Td>
                   <Td>{maps.instructorMap.get(b.instructor_id) ?? `#${b.instructor_id.slice(-6)}`}</Td>
                   <Td className="text-muted-foreground">
@@ -656,7 +656,7 @@ function BookingDetailContent({
 }) {
   const studentName    = maps.studentMap.get(booking.student_id)    ?? `#${booking.student_id.slice(-6)}`;
   const instructorName = maps.instructorMap.get(booking.instructor_id) ?? `#${booking.instructor_id.slice(-6)}`;
-  const lessonName     = maps.lessonMap.get(booking.lesson_type_id) ?? null;
+  const lessonName     = maps.lessonMap.get(booking.lesson_type_id ?? '') ?? null;
   const cancelLabel    = booking.cancellation_category
     ? (CANCEL_CAT_LABEL[booking.cancellation_category] ?? booking.cancellation_category)
     : (booking.cancellation_reason ?? null);
@@ -895,18 +895,18 @@ export function BokningarPage() {
       </div>
 
       {/* ── Booking detail sheet ──────────────────────────────────────────────── */}
-      <Sheet open={detailBooking !== null} onOpenChange={(o) => { if (!o) setDetailBooking(null); }}>
-        <SheetContent className="w-full sm:max-w-md flex flex-col p-0 gap-0">
-          <SheetHeader className="px-5 pt-5 pb-4 border-b border-border">
-            <SheetTitle>Bokningsdetaljer</SheetTitle>
-          </SheetHeader>
+      <Dialog open={detailBooking !== null} onOpenChange={(o) => { if (!o) setDetailBooking(null); }}>
+        <DialogContent className="w-full sm:max-w-md max-h-[85vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-5 pt-5 pb-4 border-b border-border">
+            <DialogTitle>Bokningsdetaljer</DialogTitle>
+          </DialogHeader>
           <ScrollArea className="flex-1">
             {detailBooking && (
               <BookingDetailContent booking={detailBooking} maps={maps} />
             )}
           </ScrollArea>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Rebook dialog (from Avbokningar tab) ─────────────────────────────── */}
       <StudentBookingDialog

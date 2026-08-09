@@ -5,10 +5,11 @@ import { AppShellLayout } from '@app/layouts/AppShell.js';
 import { AuthLayout } from '@app/layouts/AuthLayout.js';
 import { ProtectedRoute } from '@shared/components/guards/ProtectedRoute.js';
 import { PlatformAdminRoute } from '@shared/components/guards/PlatformAdminRoute.js';
-import { SmartRedirect } from './SmartRedirect.js';
+import { RootRoute } from './RootRoute.js';
 import { LoadingScreen } from '@shared/components/layout/LoadingScreen/LoadingScreen.js';
 import { ForbiddenPage } from '@modules/auth/routes/ForbiddenPage.js';
 import { ComingSoonPage } from '@shared/components/placeholders/ComingSoonPage.js';
+import { TrialExpiredPage } from '@shared/components/placeholders/TrialExpiredPage.js';
 import { StudentPortalLayout } from '@modules/student-portal/index.js';
 import { InstructorPortalLayout } from '@modules/instructor-portal/index.js';
 import { InstructorAppLayout } from '@modules/instructor-app/index.js';
@@ -23,8 +24,22 @@ const PlatformAuditPage              = lazy(() => import('@modules/platform/inde
 const PlatformAdminsPage               = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformAdminsPage })));
 const PlatformOrganizationDetailPage   = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformOrganizationDetailPage })));
 const PlatformRolesPage    = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformRolesPage })));
+const PlatformDemoRequestsPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformDemoRequestsPage })));
+const PlatformAnnouncementsPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformAnnouncementsPage })));
 const PlatformSupportPage  = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformSupportPage })));
 const PlatformSecurityPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformSecurityPage })));
+const PlatformTenantOnboardingPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformTenantOnboardingPage })));
+const PlatformOperationsPage     = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformOperationsPage })));
+const PlatformCommunicationsPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformCommunicationsPage })));
+const PlatformCompliancePage     = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformCompliancePage })));
+const PlatformRecoveryPage       = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformRecoveryPage })));
+const PlatformOnboardingJourneyPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.PlatformOnboardingJourneyPage })));
+const OnboardingCommandCenterPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.OnboardingCommandCenterPage })));
+const TrialRequestsPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.TrialRequestsPage })));
+
+// ─── Tenant Onboarding module (lazy) ──────────────────────────────────────────
+const TenantOnboardingPage = lazy(() => import('@modules/tenant-onboarding/index.js').then(m => ({ default: m.TenantOnboardingPage })));
+const BusinessDiscoveryPage = lazy(() => import('@modules/tenant-onboarding/index.js').then(m => ({ default: m.BusinessDiscoveryPage })));
 
 // ─── Public catalog (lazy) ────────────────────────────────────────────────────
 const PublicCatalogPage       = lazy(() => import('@modules/public-catalog/index.js').then(m => ({ default: m.PublicCatalogPage })));
@@ -36,8 +51,58 @@ const ConfirmationPage        = lazy(() => import('@modules/public-catalog/index
 const EnrollmentListPage   = lazy(() => import('@modules/enrollments/index.js').then(m => ({ default: m.EnrollmentListPage })));
 const EnrollmentDetailPage = lazy(() => import('@modules/enrollments/index.js').then(m => ({ default: m.EnrollmentDetailPage })));
 
+// ─── Public marketing website — shared shell + Home (lazy) ───────────────────
+// Home's scene content (Hero/ProblemStatement/SystemReveal) is unchanged;
+// PublicLayout is Epic 1's reusable shell primitive. PagePlaceholder (Epic 1's
+// other primitive) has no remaining call sites as of the legal-pages fix
+// (2026-08-07) — every public route now has real content.
+const PublicLayout = lazy(() => import('@modules/public-site/index.js').then(m => ({ default: m.PublicLayout })));
+// Platform page (/product) retired per the approved Information Architecture
+// clarification — Home (/landing) is now the single authoritative public
+// explanation of Trafikcloud. Its Category B (reference) content moved to
+// Resources; see resources-page below and /product's redirect further down.
+const PublicResourcesPage = lazy(() => import('@modules/resources-page/index.js').then(m => ({ default: m.ResourcesPage })));
+// Epic 4 — Business Challenges page real content (module named
+// business-challenges-page, matching the resources-page naming convention).
+const BusinessChallengesPage = lazy(() =>
+  import('@modules/business-challenges-page/index.js').then((m) => ({ default: m.BusinessChallengesPage })),
+);
+// Epic 5 — Onboarding page real content (module named onboarding-page,
+// matching the business-challenges-page naming convention).
+const OnboardingPage = lazy(() =>
+  import('@modules/onboarding-page/index.js').then((m) => ({ default: m.OnboardingPage })),
+);
+// Epic 6 — About Trafikcloud page real content (module named about-page,
+// matching the onboarding-page naming convention).
+const AboutPage = lazy(() => import('@modules/about-page/index.js').then((m) => ({ default: m.AboutPage })));
+// Epic 7 — Contact page real content (module named contact-page, matching
+// the about-page naming convention).
+const ContactPage = lazy(() => import('@modules/contact-page/index.js').then((m) => ({ default: m.ContactPage })));
+// Epic 8 — Support page real content. Named PublicSupportPage, not
+// "SupportPage", to avoid colliding with the existing PlatformSupportPage
+// (/platform/support, the internal Platform Admin support console).
+const PublicSupportPage = lazy(() => import('@modules/support-page/index.js').then((m) => ({ default: m.SupportPage })));
+// Release 2.0, Epic 1 — Book a Personal Demo, the first operational
+// (non-informational) public page.
+const DemoPage = lazy(() => import('@modules/demo-page/index.js').then((m) => ({ default: m.DemoPage })));
+// Execution Audit (2026-08-07) P1 — real privacy policy / terms of use,
+// replacing the PagePlaceholder that previously lived at these routes.
+const PrivacyPolicyPage = lazy(() => import('@modules/legal-pages/index.js').then((m) => ({ default: m.PrivacyPolicyPage })));
+const TermsOfServicePage = lazy(() => import('@modules/legal-pages/index.js').then((m) => ({ default: m.TermsOfServicePage })));
+// Self-service pre-account tenant trial signup (2026-08-07) — deliberately
+// NOT nested under the PublicLayout marketing chrome below (this is a
+// focused task flow, not a marketing page), same reasoning as
+// PublicCatalogPage/CheckoutPage further down. Path /onboarding/:token is
+// distinct from the existing static /onboarding marketing page (Epic 5,
+// OnboardingPage) — React Router resolves the two as separate patterns; see
+// docs/CUSTOMER_PROVISIONING_ONBOARDING_ARCHITECTURE.md §3 for why those two
+// "onboarding" names must never be confused with each other.
+const StartTrialPage = lazy(() => import('@modules/trial-onboarding/index.js').then((m) => ({ default: m.StartTrialPage })));
+const TrialOnboardingWizardPage = lazy(() => import('@modules/trial-onboarding/index.js').then((m) => ({ default: m.TrialOnboardingWizardPage })));
+
 // ─── Public leads / booking page (lazy) ──────────────────────────────────────
 const PublicBookingPage = lazy(() => import('@modules/leads/index.js').then(m => ({ default: m.PublicBookingPage })));
+const PortalLoginPage   = lazy(() => import('@modules/leads/index.js').then(m => ({ default: m.PortalLoginPage })));
 const LeadsPage              = lazy(() => import('@modules/leads/index.js').then(m => ({ default: m.LeadsPage })));
 const CurriculumPage         = lazy(() => import('@modules/curriculum/index.js').then(m => ({ default: m.CurriculumPage })));
 const CurriculumTemplatePage = lazy(() => import('@modules/curriculum/index.js').then(m => ({ default: m.CurriculumTemplatePage })));
@@ -65,6 +130,7 @@ const StudentPortalDokumentPage      = lazy(() => import('@modules/student-porta
 const StudentPortalKorkortsresaPage  = lazy(() => import('@modules/student-portal/index.js').then(m => ({ default: m.StudentPortalKorkortsresaPage })));
 const StudentPortalUtbildningskortPage = lazy(() => import('@modules/student-portal/index.js').then(m => ({ default: m.StudentPortalUtbildningskortPage })));
 const StudentPortalMeddelandenPage   = lazy(() => import('@modules/student-portal/index.js').then(m => ({ default: m.StudentPortalMeddelandenPage })));
+const StudentPortalSupportPage       = lazy(() => import('@modules/student-portal/index.js').then(m => ({ default: m.StudentPortalSupportPage })));
 
 const InstructorPortalUtbildningskortPage = lazy(() => import('@modules/instructor-portal/index.js').then(m => ({ default: m.InstructorPortalUtbildningskortPage })));
 
@@ -93,6 +159,9 @@ const GuardianPortalBokningarPage      = lazy(() => import('@modules/guardian-po
 // Each module loaded only when first navigated to — reduces initial bundle.
 
 const LoginPage = lazy(() => import('@modules/auth/routes/LoginPage.js').then(m => ({ default: m.LoginPage })));
+const ForgotPasswordPage = lazy(() => import('@modules/auth/routes/ForgotPasswordPage.js').then(m => ({ default: m.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import('@modules/auth/routes/ResetPasswordPage.js').then(m => ({ default: m.ResetPasswordPage })));
+const AcceptInvitePage = lazy(() => import('@modules/auth/routes/AcceptInvitePage.js').then(m => ({ default: m.AcceptInvitePage })));
 const DashboardPage = lazy(() => import('@modules/dashboard/routes/DashboardPage.js').then(m => ({ default: m.DashboardPage })));
 const StudentsPage      = lazy(() => import('@modules/students/index.js').then(m => ({ default: m.StudentsPage })));
 const InaktivaElevPage  = lazy(() => import('@modules/students/routes/InaktivaElevPage.js').then(m => ({ default: m.InaktivaElevPage })));
@@ -116,8 +185,15 @@ const ActivityCenterPage     = lazy(() => import('@modules/communication/index.j
 const NotificationRulesPage  = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.NotificationRulesPage })));
 const QueueMonitorPage       = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.QueueMonitorPage })));
 const CommAnalyticsPage      = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.CommAnalyticsPage })));
-const NotificationLogPage    = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.NotificationLogPage })));
+const NotificationLogPage         = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.NotificationLogPage })));
+const NotificationPreferencesPage = lazy(() => import('@modules/communication/index.js').then(m => ({ default: m.NotificationPreferencesPage })));
 const ResourcesPage          = lazy(() => import('@modules/resources/index.js').then(m => ({ default: m.ResourcesPage })));
+const RegulatoryPage         = lazy(() => import('@modules/regulatory/index.js').then(m => ({ default: m.RegulatoryPage })));
+const DocumentsPage          = lazy(() => import('@modules/documents/index.js').then(m => ({ default: m.DocumentsPage })));
+const NyheterPage            = lazy(() => import('@modules/settings/index.js').then(m => ({ default: m.NyheterPage })));
+const TeorifragorPage        = lazy(() => import('@modules/settings/index.js').then(m => ({ default: m.TeorifragorPage })));
+const StaffPage              = lazy(() => import('@modules/staff/index.js').then(m => ({ default: m.StaffPage })));
+const GuardiansPage          = lazy(() => import('@modules/guardians/index.js').then(m => ({ default: m.GuardiansPage })));
 const DataMigrationPage      = lazy(() => import('@modules/data-migration/index.js').then(m => ({ default: m.DataMigrationPage })));
 const MigrationDetailPage    = lazy(() => import('@modules/data-migration/index.js').then(m => ({ default: m.MigrationDetailPage })));
 const ProfilePage            = lazy(() => import('@modules/profile/index.js').then(m => ({ default: m.ProfilePage })));
@@ -151,6 +227,30 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <LoginPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'forgot-password',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ForgotPasswordPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'reset-password',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ResetPasswordPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'accept-invite',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <AcceptInvitePage />
           </Suspense>
         ),
       },
@@ -285,6 +385,23 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      {
+        path: 'support',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <StudentPortalSupportPage />
+          </Suspense>
+        ),
+      },
+
+      // Catches any /portal/* sub-path with no matching child (e.g. a nav
+      // link added before its route was wired up) — without this, an
+      // unmatched path falls through to the ADMIN app's own catch-all,
+      // rendering the admin shell/sidebar for a student.
+      {
+        path: '*',
+        element: <ComingSoonPage homePath="/portal" />,
+      },
     ],
   },
 
@@ -352,6 +469,17 @@ export const routes: RouteObject[] = [
             <InstructorPortalUtbildningskortPage />
           </Suspense>
         ),
+      },
+
+      // Catches any /instructor-portal/* sub-path with no matching child
+      // (e.g. 'meddelanden'/'ekonomi' nav links whose routes were never
+      // wired up) — without this, an unmatched path falls through to the
+      // ADMIN app's own catch-all, rendering the full admin shell/sidebar
+      // (Kunder, Ekonomi, Inställningar, etc.) for an instructor. Confirmed
+      // live 2026-08-06.
+      {
+        path: '*',
+        element: <ComingSoonPage homePath="/instructor-portal" />,
       },
     ],
   },
@@ -445,6 +573,13 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+
+      // Catches any /guardian/* sub-path with no matching child — see the
+      // identical /instructor-portal catch-all above for why this matters.
+      {
+        path: '*',
+        element: <ComingSoonPage homePath="/guardian" />,
+      },
     ],
   },
 
@@ -507,6 +642,13 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+
+      // Catches any /instructor-app/* sub-path with no matching child — see
+      // the identical /instructor-portal catch-all above for why this matters.
+      {
+        path: '*',
+        element: <ComingSoonPage homePath="/instructor-app" />,
+      },
     ],
   },
 
@@ -543,6 +685,38 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <PlatformOrganizationDetailPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'onboarding',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <OnboardingCommandCenterPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'demo-requests',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformDemoRequestsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'trial-requests',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TrialRequestsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'announcements',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformAnnouncementsPage />
           </Suspense>
         ),
       },
@@ -602,19 +776,102 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      {
+        path: 'operations',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformOperationsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'communications',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformCommunicationsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'compliance',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformCompliancePage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'recovery',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformRecoveryPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'tenant-onboarding',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformTenantOnboardingPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'tenant-onboarding/:id',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PlatformOnboardingJourneyPage />
+          </Suspense>
+        ),
+      },
     ],
+  },
+
+  // ── Trial-expired lock screen (authenticated, no AppShell chrome) ─────────
+  {
+    path: '/trial-expired',
+    element: (
+      <ProtectedRoute>
+        <TrialExpiredPage />
+      </ProtectedRoute>
+    ),
+  },
+
+  // ── Root route ────────────────────────────────────────────────────────────
+  // Signed-out visitors get the marketing landing page at '/' itself (not a
+  // redirect to '/landing'); signed-in users go straight into the app via
+  // SmartRedirect. Deliberately NOT nested under the PublicLayout children
+  // below or the protected AppShellLayout route further down — both of those
+  // keep their own path lists unchanged.
+  {
+    path: '/',
+    element: <RootRoute />,
   },
 
   // ── Protected app routes ──────────────────────────────────────────────────
   {
-    path: '/',
     element: (
       <ProtectedRoute>
         <AppShellLayout />
       </ProtectedRoute>
     ),
     children: [
-      { index: true, element: <SmartRedirect /> },
+      {
+        path: 'setup',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TenantOnboardingPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'setup/business-discovery',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <BusinessDiscoveryPage />
+          </Suspense>
+        ),
+      },
       {
         path: 'dashboard',
         element: (
@@ -733,6 +990,14 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <ResourcesPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'regulatory',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <RegulatoryPage />
           </Suspense>
         ),
       },
@@ -868,6 +1133,14 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      {
+        path: 'communication/preferences',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <NotificationPreferencesPage />
+          </Suspense>
+        ),
+      },
 
       {
         path: 'settings/data-migration',
@@ -922,6 +1195,56 @@ export const routes: RouteObject[] = [
         ),
       },
 
+      // ── Documents ─────────────────────────────────────────────────────────
+      {
+        path: 'documents',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <DocumentsPage />
+          </Suspense>
+        ),
+      },
+
+      // ── Nyheter (Announcements) ────────────────────────────────────────────
+      {
+        path: 'nyheter',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <NyheterPage />
+          </Suspense>
+        ),
+      },
+
+      // ── Körkortsfrågor (Theory quiz question bank) ─────────────────────────
+      {
+        path: 'teorifragor',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TeorifragorPage />
+          </Suspense>
+        ),
+      },
+
+      // ── Staff management ───────────────────────────────────────────────────
+      {
+        path: 'staff',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <StaffPage />
+          </Suspense>
+        ),
+      },
+
+      // ── Guardians list ─────────────────────────────────────────────────────
+      {
+        path: 'guardians',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <GuardiansPage />
+          </Suspense>
+        ),
+      },
+
       // ── Authenticated fallback — MUST be last child ───────────────────────
       // Catches any path that passes ProtectedRoute but has no matching module
       // yet (e.g. /reports, /settings, /corporate). Renders a placeholder inside
@@ -940,6 +1263,16 @@ export const routes: RouteObject[] = [
     element: (
       <Suspense fallback={<LoadingScreen />}>
         <PublicBookingPage />
+      </Suspense>
+    ),
+  },
+
+  // ── Unified portal login landing (disambiguates Student/Guardian/Instructor) ──
+  {
+    path: '/logga-in',
+    element: (
+      <Suspense fallback={<LoadingScreen />}>
+        <PortalLoginPage />
       </Suspense>
     ),
   },
@@ -976,6 +1309,152 @@ export const routes: RouteObject[] = [
         <ConfirmationPage />
       </Suspense>
     ),
+  },
+
+  // ── Self-service tenant trial signup (no auth, no marketing chrome) ──────
+  {
+    path: '/start-trial',
+    element: (
+      <Suspense fallback={<LoadingScreen />}>
+        <StartTrialPage />
+      </Suspense>
+    ),
+  },
+  {
+    path: '/onboarding/:token',
+    element: (
+      <Suspense fallback={<LoadingScreen />}>
+        <TrialOnboardingWizardPage />
+      </Suspense>
+    ),
+  },
+
+  // ── Public marketing website — Epic 1: shared shell (Header/Footer/nav) ────
+  // ── plus routes for every approved public page. A pathless layout route: ───
+  // ── PublicLayout consumes no URL segment itself, so children resolve as ────
+  // ── top-level paths (/landing, /guides, ...) rather than being prefixed. ───
+  // ── Mounted separately from '/', which remains the protected app shell — ───
+  // ── moving the marketing site onto '/' is a future decision, not part of ───
+  // ── this scope. Home (/landing) and Resources (/guides) have real content. ─
+  // ── /product (the former standalone Platform page) redirects to /landing — ─
+  // ── retired per the approved Information Architecture clarification: Home ──
+  // ── is now the single authoritative public explanation of Trafikcloud. ───
+  // ── Every remaining page is an honest PagePlaceholder ("do not implement ───
+  // ── landing page content yet" — Business Challenges, Onboarding, Support, ──
+  // ── About, Contact, Demo, and legal pages are all future epics).
+  {
+    element: (
+      <Suspense fallback={<LoadingScreen />}>
+        <PublicLayout />
+      </Suspense>
+    ),
+    children: [
+      {
+        // The landing page itself now lives only at "/" (see RootRoute.tsx,
+        // which renders LandingPage directly for unauthenticated visitors).
+        // "/landing" is kept only as a permanent redirect for existing
+        // bookmarks/inbound links — client-side SPA redirect only; the
+        // hosting layer's own redirect is out of this router's scope.
+        path: 'landing',
+        element: <Navigate to="/" replace />,
+      },
+      {
+        // Retired per the approved Information Architecture clarification —
+        // Home is now the single authoritative public explanation of
+        // Trafikcloud; a second "explain the platform" page is redundant
+        // by definition. Redirects rather than 404s/falls-through to login,
+        // in case of an existing bookmark or inbound link. This is a
+        // client-side SPA redirect only — a production launch would want a
+        // real HTTP 301 at the hosting/CDN layer for SEO link-equity
+        // preservation, which is outside this router's scope.
+        path: 'product',
+        element: <Navigate to="/" replace />,
+      },
+      {
+        // Epic 4: real content (business-challenges-page module), no longer a PagePlaceholder.
+        path: 'business-challenges',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <BusinessChallengesPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Epic 5: real content (onboarding-page module), no longer a PagePlaceholder.
+        path: 'onboarding',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <OnboardingPage />
+          </Suspense>
+        ),
+      },
+      {
+        // NOT "resources" — that path already belongs to the real, existing
+        // Vehicles/Resources module (line ~751, `ResourcesPage`). Real
+        // content as of the Platform page retirement migration — carries the
+        // Category B (reference) content moved from the former /product page.
+        path: 'guides',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PublicResourcesPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Epic 8: real content (support-page module), no longer a PagePlaceholder.
+        // NOT PlatformSupportPage — that's the internal Platform Admin
+        // support console at /platform/support (line ~622).
+        path: 'support',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PublicSupportPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Epic 6: real content (about-page module), no longer a PagePlaceholder.
+        path: 'about',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <AboutPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Epic 7: real content (contact-page module), no longer a PagePlaceholder.
+        path: 'contact',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <ContactPage />
+          </Suspense>
+        ),
+      },
+      {
+        // Release 2.0, Epic 1: real content (demo-page module), no longer a PagePlaceholder.
+        path: 'demo',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <DemoPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'legal/privacy',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <PrivacyPolicyPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: 'legal/terms',
+        element: (
+          <Suspense fallback={<LoadingScreen />}>
+            <TermsOfServicePage />
+          </Suspense>
+        ),
+      },
+    ],
   },
 
   // ── Catch-all: redirect to login so ProtectedRoute can handle auth + ──────

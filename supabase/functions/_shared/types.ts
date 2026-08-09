@@ -35,6 +35,8 @@ export interface CustomClaims {
   permissions: string[];
   location_ids: string[];
   subscription_tier: string;
+  subscription_status: string | null;
+  trial_ends_at: string | null;
   is_platform_admin: boolean;
   // Set to true when the auth hook fell back to unmodified claims due to a DB error.
   // Allows the client to show a degraded-session warning and trigger a retry.

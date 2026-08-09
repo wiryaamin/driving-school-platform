@@ -278,6 +278,8 @@ const EVENT_LABELS: Record<string, { label: string; description: string }> = {
   waitlist_promoted:         { label: 'Väntelistepromovering',  description: 'Skickas när en plats frigörs och eleven befordras' },
   invoice_issued:            { label: 'Faktura skapad',         description: 'Skickas när en ny faktura utfärdas' },
   invoice_overdue:           { label: 'Faktura försenad',       description: 'Skickas när en faktura passerar förfallodatum' },
+  lead_created:              { label: 'Ny lead mottagen',       description: 'Skickas till kontoägaren när ett nytt lead kommer in via bokningsformuläret' },
+  enrollment_request_created: { label: 'Ny anmälan mottagen',   description: 'Skickas till kontoägaren när en ny anmälan kommer in via kurskatalogen' },
 };
 
 function AutomationRulesPanel() {

@@ -151,7 +151,7 @@ export function HelgdagarPage() {
           <Star className="w-6 h-6" />
         </div>
         <h1 className="text-lg font-semibold text-foreground">Helgdagar</h1>
-        <p className="text-sm text-muted-foreground">Hantera helgdagar och lediga dagar för bokningsschemat.</p>
+        <p className="text-sm text-muted-foreground">Referenslista över helgdagar. Blockerar för närvarande inte bokningsschemat automatiskt — instruktörers lediga dagar hanteras separat under respektive schema.</p>
       </div>
 
       {showForm && (

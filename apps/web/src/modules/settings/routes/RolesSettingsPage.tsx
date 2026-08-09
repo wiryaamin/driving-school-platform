@@ -9,7 +9,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Skeleton, Label,
   Card, CardContent,
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
   toast,
@@ -616,16 +615,16 @@ export function RolesSettingsPage() {
         </div>
       )}
 
-      {/* ── Role Detail Sheet ───────────────────────────────────────────────── */}
-      <Sheet open={sheetOpen} onOpenChange={open => { if (!open) closeSheet(); }}>
-        <SheetContent side="right" className="sm:max-w-lg p-0 flex flex-col overflow-hidden">
+      {/* ── Role Detail Dialog ──────────────────────────────────────────────── */}
+      <Dialog open={sheetOpen} onOpenChange={open => { if (!open) closeSheet(); }}>
+        <DialogContent className="w-full sm:max-w-lg max-h-[85vh] p-0 flex flex-col overflow-hidden">
 
           {/* Header */}
-          <SheetHeader className="px-6 py-4 border-b border-border shrink-0 pr-12">
+          <DialogHeader className="px-6 py-4 border-b border-border shrink-0 pr-12">
             <div className="flex items-center gap-2 min-w-0">
-              <SheetTitle className="text-base font-semibold truncate">
+              <DialogTitle className="text-base font-semibold truncate">
                 {sheetRole?.display_name}
-              </SheetTitle>
+              </DialogTitle>
               {sheetRole?.is_system_role && (
                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 shrink-0">
                   System
@@ -638,11 +637,11 @@ export function RolesSettingsPage() {
               )}
             </div>
             {sheetRole?.description && (
-              <SheetDescription className="text-xs text-muted-foreground truncate">
+              <DialogDescription className="text-xs text-muted-foreground truncate">
                 {sheetRole.description}
-              </SheetDescription>
+              </DialogDescription>
             )}
-          </SheetHeader>
+          </DialogHeader>
 
           {/* Tab bar */}
           <div className="flex border-b border-border px-6 shrink-0">
@@ -809,7 +808,7 @@ export function RolesSettingsPage() {
           </div>
 
           {/* Footer */}
-          <SheetFooter className="px-6 py-4 border-t border-border shrink-0 flex-row justify-end gap-2">
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0 flex-row justify-end gap-2">
             <Button variant="outline" size="sm" onClick={closeSheet}>Stäng</Button>
             {sheetRole?.is_custom && (
               <Button
@@ -821,9 +820,9 @@ export function RolesSettingsPage() {
                 Spara
               </Button>
             )}
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Assign User Dialog ──────────────────────────────────────────────── */}
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>

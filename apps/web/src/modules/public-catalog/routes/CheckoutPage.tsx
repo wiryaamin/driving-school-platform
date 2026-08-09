@@ -11,6 +11,8 @@ import {
   useSubmitEnrollment,
   type EnrollmentFormValues,
 } from '../hooks/useEnrollment.js';
+import { TenantIdentity } from '@shared/components/public/TenantIdentity.js';
+import { TenantContactFooter } from '@shared/components/public/TenantContactFooter.js';
 
 // ─── Field components ─────────────────────────────────────────────────────────
 
@@ -121,6 +123,7 @@ export function CheckoutPage() {
   const [form, setForm]       = useState<EnrollmentFormValues>(INITIAL_FORM);
   const [errors, setErrors]   = useState<Record<string, string>>({});
   const [couponInput, setCouponInput] = useState('');
+  const [website, setWebsite] = useState(''); // honeypot — real visitors never fill this
 
   // ── Coupon state ───────────────────────────────────────────────────────────
   const { status: couponStatus, result: couponResult, validateCoupon, clearCoupon } = useCouponValidation(orgId);
@@ -142,8 +145,13 @@ export function CheckoutPage() {
   const currency       = pkg?.currency ?? 'SEK';
   const vatRate        = pkg?.vat_rate  ?? 0.25;
 
-  // Campaign discount (ex-VAT stored in API, display incl VAT)
-  const campaignDiscountExVat = pkg?.discount_amount ?? 0;
+  // Campaign discount (ex-VAT stored in API, display incl VAT). Gated on an
+  // actual active campaign being present: pkg.discount_amount is also
+  // populated when the discount instead comes from the package's own
+  // compare_at_price (no campaign) — in that case pkg.price is *already*
+  // the sale price, so subtracting discount_amount again here would
+  // double-discount the checkout total.
+  const campaignDiscountExVat = campaign ? (pkg?.discount_amount ?? 0) : 0;
 
   // Coupon discount (ex-VAT from validation API)
   const couponDiscountExVat = (couponResult?.is_valid && couponResult.discount_amount != null)
@@ -183,6 +191,7 @@ export function CheckoutPage() {
         coupon_id:           couponResult?.is_valid ? couponResult.coupon_id : null,
         coupon_code:         couponResult?.is_valid ? couponResult.coupon_code : null,
         form,
+        website,
       },
       {
         onSuccess: (data) => {
@@ -220,10 +229,10 @@ export function CheckoutPage() {
         <div className="max-w-2xl mx-auto px-4 sm:px-6 py-3.5">
           <Link
             to={orgId && packageId ? `/catalog/${orgId}/${packageId}` : orgId ? `/catalog/${orgId}` : '#'}
-            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors min-w-0"
           >
-            <ArrowLeft className="w-4 h-4" />
-            {org?.name ?? 'Tillbaka'}
+            <ArrowLeft className="w-4 h-4 shrink-0" />
+            <TenantIdentity name={org?.name} branding={org?.branding} fallback="Tillbaka" textClassName="text-sm font-medium" logoClassName="h-5 w-auto" />
           </Link>
         </div>
       </header>
@@ -237,6 +246,18 @@ export function CheckoutPage() {
           </div>
         ) : pkg ? (
           <form onSubmit={handleSubmit} className="space-y-6" noValidate>
+
+            {/* Honeypot — hidden from real visitors, left for bots to fill in */}
+            <input
+              type="text"
+              name="website"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              tabIndex={-1}
+              autoComplete="off"
+              aria-hidden="true"
+              className="absolute -left-[9999px] w-px h-px opacity-0"
+            />
 
             {/* Package summary */}
             <div className="bg-white border border-gray-200 rounded-xl p-5">
@@ -368,6 +389,7 @@ export function CheckoutPage() {
               type="submit"
               disabled={isSubmitting}
               className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-3 rounded-xl text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              style={!isSubmitting && org?.branding.primary_color ? { backgroundColor: org.branding.primary_color } : undefined}
             >
               {isSubmitting ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Skickar anmälan…</>
@@ -379,6 +401,8 @@ export function CheckoutPage() {
             <p className="text-center text-xs text-gray-400">
               Ingen betalning sker nu. Körskolan kontaktar dig för bekräftelse och betalning.
             </p>
+
+            <TenantContactFooter branding={org?.branding} />
           </form>
         ) : null}
       </main>

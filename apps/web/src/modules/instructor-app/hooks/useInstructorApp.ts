@@ -8,11 +8,9 @@ export interface InstructorProfile {
   id: string;
   first_name: string;
   last_name: string;
-  status: string;
   employment_type: string;
   phone: string | null;
   email: string | null;
-  profile_photo_url: string | null;
 }
 
 export interface BookingDetail {
@@ -24,6 +22,7 @@ export interface BookingDetail {
   student_phone: string | null;
   student_email: string | null;
   performance_rating: number | null;
+  latest_note: string | null;
 }
 
 export interface ScheduleSlot {
@@ -34,6 +33,8 @@ export interface ScheduleSlot {
   max_bookings: number;
   current_bookings: number;
   lesson_type_name: string | null;
+  vehicle_registration: string | null;
+  vehicle_model: string | null;
   bookings: BookingDetail[];
 }
 
@@ -68,6 +69,7 @@ interface RawBookingRow {
   student_id: string;
   performance_rating: number | null;
   students: { first_name: string; last_name: string; phone: string | null; email: string | null } | null;
+  booking_notes: { content: string; created_at: string }[] | null;
 }
 
 interface RawSlotRow {
@@ -78,6 +80,7 @@ interface RawSlotRow {
   max_bookings: number;
   current_bookings: number;
   lesson_types: { name: string } | null;
+  vehicles: { registration_number: string; model: string } | null;
   lesson_bookings: RawBookingRow[];
 }
 
@@ -92,6 +95,8 @@ function mapSlot(slot: RawSlotRow): ScheduleSlot {
     max_bookings:     slot.max_bookings,
     current_bookings: slot.current_bookings,
     lesson_type_name: slot.lesson_types?.name ?? null,
+    vehicle_registration: slot.vehicles?.registration_number ?? null,
+    vehicle_model:        slot.vehicles?.model ?? null,
     bookings: (slot.lesson_bookings ?? [])
       .filter(b => b.status !== 'cancelled')
       .map(b => ({
@@ -103,6 +108,9 @@ function mapSlot(slot: RawSlotRow): ScheduleSlot {
         student_phone:        b.students?.phone ?? null,
         student_email:        b.students?.email ?? null,
         performance_rating:   b.performance_rating ?? null,
+        latest_note: (b.booking_notes ?? [])
+          .slice()
+          .sort((x, y) => y.created_at.localeCompare(x.created_at))[0]?.content ?? null,
       })),
   };
 }
@@ -119,7 +127,7 @@ export function useMyInstructor() {
       if (!user?.id || !user.organization_id) return null;
       const { data, error } = await supabase
         .from('instructors')
-        .select('id, first_name, last_name, status, employment_type, phone, email, profile_photo_url')
+        .select('id, first_name, last_name, employment_type, phone, email')
         .eq('user_id', user.id)
         .eq('organization_id', user.organization_id)
         .is('deleted_at', null)
@@ -147,7 +155,8 @@ export function useMySchedule(
         .select(`
           id, starts_at, ends_at, status, max_bookings, current_bookings,
           lesson_types(name),
-          lesson_bookings(id, status, student_id, performance_rating, students(first_name, last_name, phone, email))
+          vehicles(registration_number, model),
+          lesson_bookings(id, status, student_id, performance_rating, students(first_name, last_name, phone, email), booking_notes(content, created_at))
         `)
         .eq('instructor_id', instructorId)
         .gte('starts_at', `${from}T00:00:00`)

@@ -1,10 +1,20 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { format } from 'date-fns';
+import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
+import { sv } from 'date-fns/locale';
 import { useInstructorPortalSlots } from '../hooks/useInstructorPortal.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#1055C9';
+const SWEDEN_TZ = 'Europe/Stockholm';
 
+// startOfWeek/addDays/isoDate all operate on plain local Date getters —
+// correct as long as every Date passed in was produced by toZonedTime(...,
+// SWEDEN_TZ) first, which is what lets native local getters/setters behave
+// as if the runtime were in Stockholm regardless of the viewer's actual
+// device timezone. Mixing a real UTC instant into these functions directly
+// (as this page used to) reintroduces the same class of bug this fixes.
 function startOfWeek(d: Date): Date {
   const day = d.getDay();
   const diff = (day === 0 ? -6 : 1 - day);
@@ -21,17 +31,17 @@ function addDays(d: Date, n: number): Date {
 }
 
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return format(d, 'yyyy-MM-dd');
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  return formatInTimeZone(new Date(iso), SWEDEN_TZ, 'HH:mm');
 }
 
 const DAY_LABELS = ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'];
 
 export function InstructorPortalSchemaPage() {
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(toZonedTime(new Date(), SWEDEN_TZ)));
 
   const weekEnd = addDays(weekStart, 6);
   const from    = isoDate(weekStart);
@@ -43,13 +53,15 @@ export function InstructorPortalSchemaPage() {
 
   function slotsByDay(dayDate: Date) {
     const prefix = isoDate(dayDate);
-    return (slots ?? []).filter(s => s.starts_at.startsWith(prefix));
+    return (slots ?? []).filter(s => isoDate(toZonedTime(new Date(s.starts_at), SWEDEN_TZ)) === prefix);
   }
 
-  const today = isoDate(new Date());
+  const today = isoDate(toZonedTime(new Date(), SWEDEN_TZ));
 
   function formatWeekRange(): string {
-    return `${weekStart.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    const startLabel = format(weekStart, 'd MMM', { locale: sv });
+    const endLabel   = format(weekEnd, 'd MMM yyyy', { locale: sv });
+    return `${startLabel} – ${endLabel}`;
   }
 
   return (

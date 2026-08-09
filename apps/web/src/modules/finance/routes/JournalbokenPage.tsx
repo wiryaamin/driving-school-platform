@@ -24,10 +24,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Tabs,
   TabsContent,
   TabsList,
@@ -206,13 +202,13 @@ function EntryDetailSheet({
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[560px] sm:w-[640px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
               {isLoading ? 'Laddar…' : `Verifikat ${voucherLabel}`}
-            </SheetTitle>
-          </SheetHeader>
+            </DialogTitle>
+          </DialogHeader>
 
           {isLoading ? (
             <div className="mt-4 space-y-3">
@@ -337,8 +333,8 @@ function EntryDetailSheet({
               )}
             </div>
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {reversing && entry && (
         <ReverseDialog entry={entry} onClose={() => setReversing(false)} />

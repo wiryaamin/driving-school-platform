@@ -7,11 +7,11 @@ import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
 
 interface BookingService {
-  id:         string;
-  name:       string;
-  sort_order: number;
-  is_active:  boolean;
-  category:   string | null;
+  id:            string;
+  name:          string;
+  display_order: number;
+  is_active:     boolean;
+  category:      string | null;
 }
 
 export function ElevbokningTjansterPage() {
@@ -22,12 +22,12 @@ export function ElevbokningTjansterPage() {
     queryKey: ['settings-booking-services', orgId],
     queryFn: async () => {
       if (!orgId) return [];
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('lesson_types')
-        .select('id, name, sort_order, is_active, category')
+        .select('id, name, display_order, is_active, category')
         .eq('organization_id', orgId)
-        .is('deleted_at', null)
-        .order('sort_order', { ascending: true });
+        .order('display_order', { ascending: true });
+      if (error) throw new Error(error.message);
       return (data ?? []) as BookingService[];
     },
     enabled: !!orgId,
@@ -47,8 +47,8 @@ export function ElevbokningTjansterPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Skapa tjänst
+          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" asChild>
+            <Link to="/settings/finance/lesson-types">Hantera lektionstyper</Link>
           </Button>
         </div>
       </div>
@@ -58,7 +58,11 @@ export function ElevbokningTjansterPage() {
           <Key className="w-6 h-6" />
         </div>
         <h1 className="text-lg font-semibold text-foreground">Elevbokning</h1>
-        <p className="text-sm text-muted-foreground">Konfigurera elevernas möjlighet att boka in körlektioner och kurser.</p>
+        <p className="text-sm text-muted-foreground">
+          Vilka lektionstyper som visas i elevbokningen styrs av respektive lektionstyps
+          aktiv-status — hanteras under{' '}
+          <Link to="/settings/finance/lesson-types" className="text-primary hover:underline">Ekonomi → Lektionstyper</Link>.
+        </p>
       </div>
 
       {isLoading ? (
@@ -66,8 +70,11 @@ export function ElevbokningTjansterPage() {
           {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
         </div>
       ) : services.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card py-10 text-center text-sm text-muted-foreground">
-          Inga lektionstyper hittades. Skapa lektionstyper under Inställningar → Tidmallar.
+        <div className="rounded-xl border border-border bg-card py-10 text-center text-sm text-muted-foreground space-y-2">
+          <p>Inga lektionstyper hittades.</p>
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/settings/finance/lesson-types">Skapa en lektionstyp</Link>
+          </Button>
         </div>
       ) : (
         <>
@@ -99,11 +106,14 @@ export function ElevbokningTjansterPage() {
 
 function ServiceRow({ service }: { service: BookingService }) {
   return (
-    <button type="button" className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors text-left">
+    <Link
+      to="/settings/finance/lesson-types"
+      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors text-left"
+    >
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-primary">{service.name}</p>
         <p className="text-xs text-muted-foreground mt-0.5">
-          {service.category ? `Kategori: ${service.category} · ` : ''}Ordning: {service.sort_order}
+          {service.category ? `Kategori: ${service.category} · ` : ''}Ordning: {service.display_order}
         </p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
@@ -117,6 +127,6 @@ function ServiceRow({ service }: { service: BookingService }) {
         </span>
         <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
       </div>
-    </button>
+    </Link>
   );
 }

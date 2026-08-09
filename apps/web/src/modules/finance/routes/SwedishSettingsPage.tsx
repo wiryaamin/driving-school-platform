@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
-  Building2,
   CheckCircle2,
   CreditCard,
   FileText,
@@ -74,17 +74,12 @@ function OrgSettingsForm() {
   useEffect(() => {
     if (settings) {
       setForm({
-        company_name:          settings.company_name          ?? '',
-        org_number:            settings.org_number            ?? '',
-        vat_number:            settings.vat_number            ?? '',
         bank_name:             settings.bank_name             ?? '',
         bank_account_number:   settings.bank_account_number   ?? '',
         bank_clearing_number:  settings.bank_clearing_number  ?? '',
         bankgiro_number:       settings.bankgiro_number       ?? '',
         plusgiro_number:       settings.plusgiro_number       ?? '',
-        swish_number:          settings.swish_number          ?? '',
         default_vat_rate:      settings.default_vat_rate      ?? 25,
-        invoice_due_days:      settings.invoice_due_days      ?? 30,
         invoice_payment_terms: settings.invoice_payment_terms ?? '',
         invoice_footer_text:   settings.invoice_footer_text   ?? '',
         autogiro_enabled:      settings.autogiro_enabled      ?? false,
@@ -134,26 +129,13 @@ function OrgSettingsForm() {
 
   return (
     <div className="space-y-6">
-      {/* Organisation */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-blue-500" />
-            Organisationsuppgifter
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <FieldRow label="Företagsnamn" hint="Visas på fakturor">
-            <Input value={String(form.company_name ?? '')} onChange={set('company_name')} placeholder="AB Körskolans Namn" />
-          </FieldRow>
-          <FieldRow label="Organisationsnummer" hint="Format: 556123-4567">
-            <Input value={String(form.org_number ?? '')} onChange={set('org_number')} placeholder="556123-4567" />
-          </FieldRow>
-          <FieldRow label="Momsregistreringsnummer" hint="SE + org.nr utan bindestreck">
-            <Input value={String(form.vat_number ?? '')} onChange={set('vat_number')} placeholder="SE556123456701" />
-          </FieldRow>
-        </CardContent>
-      </Card>
+      {/* Organisation — canonical owner is CompanySettingsPage; this card used to
+          duplicate legal_name/org_number/vat_number in a separate, previously
+          broken (RLS) table. Link out rather than maintain a second copy. */}
+      <p className="text-xs text-muted-foreground">
+        Företagsnamn, organisationsnummer och momsregistreringsnummer hanteras under{' '}
+        <Link to="/settings/company" className="text-primary hover:underline">Inställningar → Företag</Link>.
+      </p>
 
       {/* Betalningsinformation */}
       <Card>
@@ -162,6 +144,11 @@ function OrgSettingsForm() {
             <CreditCard className="w-4 h-4 text-green-500" />
             Betalningsinformation
           </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Sparas men visas inte på någon faktura eller kvitto ännu — det finns inget sådant dokument
+            i plattformen idag. Swish-nummer som visas för elever hanteras separat under{' '}
+            <Link to="/settings/company" className="text-primary hover:underline">Inställningar → Företag</Link>.
+          </p>
         </CardHeader>
         <CardContent>
           <FieldRow label="Banknamn">
@@ -179,10 +166,7 @@ function OrgSettingsForm() {
           <FieldRow label="Plusgironummer" hint="Valfritt">
             <Input value={String(form.plusgiro_number ?? '')} onChange={set('plusgiro_number')} placeholder="12 34 56-7" />
           </FieldRow>
-          <FieldRow label="Swishnummer" hint="Valfritt, för direktbetalning">
-            <Input value={String(form.swish_number ?? '')} onChange={set('swish_number')} placeholder="123 456 78 90" />
-          </FieldRow>
-          <FieldRow label="Autogiro aktiverat">
+          <FieldRow label="Autogiro aktiverat" hint="Sparas men ingen autogiro-integration finns i plattformen ännu">
             <div className="flex items-center gap-2 h-9">
               <Switch
                 checked={Boolean(form.autogiro_enabled)}
@@ -203,18 +187,22 @@ function OrgSettingsForm() {
             <FileText className="w-4 h-4 text-purple-500" />
             Fakturainställningar
           </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Standardmomssats, betalningsvillkorstext och fakturasidfot sparas men läses inte av
+            fakturaskapandet ännu — nya fakturarader har idag ett hårdkodat 25%-förval, och det
+            finns inget fakturadokument som visar en sidfot. Standard förfallodatum (dagar) hanteras
+            redan på riktigt under{' '}
+            <Link to="/settings/finance/kassa" className="text-primary hover:underline">Inställningar → Kassa</Link>.
+          </p>
         </CardHeader>
         <CardContent>
-          <FieldRow label="Standard-momssats (%)" hint="Används som förvalt på nya fakturor">
+          <FieldRow label="Standard-momssats (%)" hint="Sparas, används inte av fakturaskapandet ännu">
             <Input type="number" min="0" max="100" value={String(form.default_vat_rate ?? 25)} onChange={setNum('default_vat_rate')} className="w-24" />
           </FieldRow>
-          <FieldRow label="Betalningsvillkor (dagar)" hint="Antal dagar till förfallodatum">
-            <Input type="number" min="0" max="365" value={String(form.invoice_due_days ?? 30)} onChange={setNum('invoice_due_days')} className="w-24" />
-          </FieldRow>
-          <FieldRow label="Betalningsvillkor (text)" hint="t.ex. 30 dagar netto">
+          <FieldRow label="Betalningsvillkor (text)" hint="t.ex. 30 dagar netto — sparas som referens">
             <Input value={String(form.invoice_payment_terms ?? '')} onChange={set('invoice_payment_terms')} placeholder="30 dagar netto" />
           </FieldRow>
-          <FieldRow label="Sidfot på fakturor" hint="Visas längst ned på varje faktura">
+          <FieldRow label="Sidfot på fakturor" hint="Sparas, visas inte på någon faktura ännu">
             <Textarea
               rows={3}
               value={String(form.invoice_footer_text ?? '')}

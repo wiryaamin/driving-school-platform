@@ -18,13 +18,21 @@
 
 import { createServiceClient } from '../_shared/supabase.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
+import { buildPublicBranding } from '../_shared/public-branding.ts';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Headers list was missing x-app-env/x-correlation-id/x-app-version — the
+// frontend's Supabase client attaches these on every request regardless of
+// endpoint, so any function with its own header allowlist (rather than the
+// shared _shared/cors.ts one) needs to keep it in sync manually. Confirmed
+// live 2026-08-03: a real visitor's browser was CORS-blocked before the
+// request ever reached this function, over a header the function itself
+// never even inspects.
 const PUBLIC_CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'content-type, apikey, authorization, x-client-info',
+  'Access-Control-Allow-Headers': 'content-type, apikey, authorization, x-client-info, x-correlation-id, x-app-env, x-app-version',
   'Access-Control-Max-Age':       '86400',
 };
 
@@ -36,6 +44,11 @@ function json(body: unknown, status = 200): Response {
 function err(message: string, status: number, code?: string): Response {
   return json({ error: message, ...(code !== undefined && { code }) }, status);
 }
+
+function isPublicCatalogEnabled(org: { settings?: Record<string, unknown> | null }): boolean {
+  return (org.settings?.['public_catalog_enabled'] as boolean | undefined) !== false;
+}
+
 
 function extractPackageId(req: Request): string | null {
   const segments = new URL(req.url).pathname.split('/').filter(Boolean);
@@ -122,20 +135,23 @@ function getSavingsLabel(amount: number | null, currency: string): string | null
 // ─── Package shape ────────────────────────────────────────────────────────────
 
 interface PackageRow {
-  id:              string;
-  name:            string;
-  description:     string | null;
-  lesson_category: string;
-  quantity:        number;
-  price:           number;
-  vat_rate:        number;
-  currency:        string;
-  package_code:    string | null;
-  visibility:      string;
-  featured:        boolean;
-  sort_order:      number;
-  validity_days:   number | null;
-  bundle_credits:  unknown[];
+  id:               string;
+  name:             string;
+  description:      string | null;
+  lesson_category:  string;
+  quantity:         number;
+  price:            number;
+  compare_at_price: number | null;
+  vat_rate:         number;
+  currency:         string;
+  package_code:     string | null;
+  visibility:       string;
+  featured:         boolean;
+  sort_order:       number;
+  validity_days:    number | null;
+  bundle_credits:   unknown[];
+  included_items:   string[];
+  marketing_badges: string[];
 }
 
 interface CampaignLinkRow {
@@ -153,10 +169,16 @@ function buildPublicPackage(pkg: PackageRow, campaigns: CampaignRow[]): Record<s
   let discountedPrice:       number | null = null;
   let discountedPriceInclVat: number | null = null;
   let discountAmount:        number | null = null;
+  let discountPercentage:    number | null = null;
   let savingsLabel:          string | null = null;
   let activeCampaign:        Record<string, unknown> | null = null;
+  let originalPrice:         number | null = null;
+  let originalPriceInclVat:  number | null = null;
 
   if (top) {
+    // A live campaign is the authoritative "was/now" — takes priority over
+    // any manually-set compare_at_price so a package never shows two
+    // conflicting discount stories at once.
     const dr = computeDiscount(pkg.price, top);
     discountAmount        = dr.discount_amount;
     discountedPrice       = dr.discounted_price;
@@ -164,6 +186,13 @@ function buildPublicPackage(pkg: PackageRow, campaigns: CampaignRow[]): Record<s
       ? Math.round(discountedPrice * (1 + pkg.vat_rate) * 100) / 100
       : null;
     savingsLabel = getSavingsLabel(discountAmount, pkg.currency);
+    if (discountAmount != null && pkg.price > 0) {
+      discountPercentage = Math.round((discountAmount / pkg.price) * 100);
+    }
+    if (discountedPrice != null) {
+      originalPrice        = pkg.price;
+      originalPriceInclVat = priceInclVat;
+    }
 
     activeCampaign = {
       id:                  top.id,
@@ -178,6 +207,16 @@ function buildPublicPackage(pkg: PackageRow, campaigns: CampaignRow[]): Record<s
       priority:            top.priority,
       badge_label:         dr.badge_label,
     };
+  } else if (pkg.compare_at_price != null && pkg.compare_at_price > pkg.price) {
+    // No campaign — fall back to the package's own manually-set "was" price.
+    const compareInclVat = Math.round(pkg.compare_at_price * (1 + pkg.vat_rate) * 100) / 100;
+    discountAmount        = Math.round((pkg.compare_at_price - pkg.price) * 100) / 100;
+    discountedPrice        = pkg.price;
+    discountedPriceInclVat = priceInclVat;
+    discountPercentage      = Math.round((discountAmount / pkg.compare_at_price) * 100);
+    savingsLabel            = getSavingsLabel(discountAmount, pkg.currency);
+    originalPrice           = pkg.compare_at_price;
+    originalPriceInclVat    = compareInclVat;
   }
 
   return {
@@ -195,10 +234,15 @@ function buildPublicPackage(pkg: PackageRow, campaigns: CampaignRow[]): Record<s
     featured:                  pkg.featured,
     sort_order:                pkg.sort_order,
     validity_days:             pkg.validity_days,
+    included_items:            pkg.included_items ?? [],
+    marketing_badges:          pkg.marketing_badges ?? [],
     active_campaign:           activeCampaign,
+    original_price:            originalPrice,
+    original_price_incl_vat:   originalPriceInclVat,
     discounted_price:          discountedPrice,
     discounted_price_incl_vat: discountedPriceInclVat,
     discount_amount:           discountAmount,
+    discount_percentage:       discountPercentage,
     savings_label:             savingsLabel,
   };
 }
@@ -214,7 +258,7 @@ async function handleList(req: Request, client: any, orgId: string): Promise<Res
   // eslint-disable-next-line prefer-const
   let pkgQ = client
     .from('package_offerings')
-    .select('id, name, description, lesson_category, quantity, price, vat_rate, currency, package_code, visibility, featured, sort_order, validity_days, bundle_credits')
+    .select('id, name, description, lesson_category, quantity, price, compare_at_price, vat_rate, currency, package_code, visibility, featured, sort_order, validity_days, bundle_credits, included_items, marketing_badges')
     .eq('organization_id', orgId)
     .eq('status', 'active')
     .in('visibility', ['website', 'public'])
@@ -229,7 +273,7 @@ async function handleList(req: Request, client: any, orgId: string): Promise<Res
   const [orgRes, pkgRes] = await Promise.all([
     client
       .from('organizations')
-      .select('id, name, subscription_status')
+      .select('id, name, subscription_status, settings')
       .eq('id', orgId)
       .neq('status', 'suspended')
       .maybeSingle(),
@@ -237,6 +281,7 @@ async function handleList(req: Request, client: any, orgId: string): Promise<Res
   ]);
 
   if (orgRes.error || !orgRes.data) return err('Organization not found', 404, 'NOT_FOUND');
+  if (!isPublicCatalogEnabled(orgRes.data)) return err('Organization not found', 404, 'NOT_FOUND');
   if (pkgRes.error)                  return err('Failed to load packages', 500, 'QUERY_FAILED');
 
   const packages: PackageRow[] = pkgRes.data ?? [];
@@ -273,9 +318,14 @@ async function handleList(req: Request, client: any, orgId: string): Promise<Res
   const activeCampaignCount = publicPackages.filter((p) => p['active_campaign'] != null).length;
   const featuredCount       = publicPackages.filter((p) => p['featured']).length;
 
+  const org = orgRes.data as { id: string; name: string; subscription_status: string; settings?: Record<string, unknown> | null };
+
   return json({
     data: publicPackages,
-    organization: orgRes.data,
+    organization: {
+      id: org.id, name: org.name, subscription_status: org.subscription_status,
+      branding: buildPublicBranding(org.settings),
+    },
     meta: {
       total:               publicPackages.length,
       featured_count:      featuredCount,
@@ -290,13 +340,13 @@ async function handleDetail(req: Request, client: any, orgId: string, pkgId: str
   const [orgRes, pkgRes, linkRes] = await Promise.all([
     client
       .from('organizations')
-      .select('id, name, subscription_status')
+      .select('id, name, subscription_status, settings')
       .eq('id', orgId)
       .neq('status', 'suspended')
       .maybeSingle(),
     client
       .from('package_offerings')
-      .select('id, name, description, lesson_category, quantity, price, vat_rate, currency, package_code, visibility, featured, sort_order, validity_days, bundle_credits')
+      .select('id, name, description, lesson_category, quantity, price, compare_at_price, vat_rate, currency, package_code, visibility, featured, sort_order, validity_days, bundle_credits, included_items, marketing_badges')
       .eq('id', pkgId)
       .eq('organization_id', orgId)
       .eq('status', 'active')
@@ -310,6 +360,7 @@ async function handleDetail(req: Request, client: any, orgId: string, pkgId: str
   ]);
 
   if (orgRes.error || !orgRes.data) return err('Organization not found', 404, 'NOT_FOUND');
+  if (!isPublicCatalogEnabled(orgRes.data)) return err('Organization not found', 404, 'NOT_FOUND');
   if (pkgRes.error || !pkgRes.data) return err('Package not found', 404, 'NOT_FOUND');
 
   const pkg: PackageRow = pkgRes.data;
@@ -336,11 +387,13 @@ async function handleDetail(req: Request, client: any, orgId: string, pkgId: str
     };
   });
 
+  const org = orgRes.data as { id: string; name: string; subscription_status: string; settings?: Record<string, unknown> | null };
+
   return json({
     ...base,
     bundle_credits: pkg.bundle_credits,
     all_campaigns:  allCampaigns,
-    organization:   orgRes.data,
+    organization:   { id: org.id, name: org.name, subscription_status: org.subscription_status, branding: buildPublicBranding(org.settings) },
   });
 }
 

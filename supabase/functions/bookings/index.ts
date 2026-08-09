@@ -26,10 +26,13 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 };
 
 const CreateBookingSchema = z.object({
-  slot_id:    z.string().uuid(),
-  student_id: z.string().uuid(),
-  status:     z.enum(BOOKING_STATUSES).optional(),
-  price_sek:  z.number().min(0).nullable().optional(),
+  slot_id:         z.string().uuid(),
+  student_id:      z.string().uuid(),
+  status:          z.enum(BOOKING_STATUSES).optional(),
+  price_sek:       z.number().min(0).nullable().optional(),
+  // Required only when the target slot has no predefined lesson type
+  // (generic availability) — see lesson_booking_set_slot_fields().
+  lesson_type_id:  z.string().uuid().optional(),
 });
 
 const UpdateBookingSchema = z.object({
@@ -42,7 +45,9 @@ const CancelBookingSchema = z.object({
 });
 
 const RescheduleBookingSchema = z.object({
-  new_slot_id: z.string().uuid(),
+  new_slot_id:    z.string().uuid(),
+  // Required only when the target slot has no predefined lesson type.
+  lesson_type_id: z.string().uuid().optional(),
 });
 
 const AddNoteSchema = z.object({
@@ -96,8 +101,8 @@ function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: n
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return errorResp(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -198,6 +203,15 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Slot is at full capacity');
   }
 
+  // Generic-availability slots (lesson_type_id null) carry no lesson type of
+  // their own — the booker must supply one. Typed slots ignore whatever the
+  // caller sends here (the trigger keeps the slot's own type authoritative).
+  if (!slot.lesson_type_id && !dto.lesson_type_id) {
+    return errorResp(ctx, 422, 'LESSON_TYPE_REQUIRED',
+      'Detta pass har ingen förvald lektionstyp — ange lektionstyp vid bokning.');
+  }
+  const effectiveLessonTypeId: string | null = slot.lesson_type_id ?? dto.lesson_type_id ?? null;
+
   // Pre-flight: student availability
   const { data: avail, error: availErr } = await (client as any).rpc('check_student_booking_availability', {
     p_student_id: dto.student_id,
@@ -211,10 +225,13 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   // Finds the student's oldest non-expired active package for the slot category.
   // If active packages exist but none have remaining credits → reject booking.
   // Students with no active packages are allowed (billed separately, no package).
+  // Uses effectiveLessonTypeId (not slot.lesson_type_id) so a generic-availability
+  // slot booked with an explicit lesson type still correctly consumes a package
+  // credit instead of always resolving to "not applicable".
   const preflight = await resolveLessonPackageCredit(client, {
     organizationId: ctx.organizationId,
     studentId:      dto.student_id,
-    lessonTypeId:   slot.lesson_type_id ?? null,
+    lessonTypeId:   effectiveLessonTypeId,
   });
 
   if (preflight.kind === 'insufficient') {
@@ -234,6 +251,9 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     updated_by:       ctx.actorId,
   };
   if (dto.price_sek !== undefined) insertPayload['price_sek'] = dto.price_sek;
+  // Only set when the slot itself has no lesson type — the trigger keeps a
+  // typed slot's own value authoritative regardless of what's sent here.
+  if (!slot.lesson_type_id && dto.lesson_type_id) insertPayload['lesson_type_id'] = dto.lesson_type_id;
 
   const { data: booking, error } = await insertLessonBooking(client, insertPayload);
 
@@ -241,6 +261,15 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     logger.error('bookings.create_failed', { correlation_id: ctx.correlationId, error: error.message });
     if (error.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Booking conflict: the time window is already occupied');
     if (error.code === '23505') return errorResp(ctx, 409, 'CONFLICT', 'Student already has a booking for this slot');
+    // 23514 (check_violation): lost the capacity race — a concurrent booking's
+    // AFTER INSERT trigger (update_slot_booking_count) already pushed
+    // current_bookings to max_bookings between our pre-flight read and this
+    // insert. The pre-flight check above is inherently TOCTOU-racy (no
+    // capacity lock is taken), so this is the expected, normal way the race
+    // resolves — found via live concurrent-booking hardening, previously
+    // surfaced as a raw 500 instead of the same SLOT_UNAVAILABLE response
+    // the non-race case already returns.
+    if (error.code === '23514') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Slot is at full capacity');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create booking');
   }
 
@@ -336,14 +365,48 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
 
   const { status: newStatus } = parsed.data;
+
+  // Idempotent no-op: a retried PATCH (e.g. after a gateway timeout whose
+  // original request actually succeeded) re-applying the status the booking
+  // is already in should succeed, not be treated as an invalid transition
+  // from a terminal state.
+  if (existing.status === newStatus) {
+    const { data: current } = await (client as any)
+      .from('lesson_bookings')
+      .select('*')
+      .eq('id', id)
+      .single();
+    return successResp(ctx, current);
+  }
+
+  // Cancellation requires cancelled_at/cancelled_by (enforced by the
+  // lesson_bookings_cancel_consistency check constraint) and package-credit
+  // restoration, both handled only by the dedicated cancel endpoint.
+  if (newStatus === 'cancelled') {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', "Use PATCH /bookings/:id/cancel to cancel a booking");
+  }
+
   const allowed = VALID_TRANSITIONS[existing.status] ?? [];
   if (!allowed.includes(newStatus)) {
     return errorResp(ctx, 409, 'CONFLICT', `Booking status transition '${existing.status}' → '${newStatus}' is not permitted`);
   }
 
+  const updatePayload: Record<string, unknown> = {
+    status: newStatus,
+    status_changed_at: new Date().toISOString(),
+    updated_by: ctx.actorId,
+  };
+  // lesson_bookings_no_show_consistency requires no_show_marked_at IS NOT NULL
+  // whenever status = 'no_show' — without this the update always violates
+  // the check constraint and fails with a raw 500.
+  if (newStatus === 'no_show') {
+    updatePayload['no_show_marked_at'] = new Date().toISOString();
+    updatePayload['no_show_marked_by'] = ctx.actorId;
+  }
+
   const { data: booking, error } = await (client as any)
     .from('lesson_bookings')
-    .update({ status: newStatus, status_changed_at: new Date().toISOString(), updated_by: ctx.actorId })
+    .update(updatePayload)
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -436,7 +499,11 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   // Queries package_consumption_events for a credit_consumed event on this booking.
   // If found, not yet reversed, and the assignment policy allows restoration
   // (cancellation_consumes_credit = false), calls reverse_lesson_credit().
-  // Silent on failure — the cancellation has already succeeded.
+  // The cancellation itself has already succeeded regardless of this outcome —
+  // but a failed reversal leaves the student's package short a credit for a
+  // lesson that no longer exists, so it's surfaced to the caller (not just
+  // logged) so the receptionist who cancelled can be told to check manually.
+  let creditReversalFailed = false;
   {
     const { data: creditEvents } = await (client as any)
       .from('package_consumption_events')
@@ -468,6 +535,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
         });
 
         if (reverseErr) {
+          creditReversalFailed = true;
           logger.warn('bookings.credit_reverse_failed', {
             request_id:     ctx.requestId,
             correlation_id: ctx.correlationId,
@@ -490,7 +558,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
     }
   }
 
-  return successResp(ctx, booking);
+  return successResp(ctx, creditReversalFailed ? { ...booking, credit_reversal_failed: true } : booking);
 }
 
 async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
@@ -523,7 +591,7 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   // Fetch new slot
   const { data: newSlot } = await (client as any)
     .from('lesson_slots')
-    .select('id, status, starts_at, ends_at, current_bookings, max_bookings')
+    .select('id, status, starts_at, ends_at, current_bookings, max_bookings, lesson_type_id')
     .eq('id', new_slot_id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -535,6 +603,11 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   }
   if (newSlot.current_bookings >= newSlot.max_bookings) {
     return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Target slot is at full capacity');
+  }
+  // Generic-availability target slot — same requirement as creating a new booking.
+  if (!newSlot.lesson_type_id && !parsed.data.lesson_type_id) {
+    return errorResp(ctx, 422, 'LESSON_TYPE_REQUIRED',
+      'Det nya passet har ingen förvald lektionstyp — ange lektionstyp vid ombokning.');
   }
 
   // Pre-flight: student availability at new time (excluding old booking)
@@ -569,6 +642,9 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
     updated_by:          ctx.actorId,
   };
   if (oldBooking.price_sek !== null) newPayload['price_sek'] = oldBooking.price_sek;
+  if (!newSlot.lesson_type_id && parsed.data.lesson_type_id) {
+    newPayload['lesson_type_id'] = parsed.data.lesson_type_id;
+  }
 
   const { data: newBooking, error: insertErr } = await (client as any)
     .from('lesson_bookings')
@@ -585,6 +661,9 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
       .eq('id', id)
       .eq('organization_id', ctx.organizationId);
     if (insertErr.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Booking conflict at target slot');
+    // 23514: lost the capacity race on the target slot — same TOCTOU class as
+    // the create-booking path above.
+    if (insertErr.code === '23514') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Target slot is at full capacity');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create rescheduled booking');
   }
 

@@ -38,6 +38,19 @@ export interface Instructor {
   languages_spoken: string[];
   max_lessons_per_day: number | null;
 
+  address_line1: string | null;
+  postal_code: string | null;
+  city: string | null;
+  bio: string | null;
+  emergency_contact_first_name: string | null;
+  emergency_contact_last_name: string | null;
+  emergency_contact_email: string | null;
+  emergency_contact_phone: string | null;
+  sort_order: number;
+  show_in_booking: boolean;
+  show_in_ecommerce: boolean;
+  show_on_website: boolean;
+
   user_id: UUID | null;
 
   created_by: UUID | null;
@@ -69,6 +82,20 @@ export interface CreateInstructorInput {
   primary_location_id?: string | null;
   languages_spoken?: string[];
   max_lessons_per_day?: number | null;
+
+  personnummer?: string;
+  address_line1?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  bio?: string | null;
+  emergency_contact_first_name?: string | null;
+  emergency_contact_last_name?: string | null;
+  emergency_contact_email?: string | null;
+  emergency_contact_phone?: string | null;
+  sort_order?: number;
+  show_in_booking?: boolean;
+  show_in_ecommerce?: boolean;
+  show_on_website?: boolean;
 }
 
 export type UpdateInstructorInput = Partial<CreateInstructorInput>;
@@ -157,6 +184,8 @@ export interface CreateAvailabilityRuleInput {
   effective_from?: string;
   effective_until?: string | null;
   slot_duration_minutes?: number;
+  /** Gap between consecutive generated slots, in minutes. slot_duration_minutes + slot_buffer_minutes = the spacing between slot starts. */
+  slot_buffer_minutes?: number;
   notes?: string | null;
 }
 

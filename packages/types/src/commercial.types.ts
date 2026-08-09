@@ -139,6 +139,10 @@ export interface Invoice {
   organization_id:     UUID;
   student_id:          UUID;
   student_package_id:  UUID | null;
+  // Who is billed, when different from the student the invoice is for
+  // (student_id stays the real service recipient). NULL = the student
+  // themselves pays.
+  corporate_customer_id: UUID | null;
   invoice_number:      string | null;
   status:              InvoiceStatus;
   currency:            string;

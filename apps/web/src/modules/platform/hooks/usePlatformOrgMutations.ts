@@ -200,6 +200,34 @@ export function useTerminateOrg() {
   });
 }
 
+// ─── Delete Organization (safe resource + access removal) ─────────────────────
+//
+// Goes through platform-admin (not a direct RLS write, unlike Suspend/
+// Reactivate/Terminate) because a real delete must also remove the tenant's
+// owned resources (vehicles, instructors, branches) and every user's access
+// (membership + auth account) — the Supabase Auth Admin API only a
+// service-role Edge Function can call, same reasoning as handleProvision.
+// The organization row itself still only ever gets deleted_at set, never a
+// hard DELETE (CLAUDE.md's soft-delete convention) — see
+// handleDeleteTenantData in platform-admin/index.ts. Requires the org to
+// already be suspended or terminated (access cut off before data removal);
+// gated in the UI accordingly (PlatformOrganizationsPage.tsx).
+
+export function useDeleteOrg() {
+  const invalidate = useInvalidatePlatform();
+
+  return useMutation({
+    mutationFn: async (orgId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/delete-tenant-data`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte ta bort organisationen'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
 // ─── Start Trial ──────────────────────────────────────────────────────────────
 
 export function useStartTrial() {
@@ -402,6 +430,117 @@ export function useCancelInvitation(orgId: string) {
         { method: 'POST' },
       );
       if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte avbryta inbjudan'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Password Reset (Send / Force) ───────────────────────────────────────────
+// See platform-admin/index.ts's own comment on these two handlers: neither
+// ever exposes a password value to this client — both just trigger a real
+// Supabase Auth recovery email.
+
+export function useSendPasswordReset(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/send-password-reset`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skicka lösenordsåterställning'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useForcePasswordReset(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/force-password-reset`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte tvinga fram lösenordsåterställning'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useForceLogout(orgId: string) {
+  const invalidate = useInvalidateOrgAdmins(orgId);
+
+  return useMutation({
+    mutationFn: async (userId: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/admins/${userId}/force-logout`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte logga ut administratören'));
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Operational recovery + support notes ────────────────────────────────────
+
+function useInvalidateOrgOperations(orgId: string) {
+  const queryClient = useQueryClient();
+  return () => void queryClient.invalidateQueries({ queryKey: ['platform', 'org', orgId, 'operations'] });
+}
+
+export function useRetryOrgOperations(orgId: string) {
+  const invalidate = useInvalidateOrgOperations(orgId);
+
+  return useMutation({
+    mutationFn: async (): Promise<{ events_requeued: number; messages_requeued: number }> => {
+      const { data, error } = await supabase.functions.invoke<{ data: { events_requeued: number; messages_requeued: number } }>(
+        `platform-admin/orgs/${orgId}/operations/retry`,
+        { method: 'POST' },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte köa om misslyckade händelser'));
+      return data?.data ?? { events_requeued: 0, messages_requeued: 0 };
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateOrgNotes(orgId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (notes: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(
+        `platform-admin/orgs/${orgId}/notes`,
+        { method: 'PATCH', body: { notes } },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte spara anteckningar'));
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['platform', 'org', orgId, 'detail'] }),
+  });
+}
+
+// ─── Mandatory onboarding workflow: Step 9 (Verify Payment) ───────────────────
+// Same direct-table-update pattern as useSuspendOrg/useUpdateOrg above — one
+// small, additive column (20260730000003), no new backend endpoint. This is
+// a manual attestation, not an automated verification — no payment
+// provider is connected to platform-level billing today (see the
+// implementation report's Business Decision note).
+
+export function useVerifyPayment(orgId: string) {
+  const actorId    = useActorId();
+  const invalidate = useInvalidatePlatform();
+
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      const { error } = await orgs().update({
+        payment_verified_at: new Date().toISOString(),
+        payment_verified_by: actorId,
+      }).eq('id', orgId);
+      if (error) throw new Error((error as { message: string }).message);
     },
     onSuccess: invalidate,
   });

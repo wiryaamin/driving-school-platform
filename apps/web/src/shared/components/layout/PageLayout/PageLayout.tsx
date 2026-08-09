@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 
 // ─── PageLayout ───────────────────────────────────────────────────────────────
@@ -41,19 +42,27 @@ export function PageHeader({ title, description, actions, breadcrumbs, className
       <div className="min-w-0">
         {breadcrumbs && breadcrumbs.length > 0 && (
           <nav className="flex items-center gap-1 mb-1" aria-label="Brödsmulor">
-            {breadcrumbs.map((crumb, idx) => (
-              <span key={idx} className="flex items-center gap-1">
-                {idx > 0 && <span className="text-muted-foreground text-xs">/</span>}
-                <span className={cn(
-                  'text-xs',
-                  idx === breadcrumbs.length - 1
-                    ? 'text-muted-foreground'
-                    : 'text-primary hover:text-primary/80 cursor-pointer'
-                )}>
-                  {crumb.label}
+            {breadcrumbs.map((crumb, idx) => {
+              const isLast = idx === breadcrumbs.length - 1;
+              // Every "Hem" crumb across the app is passed without an href —
+              // default it to the dashboard so it's clickable without having
+              // to touch every call site individually.
+              const href = crumb.href ?? (crumb.label === 'Hem' ? '/dashboard' : undefined);
+              return (
+                <span key={idx} className="flex items-center gap-1">
+                  {idx > 0 && <span className="text-muted-foreground text-xs">/</span>}
+                  {!isLast && href ? (
+                    <Link to={href} className="text-xs text-primary hover:text-primary/80 hover:underline">
+                      {crumb.label}
+                    </Link>
+                  ) : (
+                    <span className={cn('text-xs', isLast ? 'text-muted-foreground' : 'text-foreground')}>
+                      {crumb.label}
+                    </span>
+                  )}
                 </span>
-              </span>
-            ))}
+              );
+            })}
           </nav>
         )}
         <h1 className="text-xl font-semibold text-foreground tracking-tight">{title}</h1>

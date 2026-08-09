@@ -1,15 +1,20 @@
 /**
  * Communication provider abstraction.
  *
- * Each provider reads credentials exclusively from Deno.env (Supabase Secrets).
- * No API keys are stored in the database.
+ * Each provider first tries the organization's own credentials (entered in
+ * Kanalinställningar, encrypted at rest via _shared/credential-crypto.ts —
+ * same pattern as Stripe/Nets, ADR-022) and falls back to the platform-wide
+ * Deno.env value (Supabase Secrets) if the tenant hasn't configured their
+ * own. See getOrgChannelCredentials()/cred() below.
  *
  * Integrated providers:
  *   sms      → 46elks      ELKS_API_USERNAME + ELKS_API_PASSWORD
  *   email    → Resend       RESEND_API_KEY
  *   whatsapp → Twilio       TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_NUMBER
  *   whatsapp → Meta         META_WHATSAPP_TOKEN + META_PHONE_NUMBER_ID
- *   push     → Firebase     FIREBASE_SERVER_KEY
+ *   push     → Firebase     FIREBASE_SERVICE_ACCOUNT_JSON (FCM HTTP v1 — the
+ *                           legacy server-key API was shut down by Google
+ *                           2024-06-20 and is not supported)
  *   push     → OneSignal    ONESIGNAL_APP_ID + ONESIGNAL_API_KEY
  *   voice    → 46elks       ELKS_API_USERNAME + ELKS_API_PASSWORD (reused)
  *   voice    → Twilio       TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_PHONE_NUMBER
@@ -18,11 +23,53 @@
  * WhatsApp "to" field = E.164 phone number without whatsapp: prefix.
  */
 
+import { createServiceClient } from './supabase.ts';
+import { decryptCredential } from './credential-crypto.ts';
+
 export type ProviderResult = {
   status:     'sent' | 'failed' | 'queued';
   providerId: string | null;
   error:      string | null;
+  /** Set when the provider reported the recipient address/token itself is invalid
+   *  (e.g. FCM UNREGISTERED/NOT_FOUND) — callers holding a persistent token store
+   *  (see _shared/push-tokens.ts) should revoke it so future dispatch stops retrying. */
+  invalidToken?: boolean;
 };
+
+// ─── Org-configured credentials ────────────────────────────────────────────────
+// channel_configs.metadata.credentials stores { ENV_VAR_NAME: 'enc:v1:...' },
+// written by communications/index.ts's channel PUT handler. Keyed by the same
+// names as the platform-wide Deno.env secrets so cred() below can fall back
+// to the platform default with a single lookup.
+
+async function getOrgChannelCredentials(organizationId: string | null, channel: string): Promise<Record<string, string>> {
+  if (!organizationId) return {};
+  try {
+    const client = createServiceClient();
+    const { data } = await client
+      .from('channel_configs')
+      .select('metadata')
+      .eq('organization_id', organizationId)
+      .eq('channel', channel)
+      .maybeSingle();
+    const stored = (data?.metadata as { credentials?: Record<string, string> } | null)?.credentials ?? {};
+    const decrypted: Record<string, string> = {};
+    for (const [key, value] of Object.entries(stored)) {
+      decrypted[key] = typeof value === 'string' ? await decryptCredential(value) : '';
+    }
+    return decrypted;
+  } catch {
+    // A lookup/decrypt failure must never block dispatch — fall through to
+    // the platform-wide env fallback (cred() below) rather than surface a
+    // confusing failure for what may just be a not-yet-configured tenant.
+    return {};
+  }
+}
+
+/** Org-configured value if present, else the platform-wide Supabase Secret. */
+function cred(creds: Record<string, string>, key: string): string | undefined {
+  return creds[key] || Deno.env.get(key) || undefined;
+}
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -34,21 +81,76 @@ function httpErr(provider: string, status: number, body: string): ProviderResult
   return { status: 'failed', providerId: null, error: `${provider} ${status}: ${body}` };
 }
 
-function caught(e: unknown): ProviderResult {
+function caught(e: unknown, provider?: string): ProviderResult {
+  // No provider fetch() call in this file previously set an explicit
+  // request timeout — a hung provider would only surface as the Deno Edge
+  // Function platform's own generic timeout, with no attribution to which
+  // provider caused it. AbortSignal.timeout() below turns that into a
+  // specific, fast, attributable failure instead.
+  const isTimeout = e instanceof DOMException && e.name === 'TimeoutError';
+  const label = provider ? `${provider} ` : '';
+  if (isTimeout) return { status: 'failed', providerId: null, error: `${label}request timed out` };
   return { status: 'failed', providerId: null, error: e instanceof Error ? e.message : String(e) };
+}
+
+const PROVIDER_TIMEOUT_MS = 15_000;
+
+// Email bodies are plain text almost everywhere in this platform, but a
+// growing number of callers pass HTML — some a full document
+// (ContractSheet.tsx's generated enrollment contract), most an HTML
+// *fragment* like demo-requests/index.ts's `<p>...</p>` welcome/notification
+// emails. The original check only matched a full document's
+// `<!doctype html>`/`<html>` wrapper, so any fragment (no wrapper tags) fell
+// through to the plain-text branch and arrived in the inbox as a literal
+// wall of visible `<p>`/`<strong>` markup — the exact same symptom this
+// function was first written to fix, just for a different HTML shape,
+// confirmed live 2026-08-03. Detecting any HTML tag anywhere in the body
+// (not just a leading document wrapper) catches fragments and full
+// documents alike. Detecting on the body itself (not a new caller-supplied
+// flag) keeps every existing plain-text call site unchanged.
+function isHtmlBody(body: string): boolean {
+  return /<[a-z][^>]*>/i.test(body);
+}
+
+// GSM/SMS spec: a numeric sender ("+46701234567") can be up to 15 digits,
+// but an alphanumeric sender name ("Din Trafikskola") is capped at 11
+// characters by every SMS gateway (46elks confirmed live 2026-08-06: 403
+// "Too long alphanumeric from number" on every send once a school's full
+// name was saved as the sender). Kanalinställningar now blocks saving a
+// too-long name, but this truncates defensively for any value already
+// stored before that validation existed, so sends degrade rather than fail.
+const SMS_ALPHA_SENDER_MAX = 11;
+function normalizeSmsSender(from: string): string {
+  const trimmed = from.trim();
+  if (/^\+?\d+$/.test(trimmed)) return trimmed; // phone number — no alphanumeric limit applies
+  return trimmed.slice(0, SMS_ALPHA_SENDER_MAX);
+}
+
+// Converts a Swedish local-format number ("0701234567") to E.164
+// ("+46701234567") — every gateway (46elks/Twilio/Vonage) requires E.164
+// and rejects the local format outright. Anything already starting with
+// "+", or not matching the Swedish trunk-0 pattern, is left untouched
+// (already E.164, or a non-Swedish/malformed number the provider itself
+// should reject with its own specific error rather than being silently
+// reinterpreted).
+function normalizeSwedishPhone(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('+')) return trimmed;
+  if (/^0\d{6,}$/.test(trimmed)) return `+46${trimmed.slice(1)}`;
+  return trimmed;
 }
 
 // ─── SMS: 46elks ──────────────────────────────────────────────────────────────
 // Docs: https://46elks.se/docs/send-sms
 // Secrets: ELKS_API_USERNAME, ELKS_API_PASSWORD
 
-async function dispatch46elksSms(to: string, from: string, body: string): Promise<ProviderResult> {
-  const username = Deno.env.get('ELKS_API_USERNAME');
-  const password = Deno.env.get('ELKS_API_PASSWORD');
+async function dispatch46elksSms(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const username = cred(creds, 'ELKS_API_USERNAME');
+  const password = cred(creds, 'ELKS_API_PASSWORD');
   if (!username || !password) return missingCreds('ELKS_API_USERNAME', 'ELKS_API_PASSWORD');
 
   const form = new URLSearchParams();
-  form.set('from',    from.trim() || 'Korskolan');
+  form.set('from',    normalizeSmsSender(from) || 'Trafikcloud');
   form.set('to',      to);
   form.set('message', body);
 
@@ -71,11 +173,11 @@ async function dispatch46elksSms(to: string, from: string, body: string): Promis
 // Docs: https://resend.com/docs/api-reference/emails/send-email
 // Secret: RESEND_API_KEY
 
-async function dispatchResend(to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
-  const apiKey = Deno.env.get('RESEND_API_KEY');
+async function dispatchResend(creds: Record<string, string>, to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const apiKey = cred(creds, 'RESEND_API_KEY');
   if (!apiKey) return missingCreds('RESEND_API_KEY');
 
-  const fromAddr = from.includes('@') ? from : `Körskolan <noreply@korskolan.se>`;
+  const fromAddr = from.includes('@') ? from : `Trafikcloud <noreply@trafikcloud.se>`;
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -85,23 +187,24 @@ async function dispatchResend(to: string, from: string, subject: string | undefi
         from:    fromAddr,
         to:      [to],
         subject: subject?.trim() || '(Inget ämne)',
-        text:    body,
+        ...(isHtmlBody(body) ? { html: body } : { text: body }),
       }),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
     if (!res.ok) return httpErr('resend', res.status, await res.text().catch(() => res.statusText));
     const data = await res.json() as { id?: string };
     return { status: 'sent', providerId: data.id ?? null, error: null };
-  } catch (e) { return caught(e); }
+  } catch (e) { return caught(e, 'resend'); }
 }
 
 // ─── WhatsApp: Twilio ─────────────────────────────────────────────────────────
 // Docs: https://www.twilio.com/docs/whatsapp/api
 // Secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
 
-async function dispatchTwilioWhatsapp(to: string, from: string, body: string): Promise<ProviderResult> {
-  const sid    = Deno.env.get('TWILIO_ACCOUNT_SID');
-  const token  = Deno.env.get('TWILIO_AUTH_TOKEN');
-  const number = Deno.env.get('TWILIO_WHATSAPP_NUMBER') ?? from;
+async function dispatchTwilioWhatsapp(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const sid    = cred(creds, 'TWILIO_ACCOUNT_SID');
+  const token  = cred(creds, 'TWILIO_AUTH_TOKEN');
+  const number = cred(creds, 'TWILIO_WHATSAPP_NUMBER') ?? from;
   if (!sid || !token || !number) return missingCreds('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_NUMBER');
 
   const waTo   = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
@@ -131,9 +234,9 @@ async function dispatchTwilioWhatsapp(to: string, from: string, body: string): P
 // Docs: https://developers.facebook.com/docs/whatsapp/cloud-api/messages
 // Secrets: META_WHATSAPP_TOKEN, META_PHONE_NUMBER_ID
 
-async function dispatchMetaWhatsapp(to: string, body: string): Promise<ProviderResult> {
-  const token       = Deno.env.get('META_WHATSAPP_TOKEN');
-  const phoneNumId  = Deno.env.get('META_PHONE_NUMBER_ID');
+async function dispatchMetaWhatsapp(creds: Record<string, string>, to: string, body: string): Promise<ProviderResult> {
+  const token       = cred(creds, 'META_WHATSAPP_TOKEN');
+  const phoneNumId  = cred(creds, 'META_PHONE_NUMBER_ID');
   if (!token || !phoneNumId) return missingCreds('META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID');
 
   // Strip whatsapp: prefix and + for Meta API (expects digits only)
@@ -159,34 +262,172 @@ async function dispatchMetaWhatsapp(to: string, body: string): Promise<ProviderR
   } catch (e) { return caught(e); }
 }
 
-// ─── Push: Firebase (FCM) ─────────────────────────────────────────────────────
-// Docs: https://firebase.google.com/docs/cloud-messaging/http-server-ref (Legacy HTTP API)
-// Secret: FIREBASE_SERVER_KEY
-// Note: "to" field should be the device registration token.
+// ─── Push: Firebase (FCM HTTP v1) ──────────────────────────────────────────────
+// Docs: https://firebase.google.com/docs/cloud-messaging/migrate-v1
+// Secret: FIREBASE_SERVICE_ACCOUNT_JSON — the full service-account JSON key
+//   file (Firebase Console → Project Settings → Service Accounts → Generate
+//   new private key), stored as one secret containing the raw JSON string.
+// Note: "to" field should be the FCM device registration token, obtained
+//   client-side via getToken() and persisted through _shared/push-tokens.ts.
+//
+// The legacy server-key HTTP API (fcm.googleapis.com/fcm/send) was
+// permanently shut down by Google on 2024-06-20 and cannot be used — FCM
+// HTTP v1 requires an OAuth2 access token obtained via a service-account
+// JWT-bearer exchange (RFC 7523), not a static key.
 
-async function dispatchFirebase(to: string, subject: string | undefined, body: string): Promise<ProviderResult> {
-  const serverKey = Deno.env.get('FIREBASE_SERVER_KEY');
-  if (!serverKey) return missingCreds('FIREBASE_SERVER_KEY');
+interface FirebaseServiceAccount {
+  project_id:   string;
+  client_email: string;
+  private_key:  string;
+}
 
+let cachedFcmAccessToken: { token: string; expiresAt: number } | null = null;
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/, '')
+    .replace(/-----END PRIVATE KEY-----/, '')
+    .replace(/\s+/g, '');
+  const binary = atob(b64);
+  const bytes  = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function base64UrlEncode(input: ArrayBuffer | string): string {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : new Uint8Array(input);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Exchanges the service-account JWT for a short-lived OAuth2 access token, cached in-memory across warm invocations. */
+async function getFcmAccessToken(serviceAccount: FirebaseServiceAccount): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedFcmAccessToken && cachedFcmAccessToken.expiresAt > now + 60) {
+    return cachedFcmAccessToken.token;
+  }
+
+  const header  = { alg: 'RS256', typ: 'JWT' };
+  const claims  = {
+    iss:   serviceAccount.client_email,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud:   'https://oauth2.googleapis.com/token',
+    iat:   now,
+    exp:   now + 3600,
+  };
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claims))}`;
+
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    pemToArrayBuffer(serviceAccount.private_key),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(unsigned));
+  const jwt = `${unsigned}.${base64UrlEncode(signature)}`;
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion:  jwt,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`FCM OAuth2 token exchange failed: ${res.status} ${await res.text().catch(() => res.statusText)}`);
+  }
+
+  const data = await res.json() as { access_token: string; expires_in: number };
+  cachedFcmAccessToken = { token: data.access_token, expiresAt: now + data.expires_in };
+  return data.access_token;
+}
+
+async function dispatchFirebase(creds: Record<string, string>, to: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const serviceAccountJson = cred(creds, 'FIREBASE_SERVICE_ACCOUNT_JSON');
+  if (!serviceAccountJson) return missingCreds('FIREBASE_SERVICE_ACCOUNT_JSON');
+
+  let serviceAccount: FirebaseServiceAccount;
   try {
-    const res = await fetch('https://fcm.googleapis.com/fcm/send', {
+    const parsed = JSON.parse(serviceAccountJson) as Partial<FirebaseServiceAccount>;
+    if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
+      return { status: 'failed', providerId: null, error: 'FIREBASE_SERVICE_ACCOUNT_JSON is missing project_id/client_email/private_key' };
+    }
+    serviceAccount = parsed as FirebaseServiceAccount;
+  } catch {
+    return { status: 'failed', providerId: null, error: 'FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON' };
+  }
+
+  const sendWithToken = (accessToken: string) =>
+    fetch(`https://fcm.googleapis.com/v1/projects/${serviceAccount.project_id}/messages:send`, {
       method:  'POST',
       headers: {
-        Authorization:  `key=${serverKey}`,
+        Authorization:  `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
+      // webpush.data only — a top-level `notification` field was tried
+      // as a defensive addition and found (via live commissioning) to be
+      // an actual defect: when both are present, FCM nests the raw
+      // webpush payload as {notification: {...}, data: {...}} instead of
+      // the flat {title, body, url} shape our hand-written push handler
+      // (apps/web/public/sw.js) parses — so `data.title`/`data.body` come
+      // back undefined and showNotification() falls back to its generic
+      // "Meddelande"/empty-body defaults. Chrome then also has enough
+      // information from the bare `notification` field to synthesize its
+      // OWN blank-content system notification independent of our SW logic,
+      // which is what was actually appearing. webpush.data alone restores
+      // the flat shape our SW expects. Explicit `headers.TTL`/`Urgency`
+      // fixed a separate, real commissioning defect: without them, the Web
+      // Push spec (RFC 8030) defaults TTL to 0 ("deliver now or drop"),
+      // which silently discarded every message unless the browser happened
+      // to be actively connected at the exact instant of send.
       body: JSON.stringify({
-        to,
-        notification: {
-          title: subject?.trim() || 'Meddelande',
-          body,
+        message: {
+          token: to,
+          webpush: {
+            headers: {
+              TTL:     '2419200',
+              Urgency: 'high',
+            },
+            data: {
+              title: subject?.trim() || 'Meddelande',
+              body,
+              url: '/',
+            },
+          },
         },
       }),
     });
-    if (!res.ok) return httpErr('firebase', res.status, await res.text().catch(() => res.statusText));
-    const data = await res.json() as { message_id?: string; results?: Array<{ message_id?: string }> };
-    const msgId = data.message_id ?? data.results?.[0]?.message_id ?? null;
-    return { status: 'sent', providerId: msgId, error: null };
+
+  try {
+    let accessToken = await getFcmAccessToken(serviceAccount);
+    let res = await sendWithToken(accessToken);
+
+    // The in-memory cache's expiry is proactive (renews 60s early), but a
+    // token can still be rejected before its natural expiry (isolate reuse
+    // across a clock skew edge, external revocation). On a 401, drop the
+    // cache and retry exactly once with a freshly minted token rather than
+    // returning a failure that would otherwise repeat on every call until
+    // the stale cache entry naturally expires (up to ~1h).
+    if (res.status === 401) {
+      cachedFcmAccessToken = null;
+      accessToken = await getFcmAccessToken(serviceAccount);
+      res = await sendWithToken(accessToken);
+    }
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => res.statusText);
+      // FCM v1 reports an unregistered/expired token as 404 UNREGISTERED, or
+      // sometimes 400 INVALID_ARGUMENT with a registration-token message.
+      const invalidToken = res.status === 404 || /UNREGISTERED|registration.?token/i.test(errBody);
+      return { status: 'failed', providerId: null, error: `firebase ${res.status}: ${errBody}`, invalidToken };
+    }
+
+    const data = await res.json() as { name?: string };
+    return { status: 'sent', providerId: data.name ?? null, error: null };
   } catch (e) { return caught(e); }
 }
 
@@ -195,9 +436,9 @@ async function dispatchFirebase(to: string, subject: string | undefined, body: s
 // Secrets: ONESIGNAL_APP_ID, ONESIGNAL_API_KEY
 // Note: "to" field should be the OneSignal player_id.
 
-async function dispatchOneSignal(to: string, subject: string | undefined, body: string): Promise<ProviderResult> {
-  const appId  = Deno.env.get('ONESIGNAL_APP_ID');
-  const apiKey = Deno.env.get('ONESIGNAL_API_KEY');
+async function dispatchOneSignal(creds: Record<string, string>, to: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const appId  = cred(creds, 'ONESIGNAL_APP_ID');
+  const apiKey = cred(creds, 'ONESIGNAL_API_KEY');
   if (!appId || !apiKey) return missingCreds('ONESIGNAL_APP_ID', 'ONESIGNAL_API_KEY');
 
   try {
@@ -224,14 +465,14 @@ async function dispatchOneSignal(to: string, subject: string | undefined, body: 
 // Docs: https://www.twilio.com/docs/sms/api/message-resource#create-a-message-resource
 // Secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
 
-async function dispatchTwilioSms(to: string, from: string, body: string): Promise<ProviderResult> {
-  const sid    = Deno.env.get('TWILIO_ACCOUNT_SID');
-  const token  = Deno.env.get('TWILIO_AUTH_TOKEN');
-  const number = Deno.env.get('TWILIO_PHONE_NUMBER') ?? from;
+async function dispatchTwilioSms(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const sid    = cred(creds, 'TWILIO_ACCOUNT_SID');
+  const token  = cred(creds, 'TWILIO_AUTH_TOKEN');
+  const number = cred(creds, 'TWILIO_PHONE_NUMBER') ?? from;
   if (!sid || !token || !number) return missingCreds('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER');
 
   const form = new URLSearchParams();
-  form.set('From', number);
+  form.set('From', normalizeSmsSender(number));
   form.set('To',   to);
   form.set('Body', body);
 
@@ -254,9 +495,9 @@ async function dispatchTwilioSms(to: string, from: string, body: string): Promis
 // Docs: https://developer.vonage.com/en/messaging/sms/code-snippets/send-an-sms
 // Secrets: VONAGE_API_KEY, VONAGE_API_SECRET
 
-async function dispatchVonageSms(to: string, from: string, body: string): Promise<ProviderResult> {
-  const apiKey    = Deno.env.get('VONAGE_API_KEY');
-  const apiSecret = Deno.env.get('VONAGE_API_SECRET');
+async function dispatchVonageSms(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const apiKey    = cred(creds, 'VONAGE_API_KEY');
+  const apiSecret = cred(creds, 'VONAGE_API_SECRET');
   if (!apiKey || !apiSecret) return missingCreds('VONAGE_API_KEY', 'VONAGE_API_SECRET');
 
   try {
@@ -266,7 +507,7 @@ async function dispatchVonageSms(to: string, from: string, body: string): Promis
       body: JSON.stringify({
         api_key:    apiKey,
         api_secret: apiSecret,
-        from:       from.trim() || 'Korskolan',
+        from:       from.trim() || 'Trafikcloud',
         to,
         text:       body,
       }),
@@ -285,11 +526,11 @@ async function dispatchVonageSms(to: string, from: string, body: string): Promis
 // Docs: https://docs.sendgrid.com/api-reference/mail-send/mail-send
 // Secret: SENDGRID_API_KEY
 
-async function dispatchSendGrid(to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
-  const apiKey = Deno.env.get('SENDGRID_API_KEY');
+async function dispatchSendGrid(creds: Record<string, string>, to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const apiKey = cred(creds, 'SENDGRID_API_KEY');
   if (!apiKey) return missingCreds('SENDGRID_API_KEY');
 
-  const fromEmail = from.includes('@') ? from : 'noreply@korskolan.se';
+  const fromEmail = from.includes('@') ? from : 'noreply@trafikcloud.se';
 
   try {
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
@@ -299,7 +540,7 @@ async function dispatchSendGrid(to: string, from: string, subject: string | unde
         personalizations: [{ to: [{ email: to }] }],
         from:    { email: fromEmail },
         subject: subject?.trim() || '(Inget ämne)',
-        content: [{ type: 'text/plain', value: body }],
+        content: [{ type: isHtmlBody(body) ? 'text/html' : 'text/plain', value: body }],
       }),
     });
     // SendGrid returns 202 Accepted with no body on success
@@ -312,12 +553,12 @@ async function dispatchSendGrid(to: string, from: string, subject: string | unde
 // Docs: https://dev.mailjet.com/email/guides/send-api-v31/
 // Secrets: MAILJET_API_KEY, MAILJET_SECRET_KEY
 
-async function dispatchMailjet(to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
-  const apiKey    = Deno.env.get('MAILJET_API_KEY');
-  const secretKey = Deno.env.get('MAILJET_SECRET_KEY');
+async function dispatchMailjet(creds: Record<string, string>, to: string, from: string, subject: string | undefined, body: string): Promise<ProviderResult> {
+  const apiKey    = cred(creds, 'MAILJET_API_KEY');
+  const secretKey = cred(creds, 'MAILJET_SECRET_KEY');
   if (!apiKey || !secretKey) return missingCreds('MAILJET_API_KEY', 'MAILJET_SECRET_KEY');
 
-  const fromEmail = from.includes('@') ? from : 'noreply@korskolan.se';
+  const fromEmail = from.includes('@') ? from : 'noreply@trafikcloud.se';
 
   try {
     const res = await fetch('https://api.mailjet.com/v3.1/send', {
@@ -331,7 +572,7 @@ async function dispatchMailjet(to: string, from: string, subject: string | undef
           From:     { Email: fromEmail },
           To:       [{ Email: to }],
           Subject:  subject?.trim() || '(Inget ämne)',
-          TextPart: body,
+          ...(isHtmlBody(body) ? { HTMLPart: body } : { TextPart: body }),
         }],
       }),
     });
@@ -351,9 +592,9 @@ async function dispatchMailjet(to: string, from: string, subject: string | undef
 // Secrets: ELKS_API_USERNAME, ELKS_API_PASSWORD (same as SMS)
 // Note: Uses TTS — "body" becomes the spoken text.
 
-async function dispatch46elksVoice(to: string, from: string, body: string): Promise<ProviderResult> {
-  const username = Deno.env.get('ELKS_API_USERNAME');
-  const password = Deno.env.get('ELKS_API_PASSWORD');
+async function dispatch46elksVoice(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const username = cred(creds, 'ELKS_API_USERNAME');
+  const password = cred(creds, 'ELKS_API_PASSWORD');
   if (!username || !password) return missingCreds('ELKS_API_USERNAME', 'ELKS_API_PASSWORD');
 
   const form = new URLSearchParams();
@@ -382,10 +623,10 @@ async function dispatch46elksVoice(to: string, from: string, body: string): Prom
 // Secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
 // Note: Uses TwiML <Say> with sv-SE language for TTS.
 
-async function dispatchTwilioVoice(to: string, from: string, body: string): Promise<ProviderResult> {
-  const sid    = Deno.env.get('TWILIO_ACCOUNT_SID');
-  const token  = Deno.env.get('TWILIO_AUTH_TOKEN');
-  const number = Deno.env.get('TWILIO_PHONE_NUMBER') ?? from;
+async function dispatchTwilioVoice(creds: Record<string, string>, to: string, from: string, body: string): Promise<ProviderResult> {
+  const sid    = cred(creds, 'TWILIO_ACCOUNT_SID');
+  const token  = cred(creds, 'TWILIO_AUTH_TOKEN');
+  const number = cred(creds, 'TWILIO_PHONE_NUMBER') ?? from;
   if (!sid || !token || !number) return missingCreds('TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER');
 
   // Inline TwiML — Swedish TTS
@@ -420,34 +661,47 @@ export interface DispatchParams {
   from:      string | null;
   subject?:  string;
   body:      string;
+  /** Org whose Kanalinställningar-configured credentials should be tried
+   *  before the platform-wide Deno.env fallback. Omit for platform-owned
+   *  sends (e.g. demo-request/lead-capture notifications) that intentionally
+   *  always use the platform's own provider account. */
+  organizationId?: string | null;
 }
 
 export async function dispatchMessage(params: DispatchParams): Promise<ProviderResult> {
-  const { channel, provider, to, from, subject, body } = params;
+  const { channel, provider, from, subject, body, organizationId } = params;
   const fromAddr = from ?? '';
+  const creds = await getOrgChannelCredentials(organizationId ?? null, channel);
+  // Every SMS/voice/WhatsApp gateway requires E.164 ("+46701234567"), but
+  // Swedish phone numbers are routinely typed/pasted in local format
+  // ("0701234567") — confirmed live 2026-08-06: 46elks rejected every send
+  // with "Invalid to number ... Expected '+'" until the leading trunk 0 was
+  // converted to the +46 country code. Left untouched for push (device
+  // token, not a phone number) and email (address, not a phone number).
+  const to = ['sms', 'voice', 'whatsapp'].includes(channel) ? normalizeSwedishPhone(params.to) : params.to;
 
   switch (channel) {
     case 'sms':
-      if (provider === '46elks') return dispatch46elksSms(to, fromAddr, body);
-      if (provider === 'twilio') return dispatchTwilioSms(to, fromAddr, body);
-      if (provider === 'vonage') return dispatchVonageSms(to, fromAddr, body);
+      if (provider === '46elks') return dispatch46elksSms(creds, to, fromAddr, body);
+      if (provider === 'twilio') return dispatchTwilioSms(creds, to, fromAddr, body);
+      if (provider === 'vonage') return dispatchVonageSms(creds, to, fromAddr, body);
       break;
     case 'email':
-      if (provider === 'resend')    return dispatchResend(to, fromAddr, subject, body);
-      if (provider === 'sendgrid')  return dispatchSendGrid(to, fromAddr, subject, body);
-      if (provider === 'mailjet')   return dispatchMailjet(to, fromAddr, subject, body);
+      if (provider === 'resend')    return dispatchResend(creds, to, fromAddr, subject, body);
+      if (provider === 'sendgrid')  return dispatchSendGrid(creds, to, fromAddr, subject, body);
+      if (provider === 'mailjet')   return dispatchMailjet(creds, to, fromAddr, subject, body);
       break;
     case 'whatsapp':
-      if (provider === 'twilio') return dispatchTwilioWhatsapp(to, fromAddr, body);
-      if (provider === 'meta')   return dispatchMetaWhatsapp(to, body);
+      if (provider === 'twilio') return dispatchTwilioWhatsapp(creds, to, fromAddr, body);
+      if (provider === 'meta')   return dispatchMetaWhatsapp(creds, to, body);
       break;
     case 'push':
-      if (provider === 'firebase')  return dispatchFirebase(to, subject, body);
-      if (provider === 'onesignal') return dispatchOneSignal(to, subject, body);
+      if (provider === 'firebase')  return dispatchFirebase(creds, to, subject, body);
+      if (provider === 'onesignal') return dispatchOneSignal(creds, to, subject, body);
       break;
     case 'voice':
-      if (provider === '46elks') return dispatch46elksVoice(to, fromAddr, body);
-      if (provider === 'twilio') return dispatchTwilioVoice(to, fromAddr, body);
+      if (provider === '46elks') return dispatch46elksVoice(creds, to, fromAddr, body);
+      if (provider === 'twilio') return dispatchTwilioVoice(creds, to, fromAddr, body);
       break;
   }
 

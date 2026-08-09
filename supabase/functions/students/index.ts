@@ -4,7 +4,7 @@ import { buildEdgeContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
-import { getPersonLookupProvider, isValidPersonnummerFormat } from '../_shared/person-lookup.ts';
+import { performPersonLookup, getPersonLookupStatus, isValidPersonnummerFormat } from '../_shared/person-lookup-service.ts';
 import { hashPersonalNumber, identityCryptoConfigured } from '../_shared/bankid-crypto.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
@@ -75,6 +75,8 @@ const UpdateStudentSchema = CreateStudentSchema.partial();
 
 const PersonLookupSchema = z.object({
   personnummer: z.string().min(1).max(20),
+  /** Manual refresh capability (Phase 4) — bypasses any cached result and forces a fresh provider call. */
+  force_refresh: z.boolean().optional(),
 });
 
 const StudentListQuerySchema = z.object({
@@ -136,10 +138,10 @@ function pagedResp<T>(
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) {
     return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
   }
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) {
     return errorResp(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   }
@@ -330,6 +332,11 @@ async function handlePersonLookup(req: Request, ctx: EdgeRequestContext): Promis
   const guard = requirePerm(ctx, 'students:student:create');
   if (guard) return guard;
 
+  // Person Lookup has a real per-call cost once a paid provider is active
+  // — its own tighter budget, layered on top of the route's normal write limit.
+  const lookupRateGuard = enforceUserRateLimit(ctx.actorId ?? 'unknown', 'person_lookup', ctx.correlationId);
+  if (lookupRateGuard) return lookupRateGuard;
+
   let body: unknown;
   try {
     body = await req.json();
@@ -342,25 +349,30 @@ async function handlePersonLookup(req: Request, ctx: EdgeRequestContext): Promis
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
   }
 
-  const { personnummer } = parsed.data;
+  const { personnummer, force_refresh } = parsed.data;
 
   // Invalid personnummer must never reach the provider.
   if (!isValidPersonnummerFormat(personnummer)) {
     return errorResp(ctx, 422, 'INVALID_PERSONNUMMER', 'Personnummer format or checksum is invalid');
   }
 
-  const provider = getPersonLookupProvider();
+  if (!ctx.organizationId) return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
 
-  let result: { status: string; data: unknown };
+  let result: Awaited<ReturnType<typeof performPersonLookup>>;
   try {
-    result = await provider.lookupByPersonnummer(personnummer);
+    result = await performPersonLookup({
+      organizationId: ctx.organizationId,
+      actorId:        ctx.actorId,
+      personnummer,
+      correlationId:  ctx.correlationId,
+      forceRefresh:   force_refresh,
+    });
   } catch (err) {
     logger.error('students.person_lookup_failed', {
       correlation_id: ctx.correlationId,
-      provider:       provider.getProviderName(),
       error:          err instanceof Error ? err.message : String(err),
     });
-    result = { status: 'unavailable', data: null };
+    return errorResp(ctx, 502, 'PERSON_LOOKUP_FAILED', 'Person lookup service is temporarily unavailable');
   }
 
   logger.info('Student.PersonLookup', {
@@ -368,15 +380,22 @@ async function handlePersonLookup(req: Request, ctx: EdgeRequestContext): Promis
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
     actor_id:       ctx.actorId,
-    provider:       provider.getProviderName(),
+    provider:       result.provider,
     outcome:        result.status,
+    from_cache:     result.fromCache,
   });
 
   return successResp(ctx, {
     status:       result.status,
     data:         result.data,
-    provider:     provider.getProviderName(),
-    capabilities: provider.getProviderCapabilities(),
+    error:        result.error ?? null,
+    error_type:   result.errorType ?? null,
+    provider:     result.provider,
+    capabilities: result.capabilities,
+    from_cache:   result.fromCache,
+    looked_up_at: result.lookedUpAt,
+    cached_at:    result.cachedAt ?? null,
+    confidence:   result.confidence ?? null,
   });
 }
 
@@ -386,14 +405,15 @@ async function handlePersonLookup(req: Request, ctx: EdgeRequestContext): Promis
 async function handlePersonLookupStatus(_req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
+  if (!ctx.organizationId) return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
 
-  const provider = getPersonLookupProvider();
-  const connected = await provider.validateConnection().catch(() => false);
+  const status = await getPersonLookupStatus(ctx.organizationId);
 
   return successResp(ctx, {
-    provider:     provider.getProviderName(),
-    connected,
-    capabilities: provider.getProviderCapabilities(),
+    provider:            status.provider,
+    connected:           status.connected,
+    capabilities:        status.capabilities,
+    auto_lookup_enabled: status.autoLookupEnabled,
   });
 }
 
@@ -431,13 +451,17 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
 
+  // No deleted_at filter here (unlike the list endpoint) — a staff member
+  // navigating directly to a known student ID (from search, an invoice, a
+  // booking, etc.) must still be able to view an archived student's record.
+  // Without this, archiving was a one-way door: the reactivate button lives
+  // on this same detail page, which 404'd for any archived student.
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: student, error } = await (client as any)
     .from('students')
     .select('*')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null)
     .maybeSingle();
 
   if (error) {
@@ -507,14 +531,26 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'A student with this personnummer is already registered in this organisation');
   }
 
-  const { data: student, error } = await (client as any)
+  // Reactivation ("Aktivera/Återaktivera kund" — dto.status set to 'active')
+  // is the one legitimate update that must reach an archived row: it both
+  // needs to bypass the deleted_at guard below and clear deleted_at/deleted_by
+  // itself, or the record stays soft-deleted (invisible everywhere else)
+  // despite showing status: 'active'.
+  const isReactivating = dto.status === 'active';
+  const updatePayload: Record<string, unknown> = { ...dto, updated_by: ctx.actorId };
+  if (isReactivating) {
+    updatePayload['deleted_at'] = null;
+    updatePayload['deleted_by'] = null;
+  }
+
+  let updateQuery = (client as any)
     .from('students')
-    .update({ ...dto, updated_by: ctx.actorId })
+    .update(updatePayload)
     .eq('id', id)
-    .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null)
-    .select()
-    .single();
+    .eq('organization_id', ctx.organizationId);
+  if (!isReactivating) updateQuery = updateQuery.is('deleted_at', null);
+
+  const { data: student, error } = await updateQuery.select().single();
 
   if (error) {
     logger.error('students.update_failed', { correlation_id: ctx.correlationId, error: error.message, student_id: id });
@@ -565,6 +601,20 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
   if (error) {
     logger.error('students.archive_failed', { correlation_id: ctx.correlationId, error: error.message, student_id: id });
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to archive student');
+  }
+
+  // soft_delete() only sets deleted_at — it has no knowledge of this table's
+  // own status column. Without this, the record becomes invisible (correct)
+  // but the frontend's reactivate button is gated on status === 'archived',
+  // which never happens, so archiving was otherwise a one-way door.
+  const { error: statusErr } = await (client as any)
+    .from('students')
+    .update({ status: 'archived', updated_by: ctx.actorId })
+    .eq('id', id)
+    .eq('organization_id', ctx.organizationId);
+
+  if (statusErr) {
+    logger.error('students.archive_status_sync_failed', { correlation_id: ctx.correlationId, error: statusErr.message, student_id: id });
   }
 
   logger.info('Student.Archived', {

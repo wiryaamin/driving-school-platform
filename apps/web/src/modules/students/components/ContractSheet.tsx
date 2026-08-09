@@ -181,7 +181,7 @@ export function ContractSheet({ student, open, onOpenChange, onSent }: ContractS
           onOpenChange(false);
           onSent?.();
         },
-        onError: () => toast({ title: 'Kunde inte skicka avtalet', variant: 'destructive' }),
+        onError: (err) => toast({ title: 'Kunde inte skicka avtalet', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }),
       },
     );
   }

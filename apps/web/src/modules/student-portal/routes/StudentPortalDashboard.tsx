@@ -9,7 +9,7 @@ import {
 import {
   usePortalBookings, usePortalTerms, usePortalAcceptTerms,
   usePortalProgress, usePortalMe, usePortalHistory,
-  usePortalNotifications, usePortalQuizCategories,
+  useUnreadNotificationCount, usePortalQuizCategories,
 } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
 
@@ -22,62 +22,85 @@ const PINK      = '#FF4B8A';
 const BLUE_ACC  = '#4F7BFF';
 
 // ─── Stage config ─────────────────────────────────────────────────────────────
+//
+// These must mirror the real `permit_stage` DB enum (see
+// 20260528000001_phase2a_domain_foundation.sql) — an earlier invented
+// 6-value vocabulary here ('learner'/'risk1'/'risk2'/'theory'/'practical'/
+// 'licensed') never matched any actual stage value, so this widget's
+// percentage, timeline, and recommendation always silently fell back to
+// hardcoded defaults regardless of the student's real progress.
 
-const STAGE_ORDER = ['learner', 'risk1', 'risk2', 'theory', 'practical', 'licensed'] as const;
+const STAGE_ORDER = [
+  'not_started', 'theory_study',
+  'risk1_booked', 'risk1_completed',
+  'risk2_booked', 'risk2_completed',
+  'theory_exam_booked', 'theory_passed',
+  'practical_exam_booked', 'practical_passed', 'licence_issued',
+] as const;
 type Stage = (typeof STAGE_ORDER)[number];
 
-const STAGE_PCT: Record<Stage, number> = {
-  learner: 10, risk1: 28, risk2: 48, theory: 65, practical: 82, licensed: 100,
-};
+function stageIndex(stage: string): number {
+  const idx = STAGE_ORDER.indexOf(stage as Stage);
+  return idx === -1 ? 0 : idx;
+}
 
-const TIMELINE: Array<{ key: Stage; label: string }> = [
-  { key: 'learner',   label: 'Start'      },
-  { key: 'risk1',     label: 'Risk 1'     },
-  { key: 'risk2',     label: 'Risk 2'     },
-  { key: 'theory',    label: 'Teori'      },
-  { key: 'practical', label: 'Uppkörning' },
-  { key: 'licensed',  label: 'Körkort'    },
+// Two DB stages per visual milestone (booked + completed), Körkort alone.
+function milestoneRank(stage: string): number {
+  return Math.min(5, Math.floor(stageIndex(stage) / 2));
+}
+
+const TIMELINE: Array<{ label: string }> = [
+  { label: 'Start'      },
+  { label: 'Risk 1'     },
+  { label: 'Risk 2'     },
+  { label: 'Teori'      },
+  { label: 'Uppkörning' },
+  { label: 'Körkort'    },
 ];
 
 const STAGE_RECOMMENDATIONS: Record<Stage, { title: string; subtitle: string; link: string }> = {
-  learner:   { title: 'Öva fordonskontroll', subtitle: 'Grunderna för säker körning',       link: '/portal/boka'  },
-  risk1:     { title: 'Förbered Risk 1',      subtitle: 'Viktig utbildning för körkortet',  link: '/portal/boka'  },
-  risk2:     { title: 'Öva på parkering',     subtitle: 'Rekommenderas av din instruktör',  link: '/portal/boka'  },
-  theory:    { title: 'Öva teoriprov',         subtitle: 'Träna på fler frågor idag',        link: '/portal/teori' },
-  practical: { title: 'Körprovstips',          subtitle: 'Förbered dig inför uppkörningen',  link: '/portal/boka'  },
-  licensed:  { title: 'Välkommen på vägarna!', subtitle: 'Du har klarat körkortet',          link: '/portal'       },
+  not_started:           { title: 'Öva fordonskontroll', subtitle: 'Grunderna för säker körning',      link: '/portal/boka'  },
+  theory_study:          { title: 'Öva teoriprov',        subtitle: 'Träna på fler frågor idag',        link: '/portal/teori' },
+  risk1_booked:          { title: 'Förbered Risk 1',      subtitle: 'Viktig utbildning för körkortet',  link: '/portal/boka'  },
+  risk1_completed:       { title: 'Boka Risk 2',          subtitle: 'Risk 1 klar — dags för nästa steg', link: '/portal/boka'  },
+  risk2_booked:          { title: 'Förbered Risk 2',      subtitle: 'Mörkerövningen väntar',            link: '/portal/boka'  },
+  risk2_completed:       { title: 'Öva på parkering',     subtitle: 'Rekommenderas av din instruktör',  link: '/portal/boka'  },
+  theory_exam_booked:    { title: 'Repetera teorin',      subtitle: 'Teoriprovet är bokat',             link: '/portal/teori' },
+  theory_passed:         { title: 'Körprovstips',         subtitle: 'Förbered dig inför uppkörningen',  link: '/portal/boka'  },
+  practical_exam_booked: { title: 'Finjustera körningen', subtitle: 'Uppkörningen är bokad',            link: '/portal/boka'  },
+  practical_passed:      { title: 'Grattis, snart klar!', subtitle: 'Körkortet är på väg',              link: '/portal'       },
+  licence_issued:        { title: 'Välkommen på vägarna!', subtitle: 'Du har klarat körkortet',         link: '/portal'       },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getProgressPct(stage: string, completedCount: number): number {
-  const base  = STAGE_PCT[stage as Stage] ?? 10;
-  const boost = Math.min(5, Math.floor(completedCount / 5));
-  return Math.min(99, base + boost);
+function getProgressPct(stage: string): number {
+  if (stage === 'licence_issued') return 100;
+  return Math.round((stageIndex(stage) / (STAGE_ORDER.length - 1)) * 100);
 }
+
+const STOCKHOLM_DAY_KEY: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Stockholm' };
 
 function formatLessonDate(iso: string): string {
   const d   = new Date(iso);
   const now = new Date();
-  const tod = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const tom = new Date(tod);
-  tom.setDate(tod.getDate() + 1);
-  const lsn = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  if (lsn.getTime() === tod.getTime()) return 'Idag';
-  if (lsn.getTime() === tom.getTime()) return 'Imorgon';
+  const tom = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const dayKey = (x: Date) => x.toLocaleDateString('sv-SE', STOCKHOLM_DAY_KEY);
+  if (dayKey(d) === dayKey(now)) return 'Idag';
+  if (dayKey(d) === dayKey(tom)) return 'Imorgon';
   return d
-    .toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' })
+    .toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' })
     .replace(/^./, (c) => c.toUpperCase());
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
 }
 
 // ─── Stage timeline (shared) ──────────────────────────────────────────────────
 
 function StageTimeline({ stage, showBadge = true }: { stage: string; showBadge?: boolean }) {
-  const currentIdx = STAGE_ORDER.indexOf(stage as Stage);
+  const currentIdx = stage === 'licence_issued' ? TIMELINE.length : milestoneRank(stage);
   const BADGE_H    = 22;
   const TOP_OFFSET = showBadge ? BADGE_H : 0;
   const TRACK_TOP  = TOP_OFFSET + 18;
@@ -109,12 +132,11 @@ function StageTimeline({ stage, showBadge = true }: { stage: string; showBadge?:
         />
       )}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
-        {TIMELINE.map(({ key, label }) => {
-          const mIdx = STAGE_ORDER.indexOf(key);
+        {TIMELINE.map(({ label }, mIdx) => {
           const done = currentIdx > mIdx;
           const curr = currentIdx === mIdx;
           return (
-            <div key={key} className="flex flex-col items-center relative">
+            <div key={label} className="flex flex-col items-center relative">
               {curr && showBadge && (
                 <div
                   className="absolute whitespace-nowrap"
@@ -201,8 +223,8 @@ function TermsBanner() {
 // ─── Greeting Header (mobile only) ────────────────────────────────────────────
 
 function GreetingHeader({ name }: { name: string }) {
-  const { data: notifications } = usePortalNotifications();
-  const count = notifications?.length ?? 0;
+  const { data: unread } = useUnreadNotificationCount();
+  const count = unread?.count ?? 0;
   return (
     <div className="flex items-start justify-between">
       <div>
@@ -356,7 +378,7 @@ function NextLessonCard({
 function ProgressJourneyCard({ pct, completedCount, stage, isLoading }: {
   pct: number; completedCount: number; stage: string; isLoading: boolean;
 }) {
-  const targetCount = Math.max(12, completedCount);
+  const targetCount = TIMELINE.length;
 
   return (
     <div className="rounded-[20px] p-3.5 bg-white" style={{ boxShadow: '0 6px 24px rgba(0,0,0,0.07)' }}>
@@ -700,7 +722,7 @@ function DinInstruktorCard({
 // ─── Dagens Rekommendation Card ────────────────────────────────────────────────
 
 function DagensRekommendationCard({ stage }: { stage: string }) {
-  const rec = STAGE_RECOMMENDATIONS[stage as Stage] ?? STAGE_RECOMMENDATIONS['risk2'];
+  const rec = STAGE_RECOMMENDATIONS[stage as Stage] ?? STAGE_RECOMMENDATIONS['not_started'];
 
   return (
     <div
@@ -804,8 +826,8 @@ function MotivationalBanner({ stage }: { stage: string }) {
 // ─── Quick Links ──────────────────────────────────────────────────────────────
 
 function QuickLinks() {
-  const { data: notifications } = usePortalNotifications();
-  const msgCount = notifications?.length ?? 0;
+  const { data: unread } = useUnreadNotificationCount();
+  const msgCount = unread?.count ?? 0;
 
   const ALL_LINKS = [
     { to: '/portal/boka',         label: 'Boka lektion', Icon: CalendarPlus,  badge: 0        },
@@ -877,7 +899,7 @@ export function StudentPortalDashboard() {
   const { data: history, isLoading: historyLoad }                             = usePortalHistory();
 
   const firstName = session.student_name.split(' ')[0] ?? session.student_name;
-  const stage     = progress?.permit_stage ?? me?.permit_stage ?? 'risk2';
+  const stage     = progress?.permit_stage ?? me?.permit_stage ?? 'not_started';
   const now       = Date.now();
 
   const upcoming = useMemo(
@@ -899,8 +921,8 @@ export function StudentPortalDashboard() {
     [history],
   );
 
-  const pct            = progress ? getProgressPct(stage, progress.completed_count) : 68;
-  const completedCount = progress?.completed_count ?? 8;
+  const pct            = progress ? getProgressPct(stage) : 0;
+  const completedCount = progress ? (stage === 'licence_issued' ? TIMELINE.length : milestoneRank(stage)) : 0;
   const nextLesson     = upcoming[0];
 
   const feedbackInstructorName = latestFeedback

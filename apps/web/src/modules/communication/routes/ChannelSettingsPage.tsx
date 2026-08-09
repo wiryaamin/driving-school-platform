@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Save, Info, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Save, Info, Loader2, CheckCircle2, XCircle, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
@@ -33,7 +33,7 @@ const ENV_HINTS: Record<string, string[]> = {
   'sendgrid':  ['SENDGRID_API_KEY'],
   'mailjet':   ['MAILJET_API_KEY', 'MAILJET_SECRET_KEY'],
   'vonage':    ['VONAGE_API_KEY', 'VONAGE_API_SECRET'],
-  'firebase':  ['FIREBASE_SERVER_KEY'],
+  'firebase':  ['FIREBASE_SERVICE_ACCOUNT_JSON'],
   'onesignal': ['ONESIGNAL_APP_ID', 'ONESIGNAL_API_KEY'],
   'meta':      ['META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID'],
 };
@@ -44,6 +44,74 @@ const CHANNEL_PROVIDER_HINTS: Partial<Record<CommChannel, Record<string, string[
     twilio: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_NUMBER'],
   },
 };
+
+// Human-friendly labels for each credential field, shown above its input.
+const FIELD_LABELS: Record<string, string> = {
+  ELKS_API_USERNAME:             'Användarnamn (46elks)',
+  ELKS_API_PASSWORD:             'Lösenord (46elks)',
+  RESEND_API_KEY:                'API-nyckel (Resend)',
+  TWILIO_ACCOUNT_SID:            'Account SID (Twilio)',
+  TWILIO_AUTH_TOKEN:             'Auth Token (Twilio)',
+  TWILIO_PHONE_NUMBER:           'Avsändarnummer (Twilio)',
+  TWILIO_WHATSAPP_NUMBER:        'WhatsApp-avsändarnummer (Twilio)',
+  SENDGRID_API_KEY:              'API-nyckel (SendGrid)',
+  MAILJET_API_KEY:               'API-nyckel (Mailjet)',
+  MAILJET_SECRET_KEY:            'Secret Key (Mailjet)',
+  VONAGE_API_KEY:                'API Key (Vonage)',
+  VONAGE_API_SECRET:             'API Secret (Vonage)',
+  FIREBASE_SERVICE_ACCOUNT_JSON: 'Service Account JSON (Firebase)',
+  ONESIGNAL_APP_ID:              'App ID (OneSignal)',
+  ONESIGNAL_API_KEY:             'API-nyckel (OneSignal)',
+  META_WHATSAPP_TOKEN:           'Åtkomsttoken (Meta)',
+  META_PHONE_NUMBER_ID:          'Telefonnummer-ID (Meta)',
+};
+
+// Fields whose value should be masked while typing (genuine secrets) —
+// identifiers like phone numbers/App IDs are shown in plain text.
+function isSecretField(field: string): boolean {
+  return /PASSWORD|TOKEN|KEY|SECRET|JSON/.test(field);
+}
+
+// GSM/SMS spec: a numeric sender ("+46701234567") can be up to 15 digits,
+// but an alphanumeric sender name ("Din Trafikskola") is capped at 11
+// characters — 46elks (and every other SMS gateway) rejects anything
+// longer with a 403. Confirmed live 2026-08-06: a school's full name in
+// this field failed every send with "Too long alphanumeric from number".
+const SMS_ALPHA_SENDER_MAX = 11;
+function isPhoneLikeSender(value: string): boolean {
+  return /^\+?\d+$/.test(value.trim());
+}
+
+// Every transactional email API (Resend/SendGrid/Mailjet) only lets you
+// send "from" a domain you've proven ownership of via DNS records added in
+// *that provider account's own* dashboard — verification is scoped per
+// account, not shared platform-wide. Two distinct failure modes, both
+// confirmed live 2026-08-06:
+//  1. A free-mail domain (gmail.com, etc.) can never be verified by
+//     anyone but its owner (Google) — using one as a sender always fails,
+//     regardless of whose provider account is sending.
+//  2. trafikcloud.se is verified under the *platform's* Resend account.
+//     Once a tenant enters their own API key, sends go through *their*
+//     account instead — which has never verified trafikcloud.se — so the
+//     exact same domain that worked before now fails.
+const UNVERIFIABLE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com',
+  'yahoo.com', 'icloud.com', 'me.com', 'aol.com', 'protonmail.com', 'proton.me',
+  'gmx.com', 'gmx.se', 'telia.com', 'bredband.net', 'comhem.se',
+]);
+const PLATFORM_DOMAIN = 'trafikcloud.se';
+// Primary API-key credential field per email provider — presence (typed
+// now, or already saved) means sends now go through the tenant's own
+// account rather than the platform's.
+const EMAIL_PRIMARY_KEY_FIELD: Record<string, string> = {
+  resend:   'RESEND_API_KEY',
+  sendgrid: 'SENDGRID_API_KEY',
+  mailjet:  'MAILJET_API_KEY',
+};
+function emailSenderDomain(value: string): string | null {
+  const at = value.trim().lastIndexOf('@');
+  return at === -1 ? null : value.trim().slice(at + 1).toLowerCase();
+}
 
 const CHANNEL_ORDER: CommChannel[] = ['sms', 'email', 'whatsapp', 'push', 'voice'];
 
@@ -67,6 +135,9 @@ function ChannelForm({
   const [dailyLimit,        setDailyLimit]        = useState(String(config?.daily_limit     ?? 500));
   const [testAddr,          setTestAddr]          = useState('');
   const [testResult,        setTestResult]        = useState<'idle' | 'ok' | 'error'>('idle');
+  // Credential inputs always start blank — the real values are never sent
+  // to the browser, only a masked display fragment (config.credentials_masked).
+  const [credInputs, setCredInputs] = useState<Record<string, string>>({});
   const sendMsg = useSendMessage();
 
   // Sync when config loads
@@ -77,17 +148,34 @@ function ChannelForm({
       setFromAddress(config.from_address ?? '');
       setDisplayName(config.display_name ?? '');
       setDailyLimit(String(config.daily_limit));
+      setCredInputs({});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.id]);
 
   const hints = provider ? (CHANNEL_PROVIDER_HINTS[channel]?.[provider] ?? ENV_HINTS[provider] ?? []) : [];
+  const dirtyCredFields = Object.values(credInputs).some((v) => v.trim() !== '');
   const isDirty = !config
     || config.enabled              !== enabled
     || (config.provider            ?? '') !== provider
     || (config.from_address        ?? '') !== fromAddress
     || (config.display_name        ?? '') !== displayName
-    || String(config.daily_limit)         !== dailyLimit;
+    || String(config.daily_limit)         !== dailyLimit
+    || dirtyCredFields;
+  const invalidEnabledWithoutProvider = enabled && !provider;
+  const senderTooLong = channel === 'sms'
+    && fromAddress.trim() !== ''
+    && !isPhoneLikeSender(fromAddress)
+    && fromAddress.trim().length > SMS_ALPHA_SENDER_MAX;
+
+  const emailKeyField  = channel === 'email' ? EMAIL_PRIMARY_KEY_FIELD[provider] : undefined;
+  const hasOwnEmailKey = !!emailKeyField
+    && ((credInputs[emailKeyField]?.trim() ?? '') !== '' || (config?.credentials_configured?.[emailKeyField] ?? false));
+  const senderDomain = channel === 'email' ? emailSenderDomain(fromAddress) : null;
+  const senderDomainInvalid = channel === 'email' && !!senderDomain && (
+    UNVERIFIABLE_EMAIL_DOMAINS.has(senderDomain)
+    || (hasOwnEmailKey && senderDomain === PLATFORM_DOMAIN)
+  );
 
   function handleTest() {
     if (!testAddr.trim() || !enabled) return;
@@ -101,12 +189,15 @@ function ChannelForm({
       },
       {
         onSuccess: () => { setTestResult('ok'); toast({ title: 'Testmeddelande skickat' }); },
-        onError:   () => { setTestResult('error'); toast({ title: 'Testmeddelande misslyckades', variant: 'destructive' }); },
+        onError:   (err) => { setTestResult('error'); toast({ title: 'Testmeddelande misslyckades', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }); },
       },
     );
   }
 
   function handleSave() {
+    const credentials = Object.fromEntries(
+      Object.entries(credInputs).filter(([, v]) => v.trim() !== ''),
+    );
     update.mutate(
       {
         channel,
@@ -115,9 +206,10 @@ function ChannelForm({
         from_address:          fromAddress || null,
         display_name:          displayName || null,
         daily_limit:  parseInt(dailyLimit, 10) || 500,
+        ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
       },
       {
-        onSuccess: () => toast({ title: `${meta.label} uppdaterat` }),
+        onSuccess: () => { toast({ title: `${meta.label} uppdaterat` }); setCredInputs({}); },
         onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
       },
     );
@@ -179,9 +271,34 @@ function ChannelForm({
             type={channel === 'email' ? 'email' : 'text'}
             value={fromAddress}
             onChange={(e) => setFromAddress(e.target.value)}
-            placeholder={channel === 'email' ? 'noreply@korskolan.se' : channel === 'sms' ? '+46701234567 eller Korskolan' : '—'}
-            className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
+            placeholder={channel === 'email' ? 'noreply@dinskola.se' : channel === 'sms' ? '+46701234567 eller Din Trafikskola' : '—'}
+            className={cn(
+              'w-full h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40',
+              (senderTooLong || senderDomainInvalid) ? 'border-destructive focus:ring-destructive/40' : 'border-border',
+            )}
           />
+          {channel === 'sms' && (
+            senderTooLong ? (
+              <p className="text-[10px] text-destructive">
+                Ett textavsändarnamn får max vara {SMS_ALPHA_SENDER_MAX} tecken ({fromAddress.trim().length} just nu) — använd ett kortare namn eller ett telefonnummer.
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">Telefonnummer eller ett textnamn på max {SMS_ALPHA_SENDER_MAX} tecken.</p>
+            )
+          )}
+          {channel === 'email' && (
+            senderDomainInvalid ? (
+              <p className="text-[10px] text-destructive">
+                {senderDomain === PLATFORM_DOMAIN
+                  ? `${PLATFORM_DOMAIN} är endast verifierad hos Trafikclouds egen e-postleverantör — med er egen API-nyckel måste avsändaradressen vara på en domän ni själva har verifierat hos ${provider || 'er leverantör'}.`
+                  : `${senderDomain} kan inte verifieras hos en e-postleverantör (det är en publik e-posttjänst) — använd en adress på er egen domän.`}
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                Måste vara en adress på en domän ni har verifierat hos {provider || 'er e-postleverantör'} (t.ex. noreply@dinskola.se).
+              </p>
+            )
+          )}
         </div>
 
         <div className="space-y-1">
@@ -208,17 +325,42 @@ function ChannelForm({
         </div>
       </div>
 
-      {/* Env hints */}
+      {/* Credentials */}
       {hints.length > 0 && (
-        <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 rounded-lg px-3 py-2.5">
-          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium mb-0.5">Supabase Secrets krävs för {provider}:</p>
-            <p className="font-mono">{hints.join('   ')}</p>
-            <p className="mt-1 text-amber-600 dark:text-amber-500 text-[10px]">
-              supabase secrets set {hints[0]}=value --project-ref {'<ref>'}
-            </p>
+        <div className="border-t border-border pt-4 space-y-3">
+          <p className="text-xs font-medium text-foreground flex items-center gap-1.5">
+            <KeyRound className="w-3.5 h-3.5 text-muted-foreground" />
+            Inloggningsuppgifter ({provider})
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {hints.map((field) => {
+              const configured = config?.credentials_configured?.[field] ?? false;
+              const masked     = config?.credentials_masked?.[field] ?? null;
+              return (
+                <div key={field} className="space-y-1">
+                  <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                    {FIELD_LABELS[field] ?? field}
+                    {configured && (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] font-normal text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" /> Sparad{masked ? ` (${masked})` : ''}
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type={isSecretField(field) ? 'password' : 'text'}
+                    value={credInputs[field] ?? ''}
+                    onChange={(e) => setCredInputs((c) => ({ ...c, [field]: e.target.value }))}
+                    placeholder={configured ? '••••••••  (ange för att ersätta)' : 'Klistra in värde'}
+                    autoComplete="off"
+                    className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  />
+                </div>
+              );
+            })}
           </div>
+          <p className="text-[10px] text-muted-foreground">
+            Uppgifterna krypteras och sparas för er organisation — de visas aldrig i klartext igen efter sparande.
+          </p>
         </div>
       )}
 
@@ -256,12 +398,15 @@ function ChannelForm({
 
       {/* Save */}
       <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
-        <div className="flex justify-end pt-1">
+        <div className="flex justify-end items-center gap-2 pt-1">
+          {invalidEnabledWithoutProvider && (
+            <p className="text-[10px] text-destructive">Välj en leverantör för att aktivera kanalen.</p>
+          )}
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={update.isPending || !isDirty}
-            className={cn(!isDirty && 'opacity-40')}
+            disabled={update.isPending || !isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid}
+            className={cn((!isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid) && 'opacity-40')}
           >
             <Save className="w-3.5 h-3.5 mr-1.5" />
             {update.isPending ? 'Sparar…' : 'Spara'}
@@ -294,11 +439,8 @@ export function ChannelSettingsPage() {
         <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-lg border border-border bg-muted/20 px-4 py-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
           <span>
-            API-nycklar lagras som{' '}
-            <a href="https://supabase.com/docs/guides/functions/secrets" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
-              Supabase Secrets
-            </a>
-            {' '}— aldrig i databasen. Välj leverantör, fyll i adress, och spara. Aktivera sedan kanalen med reglage.
+            Välj leverantör, fyll i era egna inloggningsuppgifter och adress, och spara. Uppgifterna krypteras
+            och lagras för er organisation. Aktivera sedan kanalen med reglage.
           </span>
         </div>
 

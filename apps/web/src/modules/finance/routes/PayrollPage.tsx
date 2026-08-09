@@ -6,7 +6,6 @@ import {
 import {
   Button, Input, Label, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-  Sheet, SheetContent,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Badge, Tabs, TabsContent, TabsList, TabsTrigger,
   toast,
@@ -459,8 +458,8 @@ function RunDetailSheet({ run, onClose }: { run: PayrollRun | null; onClose: () 
 
   return (
     <>
-      <Sheet open={Boolean(run)} onOpenChange={v => { if (!v) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto p-0">
+      <Dialog open={Boolean(run)} onOpenChange={v => { if (!v) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto p-0">
           {run && (
             <>
               {/* Sticky header */}
@@ -577,8 +576,8 @@ function RunDetailSheet({ run, onClose }: { run: PayrollRun | null; onClose: () 
               </div>
             </>
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* Sub-dialogs */}
       <AddEntryDialog    run={addEntryOpen ? run : null}    onClose={() => setAddEntryOpen(false)} />

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Loader2, RotateCcw } from 'lucide-react';
 import {
   Button, Label, Input, Textarea,
@@ -6,9 +7,40 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   toast,
 } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
 import type { Invoice, Payment } from '@platform/types';
 import { formatCurrency, formatDate } from '../lib/financeUtils.js';
 import { useProcessRefund, type RefundType, type RefundReasonCode } from '../hooks/useRefunds.js';
+
+// Credits are always reversed into the same lesson_category they were
+// granted under (process_refund requires credit_category whenever
+// credit_qty > 0). Look it up from the invoice's own package rather than
+// asking the user to pick it — the invoice already unambiguously determines
+// it via student_package_id, and the two-tier refund_type/reason_code form
+// is already asking enough of the user.
+function usePackageLessonCategory(studentPackageId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['refund-package-category', studentPackageId ?? ''],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('student_packages')
+        .select('package_offerings!offering_id(lesson_category)')
+        .eq('id', studentPackageId as string)
+        .single();
+      if (error) throw error;
+      const row = data as unknown as { package_offerings: { lesson_category: string } | null } | null;
+      return row?.package_offerings?.lesson_category ?? null;
+    },
+    enabled: Boolean(studentPackageId),
+    staleTime: 5 * 60_000,
+  });
+}
+
+// Radix's <Select.Item> forbids an empty-string value (reserved to mean
+// "cleared, show placeholder"), so "let the system pick" needs a non-empty
+// sentinel here — paymentId state itself still stores '' for that case,
+// exactly as before; this sentinel never leaves the Select's value pair.
+const AUTO_PAYMENT_VALUE = '__auto__';
 
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
@@ -32,7 +64,7 @@ const REASON_LABELS: Record<RefundReasonCode, string> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
-  invoice:  Pick<Invoice, 'id' | 'invoice_number' | 'total_amount' | 'outstanding_amount' | 'student_id' | 'currency'> | null;
+  invoice:  Pick<Invoice, 'id' | 'invoice_number' | 'total_amount' | 'outstanding_amount' | 'student_id' | 'currency' | 'student_package_id'> | null;
   payments: Payment[];
   open:     boolean;
   onClose:  () => void;
@@ -40,6 +72,7 @@ interface Props {
 
 export function RefundDialog({ invoice, payments, open, onClose }: Props) {
   const processRefund = useProcessRefund();
+  const packageCategory = usePackageLessonCategory(open ? invoice?.student_package_id : null);
 
   const [refundType,   setRefundType]   = useState<RefundType>('partial');
   const [reasonCode,   setReasonCode]   = useState<RefundReasonCode>('administrative_error');
@@ -82,15 +115,30 @@ export function RefundDialog({ invoice, payments, open, onClose }: Props) {
       return;
     }
 
+    // process_refund requires credit_category whenever credit_qty > 0 — it
+    // reverses credits into that exact category. Resolved from the invoice's
+    // own package, not asked of the user (see usePackageLessonCategory above).
+    if (showCredits && qty > 0 && !packageCategory.data) {
+      toast({
+        title: 'Kunde inte avgöra lektionskategori',
+        description: invoice.student_package_id
+          ? 'Kontrollera att paketet fortfarande finns kvar.'
+          : 'Fakturan är inte kopplad till ett paket — krediter kan inte återföras.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
       await processRefund.mutateAsync({
-        invoice_id:     invoice.id,
-        refund_type:    refundType,
-        reason_code:    reasonCode,
-        refund_amount:  showAmount  ? amount : undefined,
-        credit_qty:     showCredits ? qty    : undefined,
-        payment_id:     paymentId || undefined,
-        notes:          notes     || undefined,
+        invoice_id:      invoice.id,
+        refund_type:     refundType,
+        reason_code:     reasonCode,
+        refund_amount:   showAmount  ? amount : undefined,
+        credit_qty:      showCredits ? qty    : undefined,
+        credit_category: showCredits && qty > 0 ? packageCategory.data ?? undefined : undefined,
+        payment_id:      paymentId || undefined,
+        notes:           notes     || undefined,
       });
       toast({ title: 'Återbetalning registrerad', description: `${formatCurrency(amount)} återbetalas till eleven.` });
       handleClose();
@@ -209,12 +257,15 @@ export function RefundDialog({ invoice, payments, open, onClose }: Props) {
             {confirmedPayments.length > 1 && showAmount && (
               <div className="space-y-1.5">
                 <Label>Specifik betalning (valfritt)</Label>
-                <Select value={paymentId} onValueChange={setPaymentId}>
+                <Select
+                  value={paymentId || AUTO_PAYMENT_VALUE}
+                  onValueChange={(v) => setPaymentId(v === AUTO_PAYMENT_VALUE ? '' : v)}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Automatiskt val…" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Automatiskt val</SelectItem>
+                    <SelectItem value={AUTO_PAYMENT_VALUE}>Automatiskt val</SelectItem>
                     {confirmedPayments.map(p => (
                       <SelectItem key={p.id} value={p.id}>
                         {formatCurrency(p.amount, p.currency)} — {formatDate(p.paid_at ?? p.created_at)}

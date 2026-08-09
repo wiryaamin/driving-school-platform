@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { AlertCircle, LayoutGrid } from 'lucide-react';
 import { usePublicPackages, LESSON_CATEGORY_LABELS } from '../hooks/usePublicCatalog.js';
 import { CampaignBanner } from '../components/CampaignBanner.js';
 import { PackageCard } from '../components/PackageCard.js';
+import { TenantIdentity } from '@shared/components/public/TenantIdentity.js';
+import { TenantContactFooter } from '@shared/components/public/TenantContactFooter.js';
 
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
@@ -58,7 +60,7 @@ export function PublicCatalogPage() {
     if (robots) robots.content = 'index, follow';
 
     return () => {
-      document.title = 'Körskoleplattformen';
+      document.title = 'Trafikcloud';
       if (robots) robots.content = 'noindex, nofollow';
     };
   }, [org]);
@@ -114,12 +116,13 @@ export function PublicCatalogPage() {
       {/* Header */}
       <header className="bg-white border-b shadow-sm sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-blue-700">
-            <LayoutGrid className="w-5 h-5" />
-            <span className="font-semibold text-sm">
-              {org?.name ?? (isLoading ? 'Laddar…' : 'Körskola')}
-            </span>
-          </div>
+          <TenantIdentity
+            name={isLoading ? undefined : org?.name}
+            branding={org?.branding}
+            fallback={isLoading ? 'Laddar…' : 'Körskola'}
+            fallbackIcon={<LayoutGrid className="w-5 h-5 shrink-0 text-blue-700" />}
+            logoClassName="h-7 w-auto"
+          />
         </div>
       </header>
 
@@ -127,6 +130,13 @@ export function PublicCatalogPage() {
 
         {/* Campaign banner */}
         {topCampaign && <CampaignBanner campaign={topCampaign} />}
+
+        {/* About us — tenant-authored, shown only when they've written one */}
+        {org?.branding.about_text && (
+          <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
+            <p className="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">{org.branding.about_text}</p>
+          </div>
+        )}
 
         {/* Page title */}
         <div className="mb-5">
@@ -146,9 +156,10 @@ export function PublicCatalogPage() {
               onClick={() => setCategory('')}
               className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                 category === ''
-                  ? 'bg-blue-600 text-white'
+                  ? 'text-white'
                   : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-700'
               }`}
+              style={category === '' ? { backgroundColor: org?.branding.primary_color ?? '#2563eb' } : undefined}
             >
               Alla
             </button>
@@ -158,9 +169,10 @@ export function PublicCatalogPage() {
                 onClick={() => setCategory(cat === category ? '' : cat)}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                   category === cat
-                    ? 'bg-blue-600 text-white'
+                    ? 'text-white'
                     : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-700'
                 }`}
+                style={category === cat ? { backgroundColor: org?.branding.primary_color ?? '#2563eb' } : undefined}
               >
                 {LESSON_CATEGORY_LABELS[cat] ?? cat}
               </button>
@@ -198,6 +210,11 @@ export function PublicCatalogPage() {
         <p className="mt-10 text-center text-xs text-gray-400">
           Alla priser inkl. moms · Paket och erbjudanden kan ändras
         </p>
+        <p className="mt-2 text-center text-xs text-gray-400">
+          Redan kund? <Link to="/logga-in" className="text-blue-600 hover:underline">Logga in i din portal</Link>
+        </p>
+
+        <TenantContactFooter branding={org?.branding} />
       </main>
     </div>
   );

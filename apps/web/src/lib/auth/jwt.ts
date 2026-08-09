@@ -50,6 +50,23 @@ export function parseJwtClaims(accessToken: string): JwtClaims | null {
   }
 }
 
+/**
+ * Where a user lands immediately after authenticating (login, invite
+ * acceptance, or the "/" index redirect) — one shared decision so all three
+ * call sites agree. Platform admins go to the platform console; instructors
+ * get their own daily operational workspace (today's schedule, assigned
+ * lessons) rather than the School Administrator dashboard, since that
+ * dashboard's finance/org-wide widgets aren't relevant to their role;
+ * everyone else lands on the general dashboard.
+ */
+export function getPostLoginRoute(
+  claims: { is_platform_admin?: boolean; role?: string | null } | null,
+): string {
+  if (claims?.is_platform_admin) return '/platform/dashboard';
+  if (claims?.role === 'instructor' || claims?.role === 'instructor_senior') return '/instructor-app';
+  return '/dashboard';
+}
+
 /** Returns true if the JWT clock has passed the exp claim. */
 export function isJwtExpired(claims: Pick<JwtClaims, 'exp'>): boolean {
   return Math.floor(Date.now() / 1000) >= claims.exp;

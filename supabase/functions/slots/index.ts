@@ -37,6 +37,11 @@ const UpdateSlotSchema = z.object({
   timezone:        z.string().min(1).max(50).optional(),
   max_bookings:    z.number().int().min(1).max(50).optional(),
   notes:           z.string().max(2000).nullable().optional(),
+  // Only a plain open<->blocked toggle is permitted through the general update
+  // route ("Block Time" / "Unblock" from the calendar). Every other status
+  // transition (full, in_progress, completed, cancelled) is derived from
+  // booking activity or the dedicated DELETE (cancel) route, not settable here.
+  status:          z.enum(['open', 'blocked']).optional(),
 });
 
 const ListQuerySchema = z.object({
@@ -81,8 +86,8 @@ function pagedResp<T>(ctx: EdgeRequestContext, data: T[], total: number, page: n
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return errorResp(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -261,7 +266,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
 
   const { data: existing } = await (client as any)
     .from('lesson_slots')
-    .select('instructor_id, vehicle_id, starts_at, ends_at')
+    .select('instructor_id, vehicle_id, starts_at, ends_at, status, current_bookings')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -300,9 +305,30 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     if (vehChanged   && !vehAvail.data)   return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
   }
 
+  const updateBody: Record<string, unknown> = { ...dto, updated_by: ctx.actorId };
+
+  if (dto.status !== undefined) {
+    if (dto.status === existing.status) {
+      delete updateBody.status;
+    } else if (dto.status === 'blocked') {
+      if (existing.status !== 'open') {
+        return errorResp(ctx, 409, 'CONFLICT', 'Only an open slot can be blocked');
+      }
+      if ((existing.current_bookings ?? 0) > 0) {
+        return errorResp(ctx, 409, 'CONFLICT', 'Cannot block a slot with active bookings');
+      }
+      updateBody.status_changed_at = new Date().toISOString();
+    } else if (dto.status === 'open') {
+      if (existing.status !== 'blocked') {
+        return errorResp(ctx, 409, 'CONFLICT', 'Only a blocked slot can be reopened this way');
+      }
+      updateBody.status_changed_at = new Date().toISOString();
+    }
+  }
+
   const { data: slot, error } = await (client as any)
     .from('lesson_slots')
-    .update({ ...dto, updated_by: ctx.actorId })
+    .update(updateBody)
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)

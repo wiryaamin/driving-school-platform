@@ -75,6 +75,44 @@ async function emitEvent(
   }
 }
 
+// Grant the corresponding credit_ledger entry for a package assignment created
+// directly by this Edge Function. purchase_package() (the manual "Sälj paket"
+// sale path) already writes this grant; this path — enrollment/checkout
+// conversion — never did, so credit_balance_cache (the primary source for
+// balance reads; see credit_ledger_consumption_sync.sql) permanently showed
+// zero/missing for every enrollment-sourced package instead of its real
+// granted quantity. Best-effort/non-critical like the assignment insert
+// itself: the assignment is already committed by the time this runs, so a
+// failure here should not roll back or block the response.
+async function grantPackageAssignmentCredit(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client:         any,
+  orgId:          string,
+  studentId:      string,
+  assignmentId:   string,
+  lessonCategory: string,
+  quantity:       number,
+  currency:       string,
+  packageName:    string,
+  actorId:        string | null,
+): Promise<void> {
+  const { error } = await client.from('credit_ledger').insert({
+    organization_id: orgId,
+    student_id:       studentId,
+    lesson_category:  lessonCategory,
+    entry_type:       'grant',
+    quantity,
+    currency,
+    reference_type:   'student_package_assignment',
+    reference_id:      assignmentId,
+    description:      'Package purchase (enrollment): ' + packageName,
+    ...(actorId != null ? { actor_id: actorId } : {}),
+  });
+  if (error) {
+    console.warn('[enrollments] credit_ledger grant failed (non-critical):', { assignmentId, error });
+  }
+}
+
 // ─── List ─────────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -554,6 +592,14 @@ async function handleConvert(_req: Request, client: any, orgId: string, ctx: Edg
     console.warn('Package assignment creation failed (non-critical):', assignErr);
   } else {
     packageAssignmentId = assignment?.id as string | null;
+    if (packageAssignmentId != null) {
+      await grantPackageAssignmentCredit(
+        client, orgId, studentId, packageAssignmentId,
+        enrollment.lesson_category as string, enrollment.package_quantity as number,
+        (enrollment.currency as string) ?? 'SEK', enrollment.package_name as string,
+        ctx.actorId as string | null,
+      );
+    }
   }
 
   // ── H-2: Link orders.assignment_id ↔ package assignment ─────────────────────
@@ -722,6 +768,13 @@ async function handleAssignPackage(_req: Request, client: any, orgId: string, ct
     console.error('handleAssignPackage failed:', error);
     return err(ctx, 'Package assignment failed', 500, 'ASSIGN_FAILED');
   }
+
+  await grantPackageAssignmentCredit(
+    client, orgId, enrollment.student_id as string, assignment.id as string,
+    enrollment.lesson_category as string, enrollment.package_quantity as number,
+    (enrollment.currency as string) ?? 'SEK', enrollment.package_name as string,
+    ctx.actorId as string | null,
+  );
 
   await emitEvent(client, orgId, id, 'package_assigned', ctx.actorId as string | null, ctx.actorEmail as string | null, {
     student_package_assignment_id: assignment.id as string,

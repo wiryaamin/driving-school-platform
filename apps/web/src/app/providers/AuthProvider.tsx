@@ -130,9 +130,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (
-          event === 'INITIAL_SESSION' ||
-          event === 'SIGNED_IN'       ||
-          event === 'USER_UPDATED'
+          event === 'INITIAL_SESSION'   ||
+          event === 'SIGNED_IN'         ||
+          event === 'USER_UPDATED'      ||
+          // Fired specifically (instead of SIGNED_IN) by verifyOtp({type:'recovery'})
+          // — the token_hash path ResetPasswordPage uses. Without this, a
+          // recovery session would be tracked in the Zustand store only when
+          // the *other* supported link format (setSession() via hash-fragment
+          // tokens, which always fires SIGNED_IN) happens to be the one in use —
+          // an inconsistency across two paths of the same logical flow, not a
+          // difference that should exist. Safe to treat identically to SIGNED_IN:
+          // AuthLayout's route exemption (not the event type) is what keeps the
+          // user on the password-set form instead of being redirected away.
+          event === 'PASSWORD_RECOVERY'
         ) {
           if (!session) {
             clearSession();

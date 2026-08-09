@@ -26,6 +26,12 @@ export const Permissions = {
   VEHICLES_UPDATE: 'vehicles:vehicle:update',
   VEHICLES_DELETE: 'vehicles:vehicle:delete',
 
+  // ─── Regulatory (Transportstyrelsen integration domain) ────────────────────
+  REGULATORY_WORKFLOW_READ: 'regulatory:workflow:read',
+  REGULATORY_WORKFLOW_CREATE: 'regulatory:workflow:create',
+  REGULATORY_WORKFLOW_UPDATE: 'regulatory:workflow:update',
+  REGULATORY_WORKFLOW_DELETE: 'regulatory:workflow:delete',
+
   // ─── Scheduling ────────────────────────────────────────────────────────────
   SCHEDULING_READ: 'scheduling:booking:read',
   SCHEDULING_CREATE: 'scheduling:booking:create',

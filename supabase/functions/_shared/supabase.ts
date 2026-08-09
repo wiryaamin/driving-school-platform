@@ -45,6 +45,27 @@ export function createSupabaseClient(
 }
 
 /**
+ * Create an anon-key Supabase client with no request context and no forwarded
+ * Authorization header. Use for calling public GoTrue endpoints server-side
+ * that must actually dispatch mail — e.g. auth.resetPasswordForEmail(), which
+ * (unlike auth.admin.generateLink()) sends the email itself via the project's
+ * configured SMTP. admin.generateLink() only mints the link/token and leaves
+ * delivery to the caller, so it is the wrong tool for "send this person a
+ * working recovery link" and must not be used for that purpose.
+ */
+export function createAnonClient() {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const anonKey     = Deno.env.get('SUPABASE_ANON_KEY')!;
+
+  return createClient(supabaseUrl, anonKey, {
+    auth: {
+      persistSession:   false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+/**
  * Create a service-role Supabase client with no request context.
  * Use when calling DB functions that require bypassing RLS (e.g. auth hook, background jobs).
  * NEVER expose the returned client or its key outside the Edge Function.

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, ArrowUpDown, Search } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Button, Skeleton } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
@@ -15,7 +15,7 @@ interface VehicleRow {
   make:                  string;
   model:                 string;
   model_year:            number;
-  transmission:          'manual' | 'automatic' | 'semi_automatic';
+  transmission:          'manual' | 'automatic' | 'semi_automatic' | 'both';
   teaching_categories:   string[];
   fuel_type:             string;
   operational_status:    string;
@@ -35,6 +35,7 @@ function vehicleType(v: VehicleRow): string {
   const kind  = heavy ? 'Tung lastbil' : 'Personbil';
   const trans = v.transmission === 'automatic' ? 'automat'
               : v.transmission === 'manual'    ? 'manuell'
+              : v.transmission === 'both'      ? 'båda'
               : 'semi-automat';
   return `${kind} - ${trans} (${cat})`;
 }
@@ -90,11 +91,16 @@ export function ResourcesSettingsPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Skapa resurs
+          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" asChild>
+            <Link to="/resources">Hantera fordon</Link>
           </Button>
         </div>
       </div>
+
+      <p className="text-xs text-muted-foreground -mt-2">
+        Detta är en översikt. Skapa, redigera och ta bort fordon under{' '}
+        <Link to="/resources" className="text-primary hover:underline">Fordon &amp; resurser</Link>.
+      </p>
 
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -115,11 +121,6 @@ export function ResourcesSettingsPage() {
           <option value="Personbil">Personbil</option>
           <option value="Tung lastbil">Tung lastbil</option>
         </select>
-
-        <Button size="sm" variant="outline" className="flex items-center gap-1">
-          <Search className="w-3.5 h-3.5" />
-          Sök
-        </Button>
       </div>
 
       {/* Table */}
@@ -132,13 +133,9 @@ export function ResourcesSettingsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                <Th sortable>Namn</Th>
+                <Th>Namn</Th>
                 <Th>Registreringsnummer</Th>
                 <Th>Typ</Th>
-                <Th>Beskrivning</Th>
-                <Th>Intern anteckning</Th>
-                <Th>Platser</Th>
-                <Th>Metadata</Th>
                 <Th>Nästa besiktning senast</Th>
                 <Th />
               </tr>
@@ -146,7 +143,7 @@ export function ResourcesSettingsPage() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-10 text-center text-muted-foreground text-sm">
+                  <td colSpan={5} className="py-10 text-center text-muted-foreground text-sm">
                     Inga resurser hittades.
                   </td>
                 </tr>
@@ -154,31 +151,25 @@ export function ResourcesSettingsPage() {
                 filtered.map(v => (
                   <tr key={v.id} className="border-b border-border/50 last:border-0 hover:bg-accent/20">
                     <td className="px-4 py-3">
-                      <button type="button" className="text-primary hover:underline font-medium text-left">
+                      <Link to="/resources" className="text-primary hover:underline font-medium">
                         {vehicleDisplayName(v)}
-                      </button>
+                      </Link>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground font-mono text-xs">
                       {v.registration_number}
                     </td>
-                    <td className="px-4 py-3">
-                      <button type="button" className="text-primary hover:underline text-xs">
-                        {vehicleType(v)}
-                      </button>
-                    </td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {isEv(v) ? 'El bil' : `${v.make} ${v.model}`}
+                      {vehicleType(v)}{isEv(v) ? ' · El' : ''}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">–</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">–</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">–</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">
                       {v.next_inspection_due_at
                         ? DATE_FMT.format(new Date(v.next_inspection_due_at))
                         : '–'}
                     </td>
                     <td className="px-4 py-3">
-                      <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
+                      <Link to="/resources" aria-label={`Visa ${vehicleDisplayName(v)} i Fordon & resurser`}>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
+                      </Link>
                     </td>
                   </tr>
                 ))
@@ -210,15 +201,10 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   );
 }
 
-function Th({ children, sortable }: { children?: React.ReactNode; sortable?: boolean }) {
+function Th({ children }: { children?: React.ReactNode }) {
   return (
     <th className="px-4 py-2.5 text-left text-xs font-semibold text-foreground whitespace-nowrap">
-      {sortable ? (
-        <button type="button" className="flex items-center gap-1 hover:text-primary">
-          {children}
-          <ArrowUpDown className="w-3 h-3 opacity-50" />
-        </button>
-      ) : children}
+      {children}
     </th>
   );
 }

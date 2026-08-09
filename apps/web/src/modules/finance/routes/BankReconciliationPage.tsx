@@ -2,12 +2,11 @@ import { useState, useMemo, useCallback } from 'react';
 import {
   Plus, Loader2, AlertCircle, RefreshCw, CheckCircle2, Link2, Link2Off,
   ChevronRight, ArrowUpCircle, ArrowDownCircle, Building2, Calendar,
-  FileCheck, X, Wand2,
+  FileCheck, Wand2,
 } from 'lucide-react';
 import {
   Button, Input, Label, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-  Sheet, SheetContent,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Badge,
   toast,
@@ -551,8 +550,8 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
 
   return (
     <>
-      <Sheet open={Boolean(imp)} onOpenChange={open => { if (!open) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto p-0">
+      <Dialog open={Boolean(imp)} onOpenChange={open => { if (!open) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto p-0">
           {imp && (
             <>
               {/* Header */}
@@ -568,9 +567,6 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
                       Konto: {imp.bank_account_number} · {formatDate(imp.period_start)} – {formatDate(imp.period_end)}
                     </p>
                   </div>
-                  <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors">
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </button>
                 </div>
               </div>
 
@@ -731,8 +727,8 @@ function ImportDetailSheet({ imp, onClose }: ImportDetailSheetProps) {
               </div>
             </>
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* Manual match dialog */}
       <ManualMatchDialog

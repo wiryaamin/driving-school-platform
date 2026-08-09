@@ -168,6 +168,10 @@ function RunRow({ run }: { run: GenerationRun }) {
   );
 }
 
+// Sentinel select value for "generate generic availability, no fixed lesson
+// type" — distinct from '' (nothing chosen yet), maps to a null RPC param.
+const GENERIC_AVAILABILITY_VALUE = '__generic__';
+
 // ─── Manual Trigger Section ───────────────────────────────────────────────────
 
 function ManualTriggerSection() {
@@ -189,7 +193,7 @@ function ManualTriggerSection() {
     e.preventDefault();
     setResult(null);
     trigger.mutate(
-      { lessonTypeId, startDate, endDate },
+      { lessonTypeId: lessonTypeId === GENERIC_AVAILABILITY_VALUE ? null : lessonTypeId, startDate, endDate },
       {
         onSuccess: (res) => {
           setResult(res);
@@ -224,6 +228,7 @@ function ManualTriggerSection() {
               className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40 text-foreground"
             >
               <option value="">Välj lektionstyp…</option>
+              <option value={GENERIC_AVAILABILITY_VALUE}>— Ingen specifik (tillgänglighet) —</option>
               {lessonTypes.map(lt => (
                 <option key={lt.id} value={lt.id}>{lt.name}</option>
               ))}

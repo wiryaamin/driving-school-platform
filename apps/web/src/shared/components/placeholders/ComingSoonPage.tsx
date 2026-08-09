@@ -1,7 +1,16 @@
 import { Hammer } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-export function ComingSoonPage() {
+interface ComingSoonPageProps {
+  /** Where "Till översikten" navigates to. Defaults to the admin dashboard —
+   *  portal shells (instructor/guardian/student) that reuse this component
+   *  for their own unmatched-route fallback must override this to their own
+   *  index route, or the button would eject a portal user into the admin
+   *  shell they were never meant to see. */
+  homePath?: string;
+}
+
+export function ComingSoonPage({ homePath = '/dashboard' }: ComingSoonPageProps) {
   const navigate = useNavigate();
 
   return (
@@ -16,7 +25,7 @@ export function ComingSoonPage() {
         </p>
       </div>
       <button
-        onClick={() => navigate('/dashboard', { replace: true })}
+        onClick={() => navigate(homePath, { replace: true })}
         className="px-4 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
       >
         Till översikten

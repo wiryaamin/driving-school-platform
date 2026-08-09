@@ -71,6 +71,10 @@ export function PresentkortSettingsPage() {
           <p className="text-xs text-primary mt-0.5">
             Ange hur lång giltighetstid ni önskar att presentkort ska ha när de genereras. Siffran ska anges i månader.
           </p>
+          <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+            Presentkort skapas idag endast via CSV-import med giltighetstid angiven per kort — det finns ingen
+            försäljningsflöde för nya presentkort som skulle använda detta standardvärde än.
+          </p>
         </div>
         <div className="space-y-1">
           <label className="text-sm font-medium text-foreground">Antal månader</label>

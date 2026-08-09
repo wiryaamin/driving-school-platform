@@ -1,6 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,21 +27,14 @@ export interface TaskAssignee {
   name: string;
 }
 
-// ─── Storage ──────────────────────────────────────────────────────────────────
+// tasks is not present in @platform/types' hand-maintained Database stub
+// yet — same escape hatch already used by useFavorites.ts/useWatchlist.ts;
+// RLS (tasks_select_org/insert_org/update_org/delete_org) is what actually
+// enforces org-wide shared visibility.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function tasksTable() { return (supabase as any).from('tasks'); }
 
-const STORAGE_KEY = 'tasks_items_v1';
-
-function load(): Task[] {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as Task[];
-  } catch {
-    return [];
-  }
-}
-
-function persist(tasks: Task[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-}
+const TASKS_KEY = ['tasks-items'] as const;
 
 // ─── Assignee Hook (from instructors table) ───────────────────────────────────
 
@@ -67,7 +61,22 @@ export function useTaskAssignees() {
 // ─── Tasks Hook ───────────────────────────────────────────────────────────────
 
 export function useTasks() {
-  const [tasks, setTasks] = useState<Task[]>(load);
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+
+  const { data: tasks = [] } = useQuery({
+    queryKey: TASKS_KEY,
+    queryFn: async (): Promise<Task[]> => {
+      const { data, error } = await tasksTable()
+        .select('id, title, due_date, assigned_to_id, assigned_to_name, priority, created_by_id, created_by_name, status, completed_at, created_at')
+        .order('created_at', { ascending: false });
+      if (error) throw new Error((error as { message: string }).message);
+      return (data ?? []) as Task[];
+    },
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
 
   const todayIso = new Date().toISOString().slice(0, 10);
 
@@ -92,58 +101,50 @@ export function useTasks() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [tasks]);
 
-  const addTask = useCallback((input: {
-    title:              string;
-    due_date:           string | null;
-    assigned_to_id:     string | null;
-    assigned_to_name:   string | null;
-    priority:           TaskPriority | null;
-    created_by_id:      string;
-    created_by_name:    string;
-  }) => {
-    const task: Task = {
-      id:           crypto.randomUUID(),
-      status:       'active',
-      completed_at: null,
-      created_at:   new Date().toISOString(),
-      ...input,
-    };
-    setTasks((prev) => {
-      const next = [task, ...prev];
-      persist(next);
-      return next;
-    });
-  }, []);
+  const addTask = useMutation({
+    mutationFn: async (input: {
+      title:              string;
+      due_date:           string | null;
+      assigned_to_id:     string | null;
+      assigned_to_name:   string | null;
+      priority:           TaskPriority | null;
+      created_by_id:      string;
+      created_by_name:    string;
+    }): Promise<void> => {
+      if (!orgId) throw new Error('Ingen organisation');
+      const { error } = await tasksTable().insert({ organization_id: orgId, ...input });
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: TASKS_KEY }),
+  });
 
-  const completeTask = useCallback((id: string) => {
-    setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === id
-          ? { ...t, status: 'completed' as TaskStatus, completed_at: new Date().toISOString() }
-          : t,
-      );
-      persist(next);
-      return next;
-    });
-  }, []);
+  const completeTask = useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await tasksTable()
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: TASKS_KEY }),
+  });
 
-  const restoreTask = useCallback((id: string) => {
-    setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === id ? { ...t, status: 'active' as TaskStatus, completed_at: null } : t,
-      );
-      persist(next);
-      return next;
-    });
-  }, []);
+  const restoreTask = useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await tasksTable()
+        .update({ status: 'active', completed_at: null })
+        .eq('id', id);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: TASKS_KEY }),
+  });
 
-  const deleteTask = useCallback((id: string) => {
-    setTasks((prev) => {
-      const next = prev.filter((t) => t.id !== id);
-      persist(next);
-      return next;
-    });
-  }, []);
+  const deleteTask = useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await tasksTable().delete().eq('id', id);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: TASKS_KEY }),
+  });
 
   return {
     tasks,
@@ -151,9 +152,9 @@ export function useTasks() {
     completedTasks,
     overdueCount,
     creators,
-    addTask,
-    completeTask,
-    restoreTask,
-    deleteTask,
+    addTask:      (input: Parameters<typeof addTask.mutate>[0]) => addTask.mutate(input),
+    completeTask: (id: string) => completeTask.mutate(id),
+    restoreTask:  (id: string) => restoreTask.mutate(id),
+    deleteTask:   (id: string) => deleteTask.mutate(id),
   };
 }

@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@core/api/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -7,16 +8,20 @@ export type CommChannel = 'email' | 'sms' | 'whatsapp' | 'push' | 'voice';
 export type MsgStatus   = 'queued' | 'sending' | 'sent' | 'delivered' | 'failed' | 'bounced' | 'cancelled';
 
 export interface ChannelConfig {
-  id:                    string;
-  organization_id:       string;
-  channel:               CommChannel;
-  enabled:               boolean;
-  provider:              string | null;
-  from_address:          string | null;
-  display_name:          string | null;
-  daily_limit:           number;
-  created_at:            string;
-  updated_at:            string;
+  id:                     string;
+  organization_id:        string;
+  channel:                CommChannel;
+  enabled:                boolean;
+  provider:               string | null;
+  from_address:           string | null;
+  display_name:           string | null;
+  daily_limit:            number;
+  /** Per-field: whether a credential value is stored for this ENV_VAR_NAME key. */
+  credentials_configured: Record<string, boolean>;
+  /** Per-field: non-reversible display fragment (e.g. "sk_test_1…3xY4"), never the real value. */
+  credentials_masked:     Record<string, string | null>;
+  created_at:             string;
+  updated_at:             string;
 }
 
 export interface OutboundMessage {
@@ -63,7 +68,7 @@ export interface NotificationRule {
   trigger_event:   string;
   channel:         CommChannel;
   template_id:     string;
-  recipient_type:  'student' | 'instructor';
+  recipient_type:  'student' | 'instructor' | 'admin';
   enabled:         boolean;
   created_at:      string;
   updated_at:      string;
@@ -110,14 +115,14 @@ export interface CreateRuleParams {
   trigger_event:   string;
   channel:         CommChannel;
   template_id:     string;
-  recipient_type?: 'student' | 'instructor';
+  recipient_type?: 'student' | 'instructor' | 'admin';
   enabled?:        boolean;
 }
 
 export interface UpdateRuleParams {
   enabled?:        boolean | undefined;
   template_id?:    string | undefined;
-  recipient_type?: 'student' | 'instructor' | undefined;
+  recipient_type?: 'student' | 'instructor' | 'admin' | undefined;
 }
 
 export interface MessageListParams {
@@ -216,9 +221,29 @@ export const commKeys = {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
+// supabase-js wraps a non-2xx response in FunctionsHttpError whose .message
+// is a generic "Edge Function returned a non-2xx status code" — the real
+// {code, message} body (e.g. "Student has opted out of sms communications")
+// must be read from error.context separately, same idiom as
+// modules/students/hooks/usePersonLookup.ts and useTenantOnboarding.ts. Every
+// communications/* mutation was previously surfacing that generic message
+// instead of the real reason — confirmed live: a blocked SMS send (opted-out
+// recipient) showed as an unexplained failure with no indication why.
+async function extractErrorMessage(error: unknown, fallback: string): Promise<string> {
+  if (error instanceof FunctionsHttpError) {
+    try {
+      const body = await error.context.json() as { message?: string };
+      if (typeof body.message === 'string' && body.message) return body.message;
+    } catch {
+      // response body wasn't JSON — fall through to fallback
+    }
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 async function invoke<T>(path: string, opts?: Parameters<typeof supabase.functions.invoke>[1]): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>(path, opts);
-  if (error) throw error;
+  if (error) throw new Error(await extractErrorMessage(error, 'Åtgärden misslyckades'));
   if (!data) throw new Error('Empty response');
   return data;
 }
@@ -233,10 +258,21 @@ export function useChannelConfigs() {
   });
 }
 
+export interface UpdateChannelConfigInput {
+  channel:       CommChannel;
+  enabled?:      boolean;
+  provider?:     string | null;
+  from_address?: string | null;
+  display_name?: string | null;
+  daily_limit?:  number;
+  /** ENV_VAR_NAME -> new value. Empty string clears a previously-saved value. Omit fields left unchanged. */
+  credentials?:  Record<string, string>;
+}
+
 export function useUpdateChannelConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ channel, ...body }: Partial<ChannelConfig> & { channel: CommChannel }) =>
+    mutationFn: ({ channel, ...body }: UpdateChannelConfigInput) =>
       invoke<{ data: ChannelConfig }>(`communications/channels/${channel}`, {
         method: 'PUT',
         body:   JSON.stringify(body),
@@ -485,6 +521,23 @@ export function useBulkRetry() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: [...commKeys.all, 'messages'] });
       void qc.invalidateQueries({ queryKey: commKeys.queueHealth() });
+    },
+  });
+}
+
+// Manual recovery for dead-lettered business events (bookings, invoices,
+// student lifecycle, etc.) — same shape as useBulkRetry, for event_outbox
+// instead of outbound_messages.
+export function useRequeueDeadLetters() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (eventType?: string) =>
+      invoke<{ requeued: number }>('communications/requeue-dead-letters', {
+        method: 'POST',
+        body:   JSON.stringify({ event_type: eventType ?? null }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: commKeys.outboxHealth() });
     },
   });
 }

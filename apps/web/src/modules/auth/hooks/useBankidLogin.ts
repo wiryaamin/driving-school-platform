@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@core/api/supabase.js';
 import { logger } from '@platform/utils';
+import { invokeFunctionWithRetry, isGatewayRoutingError } from '@shared/lib/edgeFunctionRetry.js';
 
 export type BankidLoginState = 'idle' | 'starting' | 'pending' | 'complete' | 'failed' | 'not_configured';
 
@@ -29,68 +30,15 @@ function hintMessage(hintCode: string | null | undefined): string {
   return HINT_MESSAGES[hintCode] ?? 'Något gick fel. Försök igen.';
 }
 
-/**
- * supabase.functions.invoke() treats any non-2xx response as `error`, not
- * `data` — the JSON body bankid-auth returns for typed errors (e.g.
- * {error:'not_configured', message}) is only reachable via error.context
- * (the raw Response), not the `data` field. Without this, a 503
- * "not configured" response collapses into the generic failure message.
- */
-async function extractErrorBody(error: unknown): Promise<{ error?: string; code?: string; message?: string } | null> {
-  const context = (error as { context?: Response } | undefined)?.context;
-  if (!context || typeof context.json !== 'function') return null;
-  try {
-    return await context.json();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Live-verified against the hosted project (2026-07-12): newly-deployed Edge
- * Functions on this project intermittently return a gateway-level "function
- * not found" for a genuinely reachable, correctly-deployed function — 100%
- * reproducible even on a maximally trivial function with zero BankID-related
- * code (isolated via a throwaway diagnostic function), so this is a
- * platform/project-level routing characteristic, not a defect in bankid-auth.
- * Single-attempt failure rate measured at ~60%.
- *
- * This gateway error has its own parseable JSON body — {code:'NOT_FOUND',
- * message:'Requested function was not found'} — so it is NOT distinguishable
- * from a genuine typed response by "has a body" alone (an earlier version of
- * this retry logic got that wrong and never retried it). The real
- * distinction: bankid-auth's own typed errors always use {error, message};
- * the gateway's own errors use {code, message} with no `error` field. Only
- * the gateway shape is retried — a real {error:...} response from our
- * function is never retried, since retrying a deterministic answer (e.g.
- * not_configured) would just waste time.
- */
-const MAX_ATTEMPTS = 4; // Keeps compound failure in the low single digits against a ~60% single-attempt rate.
-
-function isGatewayRoutingError(body: { error?: string; code?: string } | null): boolean {
-  return body !== null && body.error === undefined && body.code === 'NOT_FOUND';
-}
-
-async function invokeWithRetry<T>(
-  path: string,
-  body: Record<string, unknown>,
-): Promise<{ data: T | null; errorBody: { error?: string; message?: string } | null; opaqueFailure: boolean }> {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const { data, error } = await supabase.functions.invoke<T>(path, { body });
-    if (!error) return { data: data ?? null, errorBody: null, opaqueFailure: false };
-
-    const parsedBody = await extractErrorBody(error);
-    const retryable = parsedBody === null || isGatewayRoutingError(parsedBody);
-
-    if (!retryable) return { data: null, errorBody: parsedBody, opaqueFailure: false };
-
-    if (attempt < MAX_ATTEMPTS - 1) {
-      await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-      continue;
-    }
-    return { data: null, errorBody: null, opaqueFailure: true };
-  }
-  return { data: null, errorBody: null, opaqueFailure: true };
+// bankid-auth's own typed errors always use {error, message}; the platform
+// gateway's routing failure uses {code, message} with no `error` field (or
+// no parseable body at all) — only that shape is retried, since retrying a
+// real, deterministic answer (e.g. not_configured) would just waste time.
+// See shared/lib/edgeFunctionRetry.ts for the full rationale — this was the
+// original implementation of that now-shared module, extracted in Sprint 4A
+// once a second caller needed identical behavior.
+function isBankidRetryable(body: { error?: string; code?: string } | null): boolean {
+  return body === null || isGatewayRoutingError(body);
 }
 
 /**
@@ -124,9 +72,10 @@ export function useBankidLogin() {
       const orderRef = orderRefRef.current;
       if (!orderRef) return;
 
-      const { data, errorBody, opaqueFailure } = await invokeWithRetry<CollectResponse>(
+      const { data, errorBody, opaqueFailure } = await invokeFunctionWithRetry<CollectResponse, { error?: string; message?: string }>(
         'bankid-auth/collect',
         { orderRef },
+        isBankidRetryable,
       );
 
       if (opaqueFailure) {
@@ -191,9 +140,10 @@ export function useBankidLogin() {
     setQrData(null);
     setAutoStartUrl(null);
 
-    const { data, errorBody, opaqueFailure } = await invokeWithRetry<
-      { orderRef: string; autoStartUrl: string; qrData: string }
-    >('bankid-auth/init', { purpose: 'login' });
+    const { data, errorBody, opaqueFailure } = await invokeFunctionWithRetry<
+      { orderRef: string; autoStartUrl: string; qrData: string },
+      { error?: string; message?: string }
+    >('bankid-auth/init', { purpose: 'login' }, isBankidRetryable);
 
     if (errorBody) {
       setState(errorBody.error === 'not_configured' ? 'not_configured' : 'failed');

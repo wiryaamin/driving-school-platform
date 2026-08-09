@@ -11,7 +11,9 @@ import { useSession } from '@shared/hooks/useSession.js';
  */
 const FEATURE_GATES = {
   'finance:sie4:export':         'starter',
-  'finance:vat:report':          'starter',
+  // Basic VAT period tracking is a mandatory Go Live requirement, not a
+  // paid upgrade — see _shared/subscription.ts's FEATURE_GATES for why.
+  'finance:vat:report':          'trial',
   'finance:ledger:read':         'starter',
   'finance:reconciliation:run':  'professional',
   'finance:payroll:run':         'professional',
@@ -19,9 +21,14 @@ const FEATURE_GATES = {
   'finance:accruals:manage':     'professional',
   'finance:fixed-assets:manage': 'professional',
   'finance:fortnox:sync':        'professional',
-  'communication:templates:manage': 'starter',
+  // Gates the whole communication module; channel setup is a mandatory
+  // Go Live requirement — see _shared/subscription.ts's FEATURE_GATES.
+  'communication:templates:manage': 'trial',
   'corporate:customers:manage':     'starter',
-  'admin:data-migration:run':       'professional',
+  // Trial tier — see _shared/subscription.ts's FEATURE_GATES for why (a
+  // trial customer needs to be able to import their real data to evaluate
+  // the platform, not just click around a demo org).
+  'admin:data-migration:run':       'trial',
 } as const;
 
 const TIER_ORDER = ['trial', 'starter', 'professional', 'enterprise'] as const;
@@ -58,13 +65,13 @@ interface SubscriptionGateProps {
  */
 export function SubscriptionGate({ feature, fallback, children }: SubscriptionGateProps) {
   const { user } = useSession();
-
-  const requiredTier = FEATURE_GATES[feature];
-  const currentTier   = user?.subscription_tier ?? 'trial';
-  const allowed       = user?.is_platform_admin === true || tierSatisfies(currentTier, requiredTier);
+  const allowed  = useFeatureAccess(feature);
 
   if (allowed) return <>{children}</>;
   if (fallback !== undefined) return <>{fallback}</>;
+
+  const requiredTier = FEATURE_GATES[feature];
+  const currentTier  = user?.subscription_tier ?? 'trial';
 
   return (
     <EmptyState
@@ -73,4 +80,17 @@ export function SubscriptionGate({ feature, fallback, children }: SubscriptionGa
       description={`Din nuvarande plan är ${TIER_LABEL[currentTier] ?? currentTier}. Kontakta din kontoansvarige för att uppgradera.`}
     />
   );
+}
+
+/**
+ * Same tier check as <SubscriptionGate>, exposed as a hook for callers that
+ * need to conditionally render something other than a whole content block —
+ * e.g. a page header action button that should never be shown clickable
+ * (and then fail with a raw 402) for a tier that can't use it.
+ */
+export function useFeatureAccess(feature: keyof typeof FEATURE_GATES): boolean {
+  const { user } = useSession();
+  const requiredTier = FEATURE_GATES[feature];
+  const currentTier  = user?.subscription_tier ?? 'trial';
+  return user?.is_platform_admin === true || tierSatisfies(currentTier, requiredTier);
 }

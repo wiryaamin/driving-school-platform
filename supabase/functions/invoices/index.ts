@@ -46,8 +46,8 @@ function fail(
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -119,17 +119,34 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext, client: any):
     return fail(ctx, 422, 'VALIDATION_ERROR', 'student_id is required for non-guest invoices');
   }
 
+  // Reuse the student's real, already-linked company as the default billing
+  // party — same rule create_invoice_from_order() applies (see migration
+  // 20260807135952_invoice_corporate_billing.sql). An explicit
+  // corporate_customer_id in the request always wins; only defaulted when
+  // omitted entirely.
+  let corporateCustomerId = body['corporate_customer_id'] ?? null;
+  if (corporateCustomerId === null && !isGuest && body['student_id']) {
+    const { data: studentRow } = await client
+      .from('students')
+      .select('corporate_customer_id')
+      .eq('id', body['student_id'])
+      .eq('organization_id', ctx.organizationId)
+      .maybeSingle();
+    corporateCustomerId = studentRow?.corporate_customer_id ?? null;
+  }
+
   const { data, error } = await client
     .from('invoices')
     .insert({
-      organization_id:    ctx.organizationId,
-      student_id:         body['student_id']         ?? null,
-      student_package_id: body['student_package_id'] ?? null,
-      currency:           body['currency']            ?? 'SEK',
-      due_date:           body['due_date']            ?? null,
-      notes:              body['notes']               ?? null,
-      metadata:           body['metadata']            ?? {},
-      created_by:         ctx.actorId,
+      organization_id:        ctx.organizationId,
+      student_id:             body['student_id']         ?? null,
+      student_package_id:     body['student_package_id'] ?? null,
+      corporate_customer_id:  corporateCustomerId,
+      currency:                body['currency']            ?? 'SEK',
+      due_date:                body['due_date']            ?? null,
+      notes:                   body['notes']               ?? null,
+      metadata:                body['metadata']            ?? {},
+      created_by:              ctx.actorId,
     })
     .select()
     .single();

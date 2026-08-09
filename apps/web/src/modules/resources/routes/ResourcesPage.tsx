@@ -1,8 +1,8 @@
-﻿import { useState, useEffect, useMemo } from 'react';
+﻿import { useState, useEffect, useId, useMemo } from 'react';
 import {
   Plus, MapPin, Wrench, AlertCircle, CheckCircle2, Car, Trash2,
   ChevronDown, AlertTriangle, History, ChartBar, Loader2,
-  Shield, CalendarX, ClipboardCheck, RefreshCw,
+  Shield, CalendarX, ClipboardCheck, RefreshCw, Search, Pencil,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
@@ -15,6 +15,7 @@ import {
   useVehicles, useCreateVehicle, useUpdateVehicleStatus, useDeleteVehicle,
   useUpdateVehicle, getServiceStatus, getComplianceStatus,
 } from '../hooks/useVehicles.js';
+import { useVehicleRegistryLookup } from '../hooks/useVehicleRegistryLookup.js';
 import {
   useVehicleServiceRecords, useCreateServiceRecord, useDeleteServiceRecord,
   SERVICE_TYPE_LABELS,
@@ -27,9 +28,12 @@ import {
 import type { InspectionType, InspectionResult, CreateInspectionInput } from '../hooks/useVehicleInspections.js';
 import {
   useVehicleMaintenanceRecords, useCreateMaintenanceRecord, useUpdateMaintenanceStatus,
+  useUpdateMaintenanceRecord, useDeleteMaintenanceRecord,
   MAINTENANCE_TYPE_LABELS, MAINTENANCE_STATUS_LABELS,
 } from '../hooks/useVehicleMaintenance.js';
-import type { MaintenanceRecordType, MaintenanceStatus, CreateMaintenanceInput } from '../hooks/useVehicleMaintenance.js';
+import type {
+  MaintenanceRecordType, MaintenanceStatus, CreateMaintenanceInput, VehicleMaintenanceRecord,
+} from '../hooks/useVehicleMaintenance.js';
 import {
   useLocations, useCreateLocation, useDeleteLocation, formatLocationAddress,
 } from '@modules/scheduling/hooks/useLocations.js';
@@ -69,7 +73,7 @@ const SERVICE_STATUS_LABEL = {
   overdue: 'Förfallen',
 };
 
-const TRANSMISSION_LABEL: Record<string, string> = { manual: 'Manuell', automatic: 'Automat' };
+const TRANSMISSION_LABEL: Record<string, string> = { manual: 'Manuell', automatic: 'Automat', both: 'Båda', semi_automatic: 'Halvautomat' };
 const OWNERSHIP_LABEL:    Record<string, string> = { owned: 'Ägs', leased: 'Leasad', rented: 'Hyrd' };
 const FUEL_LABEL:         Record<string, string> = { gasoline: 'Bensin', diesel: 'Diesel', electric: 'El', hybrid: 'Hybrid', plugin_hybrid: 'Plug-in hybrid', ethanol: 'Etanol', gas: 'Gas' };
 
@@ -109,6 +113,54 @@ function Field({
 
 const inputCls = 'w-full h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40';
 const selectCls = inputCls + ' appearance-none pr-8';
+
+// ─── Searchable vehicle selector ───────────────────────────────────────────────
+// Native <input list=…> + <datalist>: type-to-filter across every vehicle,
+// no extra dependency or open/close state needed. Used anywhere a vehicle
+// needs to be picked from a potentially long fleet list.
+
+function vehicleSearchLabel(v: Vehicle): string {
+  return `${v.registration_number} · ${v.make} ${v.model}`;
+}
+
+function VehicleSearchInput({
+  vehicles, value, onChange, placeholder,
+}: {
+  vehicles:    Vehicle[];
+  value:       string;
+  onChange:    (vehicleId: string) => void;
+  placeholder?: string;
+}) {
+  const listId = useId();
+  const selected = vehicles.find((v) => v.id === value);
+  const [text, setText] = useState(selected ? vehicleSearchLabel(selected) : '');
+
+  useEffect(() => {
+    const v = vehicles.find((x) => x.id === value);
+    setText(v ? vehicleSearchLabel(v) : '');
+  }, [value, vehicles]);
+
+  return (
+    <div className="relative">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60 pointer-events-none" />
+      <input
+        className={inputCls + ' pl-8'}
+        list={listId}
+        value={text}
+        placeholder={placeholder ?? 'Sök registreringsnummer, märke eller modell…'}
+        onChange={(e) => {
+          const t = e.target.value;
+          setText(t);
+          const match = vehicles.find((v) => vehicleSearchLabel(v) === t);
+          if (match) onChange(match.id);
+        }}
+      />
+      <datalist id={listId}>
+        {vehicles.map((v) => <option key={v.id} value={vehicleSearchLabel(v)} />)}
+      </datalist>
+    </div>
+  );
+}
 
 // ─── Service status badge ─────────────────────────────────────────────────────
 
@@ -214,9 +266,47 @@ function VehicleFormSheet({
 }) {
   const [form, setForm] = useState<CreateVehicleInput>(EMPTY_VEHICLE);
   const create = useCreateVehicle();
+  const lookup = useVehicleRegistryLookup();
 
   function set<K extends keyof CreateVehicleInput>(k: K, v: CreateVehicleInput[K]) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  async function handleLookup() {
+    const regNo = form.registration_number.trim().toUpperCase();
+    if (!regNo) return;
+    try {
+      const result = await lookup.mutateAsync({ registrationNumber: regNo });
+      if (result.status === 'not_found') {
+        toast({ title: 'Inga uppgifter hittades', description: `${regNo} kunde inte hittas hos fordonsregistret.` });
+        return;
+      }
+      if (result.status === 'unavailable' || !result.data) {
+        toast({ title: 'Uppslag ej tillgängligt', variant: 'destructive',
+          description: 'Fordonsuppgifter kunde inte hämtas just nu. Fyll i uppgifterna manuellt.' });
+        return;
+      }
+
+      const d = result.data;
+      setForm((f) => ({
+        ...f,
+        registration_number: regNo,
+        make:  d.make  ?? f.make,
+        model: d.model ?? f.model,
+        model_year: d.model_year ?? f.model_year,
+        color: d.color ?? f.color,
+        registration_expires_at: d.registration_valid_until ?? f.registration_expires_at,
+      }));
+
+      const inspectionNote = d.inspection_due_date
+        ? ` Nästa besiktning: ${new Date(d.inspection_due_date).toLocaleDateString('sv-SE')}.`
+        : '';
+      const debtNote = d.debt_flag ? ' OBS: fordonsrelaterad skuld registrerad.' : '';
+      toast({ title: 'Fordonsuppgifter hämtade', description: `Kontrollera uppgifterna innan du sparar.${inspectionNote}${debtNote}` });
+    } catch (err) {
+      toast({ title: 'Uppslaget misslyckades', variant: 'destructive',
+        description: err instanceof Error ? err.message : undefined });
+    }
   }
 
   function toggleCategory(cat: string) {
@@ -260,14 +350,28 @@ function VehicleFormSheet({
           <form id="vehicle-form" onSubmit={(e) => void handleSubmit(e)} className="p-6 space-y-4">
 
             <Field label="Registreringsnummer" required>
-              <input
-                className={inputCls + ' uppercase placeholder:normal-case font-mono tracking-wider'}
-                placeholder="ABC123"
-                value={form.registration_number}
-                onChange={(e) => set('registration_number', e.target.value)}
-                maxLength={10}
-                required
-              />
+              <div className="flex gap-2">
+                <input
+                  className={inputCls + ' uppercase placeholder:normal-case font-mono tracking-wider'}
+                  placeholder="ABC123"
+                  value={form.registration_number}
+                  onChange={(e) => set('registration_number', e.target.value)}
+                  maxLength={10}
+                  required
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0 px-3"
+                  disabled={!form.registration_number.trim() || lookup.isPending}
+                  onClick={() => void handleLookup()}
+                  title="Hämta fordonsuppgifter automatiskt"
+                >
+                  {lookup.isPending
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Search className="w-3.5 h-3.5" />}
+                </Button>
+              </div>
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
@@ -296,9 +400,10 @@ function VehicleFormSheet({
               <Field label="Växellåda" required>
                 <div className="relative">
                   <select className={selectCls} value={form.transmission}
-                    onChange={(e) => set('transmission', e.target.value as 'manual' | 'automatic')}>
+                    onChange={(e) => set('transmission', e.target.value as 'manual' | 'automatic' | 'both')}>
                     <option value="manual">Manuell</option>
                     <option value="automatic">Automat</option>
+                    <option value="both">Båda</option>
                   </select>
                   <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
                 </div>
@@ -458,7 +563,7 @@ function ServiceRecordSheet({
     <Dialog open={open} onOpenChange={(v) => { if (!v && !create.isPending) onClose(); }} aria-describedby={undefined}>
       <DialogContent className="max-w-md max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <DialogTitle>Registrera service</DialogTitle>
+          <DialogTitle>Registrera utförd service</DialogTitle>
           <p className="text-xs text-muted-foreground mt-0.5">{vehicleName}</p>
         </DialogHeader>
 
@@ -800,7 +905,7 @@ function FordanTab() {
                           permission={Permissions.VEHICLES_UPDATE}
                           fallback={<VehicleStatusBadge status={v.operational_status} />}
                         >
-                          <div className="relative">
+                          <div className="relative inline-block">
                             <select
                               value={v.operational_status}
                               onChange={(e) => void handleStatusChange(v, e.target.value as Vehicle['operational_status'])}
@@ -846,7 +951,7 @@ function FordanTab() {
                               onClick={() => setServiceVehicleId(v.id)}
                               disabled={pendingId === v.id}
                               className="p-1 rounded text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-30"
-                              title="Registrera service"
+                              title="Registrera utförd service"
                             >
                               <Wrench className="w-3.5 h-3.5" />
                             </button>
@@ -877,19 +982,118 @@ function FordanTab() {
 
 // ─── Underhåll tab ────────────────────────────────────────────────────────────
 
+function MaintenanceStatusBadge({ status }: { status: MaintenanceStatus }) {
+  return (
+    <span className={cn(
+      'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold',
+      MAINTENANCE_STATUS_CLS[status],
+    )}>
+      {MAINTENANCE_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function MaintenanceRow({
+  mr, vehicle, interactive, updating, deleting, onStatusChange, onEdit, onDelete,
+}: {
+  mr:             VehicleMaintenanceRecord;
+  vehicle:        Vehicle | undefined;
+  interactive:    boolean;
+  updating:       boolean;
+  deleting:       boolean;
+  onStatusChange: (status: MaintenanceStatus) => void;
+  onEdit:         () => void;
+  onDelete:       () => void;
+}) {
+  return (
+    <tr className={cn(
+      'border-b border-border/50 last:border-0 transition-colors',
+      (updating || deleting) ? 'opacity-50' : 'hover:bg-muted/20',
+    )}>
+      <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+        {new Date(mr.scheduled_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
+      </td>
+      <td className="px-4 py-2.5 whitespace-nowrap">
+        {vehicle ? (
+          <span className="font-mono font-semibold text-foreground text-xs">{vehicle.registration_number}</span>
+        ) : <span className="text-muted-foreground/40 text-xs">—</span>}
+      </td>
+      <td className="px-4 py-2.5 text-xs text-foreground">{mr.title}</td>
+      <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+        {MAINTENANCE_TYPE_LABELS[mr.record_type]}
+      </td>
+      <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+        {mr.service_provider ?? '—'}
+      </td>
+      <td className="px-4 py-2.5">
+        {interactive ? (
+          <div className="relative inline-block">
+            <select
+              value={mr.status}
+              onChange={e => onStatusChange(e.target.value as MaintenanceStatus)}
+              disabled={updating || mr.status === 'completed' || mr.status === 'cancelled'}
+              className={cn(
+                'appearance-none pl-2 pr-6 py-0.5 text-[10px] font-semibold rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/40',
+                MAINTENANCE_STATUS_CLS[mr.status],
+              )}
+            >
+              {(['scheduled','in_progress','completed','cancelled'] as MaintenanceStatus[]).map(s => (
+                <option key={s} value={s}>{MAINTENANCE_STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" />
+          </div>
+        ) : (
+          <MaintenanceStatusBadge status={mr.status} />
+        )}
+      </td>
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          <PermissionGate permission={Permissions.VEHICLES_UPDATE}>
+            <button
+              onClick={onEdit}
+              disabled={updating || deleting}
+              className="p-1 rounded text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-30"
+              title="Redigera"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={onDelete}
+              disabled={updating || deleting}
+              className="p-1 rounded text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-30"
+              title="Ta bort"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </PermissionGate>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function UnderhallTab() {
   const { data: vehicles = [], isLoading: vehiclesLoading } = useVehicles();
   const { data: records = [], isLoading: recordsLoading } = useVehicleServiceRecords();
   const { data: maintRecords = [], isLoading: maintLoading } = useVehicleMaintenanceRecords();
-  const deleteRecord   = useDeleteServiceRecord();
+  const deleteRecord      = useDeleteServiceRecord();
   const updateMaintStatus = useUpdateMaintenanceStatus();
+  const deleteMaintRecord = useDeleteMaintenanceRecord();
   const [serviceVehicleId, setServiceVehicleId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [showMaintForm, setShowMaintForm] = useState(false);
+  const [editingMaint, setEditingMaint] = useState<VehicleMaintenanceRecord | null>(null);
   const [updatingMaintId, setUpdatingMaintId] = useState<string | null>(null);
+  const [deletingMaintId, setDeletingMaintId] = useState<string | null>(null);
 
   const vehicleMap = Object.fromEntries(vehicles.map(v => [v.id, v]));
   const isLoading  = vehiclesLoading || recordsLoading;
+
+  // Completed/cancelled maintenance is archived out of "Planerat underhåll"
+  // automatically — that list only ever shows upcoming/outstanding work.
+  const activeMaint  = maintRecords.filter(m => m.status === 'scheduled' || m.status === 'in_progress');
+  const historyMaint = maintRecords.filter(m => m.status === 'completed' || m.status === 'cancelled');
 
   async function handleMaintStatusChange(id: string, status: MaintenanceStatus) {
     setUpdatingMaintId(id);
@@ -905,6 +1109,19 @@ function UnderhallTab() {
       toast({ title: 'Kunde inte uppdatera status', variant: 'destructive' });
     } finally {
       setUpdatingMaintId(null);
+    }
+  }
+
+  async function handleDeleteMaint(id: string) {
+    if (!confirm('Ta bort detta underhållstillfälle?')) return;
+    setDeletingMaintId(id);
+    try {
+      await deleteMaintRecord.mutateAsync(id);
+      toast({ title: 'Underhåll borttaget' });
+    } catch {
+      toast({ title: 'Kunde inte ta bort', variant: 'destructive' });
+    } finally {
+      setDeletingMaintId(null);
     }
   }
 
@@ -942,20 +1159,13 @@ function UnderhallTab() {
           {vehicles.length > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Logga för:</span>
-              <div className="relative">
-                <select
-                  className={selectCls + ' w-auto min-w-[140px] text-xs'}
+              <div className="w-56">
+                <VehicleSearchInput
+                  vehicles={vehicles}
                   value={serviceVehicleId ?? ''}
-                  onChange={(e) => setServiceVehicleId(e.target.value || null)}
-                >
-                  <option value="">Välj fordon…</option>
-                  {vehicles.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.registration_number} · {v.make} {v.model}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                  onChange={setServiceVehicleId}
+                  placeholder="Välj fordon…"
+                />
               </div>
             </div>
           )}
@@ -1062,8 +1272,8 @@ function UnderhallTab() {
             <div className="flex items-center gap-2">
               <RefreshCw className="w-4 h-4 text-primary" />
               <span className="text-sm font-semibold text-foreground">Planerat underhåll</span>
-              {maintRecords.length > 0 && (
-                <span className="text-xs text-muted-foreground">({maintRecords.length})</span>
+              {activeMaint.length > 0 && (
+                <span className="text-xs text-muted-foreground">({activeMaint.length})</span>
               )}
             </div>
             <button
@@ -1080,7 +1290,7 @@ function UnderhallTab() {
             <div className="space-y-2">
               {[1,2].map(i => <Skeleton key={i} className="h-14 w-full rounded-xl" />)}
             </div>
-          ) : maintRecords.length === 0 ? (
+          ) : activeMaint.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <CalendarX className="w-6 h-6 text-muted-foreground/30" />
               <p className="text-xs text-muted-foreground">Inget planerat underhåll.</p>
@@ -1097,52 +1307,74 @@ function UnderhallTab() {
                       <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Typ</th>
                       <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Verkstad</th>
                       <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-2 w-16" />
                     </tr>
                   </thead>
                   <tbody>
-                    {maintRecords.map(mr => {
-                      const v = vehicleMap[mr.vehicle_id];
-                      return (
-                        <tr key={mr.id} className={cn(
-                          'border-b border-border/50 last:border-0 transition-colors',
-                          updatingMaintId === mr.id ? 'opacity-50' : 'hover:bg-muted/20',
-                        )}>
-                          <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                            {new Date(`${mr.scheduled_at}T00:00:00`).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' })}
-                          </td>
-                          <td className="px-4 py-2.5 whitespace-nowrap">
-                            {v ? (
-                              <span className="font-mono font-semibold text-foreground text-xs">{v.registration_number}</span>
-                            ) : <span className="text-muted-foreground/40 text-xs">—</span>}
-                          </td>
-                          <td className="px-4 py-2.5 text-xs text-foreground">{mr.title}</td>
-                          <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
-                            {MAINTENANCE_TYPE_LABELS[mr.record_type]}
-                          </td>
-                          <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
-                            {mr.service_provider ?? '—'}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <div className="relative">
-                              <select
-                                value={mr.status}
-                                onChange={e => void handleMaintStatusChange(mr.id, e.target.value as MaintenanceStatus)}
-                                disabled={updatingMaintId === mr.id || mr.status === 'completed' || mr.status === 'cancelled'}
-                                className={cn(
-                                  'appearance-none pl-2 pr-6 py-0.5 text-[10px] font-semibold rounded-full border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/40',
-                                  MAINTENANCE_STATUS_CLS[mr.status],
-                                )}
-                              >
-                                {(['scheduled','in_progress','completed','cancelled'] as MaintenanceStatus[]).map(s => (
-                                  <option key={s} value={s}>{MAINTENANCE_STATUS_LABELS[s]}</option>
-                                ))}
-                              </select>
-                              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" />
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {activeMaint.map(mr => (
+                      <MaintenanceRow
+                        key={mr.id}
+                        mr={mr}
+                        vehicle={vehicleMap[mr.vehicle_id]}
+                        interactive
+                        updating={updatingMaintId === mr.id}
+                        deleting={deletingMaintId === mr.id}
+                        onStatusChange={(status) => void handleMaintStatusChange(mr.id, status)}
+                        onEdit={() => setEditingMaint(mr)}
+                        onDelete={() => void handleDeleteMaint(mr.id)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ─── Underhållshistorik ─────────────────────────────────────────── */}
+        <div className="pt-2">
+          <div className="flex items-center gap-2 mb-3">
+            <History className="w-4 h-4 text-primary" />
+            <span className="text-sm font-semibold text-foreground">Underhållshistorik</span>
+            {historyMaint.length > 0 && (
+              <span className="text-xs text-muted-foreground">({historyMaint.length})</span>
+            )}
+          </div>
+
+          {maintLoading ? null : historyMaint.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <History className="w-6 h-6 text-muted-foreground/30" />
+              <p className="text-xs text-muted-foreground">Inget avslutat underhåll ännu.</p>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30">
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Datum</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Fordon</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Titel</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Typ</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Verkstad</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                      <th className="px-4 py-2 w-16" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyMaint.map(mr => (
+                      <MaintenanceRow
+                        key={mr.id}
+                        mr={mr}
+                        vehicle={vehicleMap[mr.vehicle_id]}
+                        interactive={false}
+                        updating={false}
+                        deleting={deletingMaintId === mr.id}
+                        onStatusChange={() => {}}
+                        onEdit={() => setEditingMaint(mr)}
+                        onDelete={() => void handleDeleteMaint(mr.id)}
+                      />
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -1153,9 +1385,10 @@ function UnderhallTab() {
       </div>
 
       <MaintenanceFormDialog
-        open={showMaintForm}
+        open={showMaintForm || editingMaint !== null}
         vehicles={vehicles}
-        onClose={() => setShowMaintForm(false)}
+        editRecord={editingMaint}
+        onClose={() => { setShowMaintForm(false); setEditingMaint(null); }}
       />
     </>
   );
@@ -1179,19 +1412,38 @@ const EMPTY_MAINTENANCE: Omit<CreateMaintenanceInput, 'vehicle_id'> = {
 function MaintenanceFormDialog({
   open,
   vehicles,
+  editRecord,
   onClose,
 }: {
-  open:     boolean;
-  vehicles: Vehicle[];
-  onClose:  () => void;
+  open:        boolean;
+  vehicles:    Vehicle[];
+  editRecord?: VehicleMaintenanceRecord | null;
+  onClose:     () => void;
 }) {
+  const isEdit = !!editRecord;
   const [vehicleId, setVehicleId] = useState(vehicles[0]?.id ?? '');
   const [form, setForm] = useState(EMPTY_MAINTENANCE);
   const create = useCreateMaintenanceRecord();
+  const update = useUpdateMaintenanceRecord();
+  const pending = create.isPending || update.isPending;
 
   useEffect(() => {
-    if (open) { setForm(EMPTY_MAINTENANCE); setVehicleId(vehicles[0]?.id ?? ''); }
-  }, [open, vehicles]);
+    if (!open) return;
+    if (editRecord) {
+      setVehicleId(editRecord.vehicle_id);
+      setForm({
+        record_type:      editRecord.record_type,
+        title:            editRecord.title,
+        description:      editRecord.description,
+        scheduled_at:     editRecord.scheduled_at.slice(0, 10),
+        service_provider: editRecord.service_provider ?? '',
+        cost_sek:         editRecord.cost_sek,
+      });
+    } else {
+      setForm(EMPTY_MAINTENANCE);
+      setVehicleId(vehicles[0]?.id ?? '');
+    }
+  }, [open, editRecord, vehicles]);
 
   function set<K extends keyof typeof EMPTY_MAINTENANCE>(k: K, v: typeof EMPTY_MAINTENANCE[K]) {
     setForm(f => ({ ...f, [k]: v }));
@@ -1200,17 +1452,23 @@ function MaintenanceFormDialog({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!vehicleId || !form.title.trim()) return;
+    const payload = {
+      vehicle_id:       vehicleId,
+      record_type:      form.record_type,
+      title:            form.title.trim(),
+      description:      form.description ?? null,
+      scheduled_at:     form.scheduled_at,
+      service_provider: form.service_provider?.trim() || null,
+      cost_sek:         form.cost_sek ?? null,
+    };
     try {
-      await create.mutateAsync({
-        vehicle_id:       vehicleId,
-        record_type:      form.record_type,
-        title:            form.title.trim(),
-        description:      form.description ?? null,
-        scheduled_at:     form.scheduled_at,
-        service_provider: form.service_provider?.trim() || null,
-        cost_sek:         form.cost_sek ?? null,
-      });
-      toast({ title: 'Underhåll planerat' });
+      if (editRecord) {
+        await update.mutateAsync({ id: editRecord.id, ...payload });
+        toast({ title: 'Underhåll uppdaterat' });
+      } else {
+        await create.mutateAsync(payload);
+        toast({ title: 'Underhåll planerat' });
+      }
       onClose();
     } catch (err) {
       toast({ title: 'Kunde inte spara', variant: 'destructive',
@@ -1219,23 +1477,18 @@ function MaintenanceFormDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v && !create.isPending) onClose(); }} aria-describedby={undefined}>
+    <Dialog open={open} onOpenChange={v => { if (!v && !pending) onClose(); }} aria-describedby={undefined}>
       <DialogContent className="max-w-md max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <DialogTitle>Planerat underhåll</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-0.5">Lägg till ett schemalagt underhållstillfälle</p>
+          <DialogTitle>{isEdit ? 'Redigera underhåll' : 'Planerat underhåll'}</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isEdit ? 'Ändra ett schemalagt underhållstillfälle' : 'Lägg till ett schemalagt underhållstillfälle'}
+          </p>
         </DialogHeader>
         <ScrollArea className="flex-1 min-h-0">
           <form id="maint-form" onSubmit={e => void handleSubmit(e)} className="p-6 space-y-4">
             <Field label="Fordon" required>
-              <div className="relative">
-                <select className={selectCls} value={vehicleId} onChange={e => setVehicleId(e.target.value)} required>
-                  {vehicles.map(v => (
-                    <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-              </div>
+              <VehicleSearchInput vehicles={vehicles} value={vehicleId} onChange={setVehicleId} />
             </Field>
             <Field label="Typ" required>
               <div className="relative">
@@ -1264,10 +1517,10 @@ function MaintenanceFormDialog({
           </form>
         </ScrollArea>
         <DialogFooter className="px-6 py-4 border-t border-border shrink-0">
-          <Button variant="outline" type="button" onClick={onClose} disabled={create.isPending}>Avbryt</Button>
-          <Button type="submit" form="maint-form" disabled={create.isPending || !form.title.trim()}>
-            {create.isPending && <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />}
-            Spara underhåll
+          <Button variant="outline" type="button" onClick={onClose} disabled={pending}>Avbryt</Button>
+          <Button type="submit" form="maint-form" disabled={pending || !form.title.trim()}>
+            {pending && <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />}
+            {isEdit ? 'Spara ändringar' : 'Spara underhåll'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1306,6 +1559,7 @@ function InspectionFormDialog({
   const [form, setForm] = useState(EMPTY_INSPECTION);
   const createInspection = useCreateInspection();
   const updateVehicle    = useUpdateVehicle();
+  const lookup            = useVehicleRegistryLookup();
 
   useEffect(() => {
     if (open) { setForm(EMPTY_INSPECTION); setVehicleId(defaultVehicleId); }
@@ -1313,6 +1567,34 @@ function InspectionFormDialog({
 
   function set<K extends keyof typeof EMPTY_INSPECTION>(k: K, v: typeof EMPTY_INSPECTION[K]) {
     setForm(f => ({ ...f, [k]: v }));
+  }
+
+  async function handleLookup() {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+    try {
+      const result = await lookup.mutateAsync({ registrationNumber: vehicle.registration_number, vehicleId: vehicle.id });
+      if (result.status === 'not_found') {
+        toast({ title: 'Inga besiktningsuppgifter hittades', description: `${vehicle.registration_number} kunde inte hittas hos fordonsregistret.` });
+        return;
+      }
+      if (result.status === 'unavailable' || !result.data) {
+        toast({ title: 'Uppslag ej tillgängligt', variant: 'destructive', description: 'Fyll i uppgifterna manuellt.' });
+        return;
+      }
+      const d = result.data;
+      setForm(f => ({
+        ...f,
+        inspected_at:       d.last_inspection_date     ?? f.inspected_at,
+        next_due_at:        d.inspection_due_date       ?? f.next_due_at,
+        result:             (d.last_inspection_result as InspectionResult | undefined) ?? f.result,
+        station_name:       d.inspection_station_name   ?? f.station_name ?? null,
+      }));
+      toast({ title: 'Besiktningsuppgifter hämtade', description: 'Kontrollera uppgifterna innan du sparar.' });
+    } catch (err) {
+      toast({ title: 'Uppslaget misslyckades', variant: 'destructive',
+        description: err instanceof Error ? err.message : undefined });
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -1358,13 +1640,27 @@ function InspectionFormDialog({
         <ScrollArea className="flex-1 min-h-0">
           <form id="insp-form" onSubmit={e => void handleSubmit(e)} className="p-6 space-y-4">
             <Field label="Fordon" required>
-              <div className="relative">
-                <select className={selectCls} value={vehicleId} onChange={e => setVehicleId(e.target.value)} required>
-                  {vehicles.map(v => (
-                    <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <select className={selectCls} value={vehicleId} onChange={e => setVehicleId(e.target.value)} required>
+                    {vehicles.map(v => (
+                      <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0 px-3"
+                  disabled={!vehicleId || lookup.isPending}
+                  onClick={() => void handleLookup()}
+                  title="Hämta besiktningsuppgifter automatiskt"
+                >
+                  {lookup.isPending
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Search className="w-3.5 h-3.5" />}
+                </Button>
               </div>
             </Field>
             <Field label="Typ" required>

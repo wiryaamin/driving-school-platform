@@ -24,6 +24,9 @@
  *   GET    /communications/queue-health        — outbound_messages queue snapshot
  *   GET    /communications/outbox-health       — event_outbox backlog snapshot (Epic 7.4)
  *
+ *   POST   /communications/push/register       — register/refresh a staff FCM device token
+ *   DELETE /communications/push/register       — revoke a staff FCM device token
+ *
  * Authorization:
  *   All routes require a valid JWT with organization_id + sub claims (via auth hook).
  *   Write operations on channels and templates additionally require admin/manager/owner role.
@@ -37,12 +40,64 @@ import { requireFeature }       from '../_shared/subscription.ts';
 import { dispatchMessage }      from '../_shared/comm-providers.ts';
 import { applyTemplateVars }    from '../_shared/template-utils.ts';
 import { buildErrorResponse }   from '../_shared/errors.ts';
+import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
+import { encryptCredential, maskCredential, credentialCryptoConfigured } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CHANNELS   = ['email', 'sms', 'whatsapp', 'push', 'voice'] as const;
 const STATUSES   = ['queued', 'sending', 'sent', 'delivered', 'failed', 'bounced', 'cancelled'] as const;
 const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
+
+// ─── Provider credential fields ────────────────────────────────────────────────
+// The set of env-var-named credential fields Kanalinställningar lets a tenant
+// configure per provider, mirroring comm-providers.ts's Deno.env reads exactly
+// (same names, so cred() there can fall back to the platform secret with a
+// single lookup). Channel+provider combos not listed here use no per-tenant
+// credentials (channel not yet integrated).
+const PROVIDER_CREDENTIAL_FIELDS: Record<string, string[]> = {
+  '46elks':    ['ELKS_API_USERNAME', 'ELKS_API_PASSWORD'],
+  'resend':    ['RESEND_API_KEY'],
+  'sendgrid':  ['SENDGRID_API_KEY'],
+  'mailjet':   ['MAILJET_API_KEY', 'MAILJET_SECRET_KEY'],
+  'vonage':    ['VONAGE_API_KEY', 'VONAGE_API_SECRET'],
+  'firebase':  ['FIREBASE_SERVICE_ACCOUNT_JSON'],
+  'onesignal': ['ONESIGNAL_APP_ID', 'ONESIGNAL_API_KEY'],
+  'meta':      ['META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID'],
+  // Twilio's field set differs by channel (WhatsApp needs a WhatsApp-enabled
+  // sender number, not the SMS/voice number) — resolved per (channel, provider).
+};
+
+function credentialFieldsFor(channel: string, provider: string | null): string[] {
+  if (!provider) return [];
+  if (provider === 'twilio') {
+    return channel === 'whatsapp'
+      ? ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_NUMBER']
+      : ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER'];
+  }
+  return PROVIDER_CREDENTIAL_FIELDS[provider] ?? [];
+}
+
+interface ChannelMetadata {
+  credentials?:        Record<string, string>; // ENV_VAR_NAME -> "enc:v1:..."
+  credentials_masked?: Record<string, string>;  // ENV_VAR_NAME -> "sk_test_1…3xY4", never the real value
+  [key: string]: unknown;
+}
+
+/** Replaces a channel_configs row's raw metadata with configured/masked status only — never the ciphertext. */
+// deno-lint-ignore no-explicit-any
+function withCredentialStatus(row: any): Record<string, unknown> {
+  const metadata = (row.metadata as ChannelMetadata | null) ?? {};
+  const fields = credentialFieldsFor(row.channel, row.provider);
+  const credentials_configured: Record<string, boolean> = {};
+  const credentials_masked: Record<string, string | null> = {};
+  for (const field of fields) {
+    credentials_configured[field] = typeof metadata.credentials?.[field] === 'string';
+    credentials_masked[field]     = metadata.credentials_masked?.[field] ?? null;
+  }
+  const { metadata: _metadata, ...rest } = row;
+  return { ...rest, credentials_configured, credentials_masked };
+}
 
 type Channel = typeof CHANNELS[number];
 type Status  = typeof STATUSES[number];
@@ -90,11 +145,15 @@ function extractPath(req: Request): PathParts {
   // /send
   if (first === 'send') return { id: null, action: 'send', sub: null };
 
+  // /push/register — staff (user_id-owned) device token registration
+  if (first === 'push') return { id: null, action: 'push', sub: second };
+
   // /analytics, /queue-health, /outbox-health, /bulk-retry, /seed-defaults
   if (first === 'analytics')     return { id: null, action: 'analytics',     sub: null };
   if (first === 'queue-health')  return { id: null, action: 'queue-health',  sub: null };
   if (first === 'outbox-health') return { id: null, action: 'outbox-health', sub: null };
   if (first === 'bulk-retry')    return { id: null, action: 'bulk-retry',    sub: null };
+  if (first === 'requeue-dead-letters') return { id: null, action: 'requeue-dead-letters', sub: null };
   if (first === 'seed-defaults') return { id: null, action: 'seed-defaults', sub: null };
 
   // /:uuid/(retry|cancel)
@@ -136,10 +195,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (writeGuard) return writeGuard;
   }
 
+  if (ctx.organizationId === null) return err(ctx, 'Organisation context is required', 403, 'FORBIDDEN');
+
   const subGuard = requireFeature(ctx, 'communication:templates:manage');
   if (subGuard) return subGuard;
 
-  const orgId  = ctx.organizationId!;
+  const orgId  = ctx.organizationId;
   const userId = ctx.actorId!;
 
   const supabase = createServiceClient();
@@ -162,7 +223,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .eq('organization_id', orgId)
         .order('channel');
       if (error) throw error;
-      return json({ data: data ?? [] });
+      return json({ data: (data ?? []).map(withCredentialStatus) });
     }
 
     if (action === 'channels' && sub) {
@@ -180,7 +241,51 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         from_address?: string | null;
         display_name?: string | null;
         daily_limit?:  number;
+        credentials?:  Record<string, string>;
       };
+
+      // Credentials are merged into existing metadata (never overwritten
+      // wholesale) — fetch the current row first so switching daily_limit,
+      // say, never silently drops a previously-saved API key.
+      const { data: existing } = await supabase
+        .from('channel_configs')
+        .select('metadata')
+        .eq('organization_id', orgId)
+        .eq('channel', channel)
+        .maybeSingle();
+
+      const existingMetadata = (existing?.metadata as ChannelMetadata | null) ?? {};
+      const existingCreds    = existingMetadata.credentials ?? {};
+      const existingMasked   = existingMetadata.credentials_masked ?? {};
+      let nextMetadata: ChannelMetadata = existingMetadata;
+
+      if (body.credentials && Object.keys(body.credentials).length > 0) {
+        if (!credentialCryptoConfigured()) {
+          return err(ctx, 'Kryptering är inte konfigurerad på plattformen', 503, 'CRYPTO_NOT_CONFIGURED');
+        }
+        const effectiveProvider = body.provider !== undefined ? body.provider : null;
+        const allowedFields = credentialFieldsFor(channel, effectiveProvider);
+        const nextCreds  = { ...existingCreds };
+        const nextMasked = { ...existingMasked };
+        for (const [field, value] of Object.entries(body.credentials)) {
+          if (!allowedFields.includes(field)) continue; // ignore fields not valid for this channel/provider
+          if (typeof value !== 'string') continue;      // ignore malformed request-body values
+          const trimmed = value.trim();
+          if (trimmed === '') {
+            delete nextCreds[field];
+            delete nextMasked[field];
+          } else {
+            try {
+              nextCreds[field]  = await encryptCredential(trimmed);
+              nextMasked[field] = maskCredential(trimmed);
+            } catch (e) {
+              console.error('[communications] channel credential encrypt failed:', field, e instanceof Error ? e.message : String(e));
+              return err(ctx, `Kunde inte kryptera ${field}`, 500, 'ENCRYPT_FAILED');
+            }
+          }
+        }
+        nextMetadata = { ...existingMetadata, credentials: nextCreds, credentials_masked: nextMasked };
+      }
 
       const { data, error } = await supabase
         .from('channel_configs')
@@ -192,12 +297,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           from_address:    body.from_address ?? null,
           display_name:    body.display_name ?? null,
           daily_limit:     body.daily_limit  ?? 500,
+          metadata:        nextMetadata,
           updated_at:      new Date().toISOString(),
         }, { onConflict: 'organization_id,channel' })
         .select()
         .single();
       if (error) throw error;
-      return json({ data });
+      return json({ data: withCredentialStatus(data) });
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -324,7 +430,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           trigger_event:  string;
           channel:        Channel;
           template_id:    string;
-          recipient_type?: 'student' | 'instructor';
+          recipient_type?: 'student' | 'instructor' | 'admin';
           enabled?:       boolean;
         };
         if (!body.trigger_event) return err(ctx, 'trigger_event is required', 400, 'VALIDATION_ERROR');
@@ -358,7 +464,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         const body = await req.json() as {
           enabled?:       boolean;
           template_id?:   string;
-          recipient_type?: 'student' | 'instructor';
+          recipient_type?: 'student' | 'instructor' | 'admin';
         };
         const { data, error } = await supabase
           .from('notification_rules')
@@ -413,6 +519,24 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       if (!body.recipient_address?.trim()) return err(ctx, 'recipient_address is required', 400, 'MISSING_RECIPIENT');
       if (!body.body?.trim())              return err(ctx, 'body is required', 400, 'MISSING_BODY');
 
+      // Students can opt out of email/SMS communications (communication_opt_in_email /
+      // communication_opt_in_sms). This was previously fetched by the reminder worker
+      // but never actually checked anywhere in the send path — found via live pilot
+      // simulation (a student opted out of email still received one). Only email/sms
+      // have a dedicated opt-in column; other channels have none to enforce.
+      if (body.recipient_type === 'student' && body.recipient_id && (body.channel === 'email' || body.channel === 'sms')) {
+        const optInColumn = body.channel === 'email' ? 'communication_opt_in_email' : 'communication_opt_in_sms';
+        const { data: student } = await supabase
+          .from('students')
+          .select(optInColumn)
+          .eq('id', body.recipient_id)
+          .eq('organization_id', orgId)
+          .maybeSingle();
+        if (student && (student as Record<string, boolean>)[optInColumn] === false) {
+          return err(ctx, `Student has opted out of ${body.channel} communications`, 403, 'CONSENT_REQUIRED');
+        }
+      }
+
       const finalBody    = body.variables ? applyTemplateVars(body.body, body.variables) : body.body.trim();
       const finalSubject = (body.subject && body.variables)
         ? applyTemplateVars(body.subject, body.variables)
@@ -441,20 +565,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           from:     cfg.from_address ?? null,
           subject:  finalSubject ?? undefined,
           body:     finalBody,
+          organizationId: orgId,
         });
         dispatchStatus = result.status;
         providerId     = result.providerId;
         errorMsg       = result.error;
       }
-
-      // An immediate-dispatch failure must still be retry-eligible: without
-      // retry_after set here, the /communication-worker maintenance tick's
-      // claim_retry_messages() (which requires retry_after IS NOT NULL) can
-      // never reclaim this row automatically — it would only ever recover
-      // via a staff member manually calling PATCH .../retry. retry_count
-      // starts at 1 since this dispatch attempt already happened; formula
-      // matches the retry endpoint's own 2^retry_count-minutes backoff.
-      const failedImmediately = dispatchStatus === 'failed';
 
       const { data: msg, error: insertErr } = await supabase
         .from('outbound_messages')
@@ -471,8 +587,6 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           provider:            cfg?.provider ?? null,
           provider_message_id: providerId,
           error_message:       errorMsg,
-          retry_count:         failedImmediately ? 1 : 0,
-          retry_after:         failedImmediately ? new Date(Date.now() + 2 * 60 * 1000).toISOString() : null,
           scheduled_at:        body.scheduled_at ?? null,
           sent_at:             dispatchStatus === 'sent' ? new Date().toISOString() : null,
           metadata:            body.metadata ?? {},
@@ -516,6 +630,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         from:     cfg?.from_address ?? null,
         subject:  msg.subject ?? undefined,
         body:     msg.body,
+        organizationId: orgId,
       });
 
       const newRetryCount = msg.retry_count + 1;
@@ -772,6 +887,23 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       return json({ retried: data as number });
     }
 
+    // Manual recovery for dead-lettered event_outbox rows — same shape/gate
+    // as bulk-retry above, applied to business events instead of outbound
+    // messages. See requeue_dead_letter_events() for details.
+    if (action === 'requeue-dead-letters') {
+      if (method !== 'POST') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      const role = ctx.actorRole;
+      if (!ADMIN_ROLES.has(role ?? '')) return err(ctx, 'Forbidden — requires admin role', 403, 'FORBIDDEN');
+
+      const body = await req.json() as { event_type?: string };
+      const { data, error } = await supabase.rpc('requeue_dead_letter_events', {
+        p_org_id:     orgId,
+        p_event_type: body.event_type ?? null,
+      });
+      if (error) throw error;
+      return json({ requeued: data as number });
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // SEED DEFAULTS
     // ══════════════════════════════════════════════════════════════════════════
@@ -826,6 +958,51 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         data: data ?? [],
         meta: { total: count ?? 0, page, per_page },
       });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // PUSH DEVICE TOKENS (staff/admin — user_id-owned)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    if (action === 'push' && sub === 'register') {
+      if (method === 'POST') {
+        const body = await req.json().catch(() => null) as {
+          token?:          string;
+          previous_token?: string;
+          platform?:       'web' | 'ios' | 'android';
+        } | null;
+
+        if (!body?.token || body.token.length < 16) {
+          return err(ctx, 'Valid device token required', 400, 'INVALID_TOKEN');
+        }
+
+        const result = await registerPushToken(
+          supabase,
+          {
+            organizationId: orgId,
+            ownerColumn:    'user_id',
+            ownerId:        userId,
+            token:          body.token,
+            platform:       body.platform,
+            userAgent:      req.headers.get('User-Agent'),
+          },
+          body.previous_token,
+        );
+
+        if ('error' in result) return err(ctx, result.error, 500, 'INTERNAL');
+        return json({ id: result.id });
+      }
+
+      if (method === 'DELETE') {
+        const body = await req.json().catch(() => null) as { token_id?: string } | null;
+        if (!body?.token_id) return err(ctx, 'token_id is required', 400, 'MISSING_TOKEN_ID');
+
+        const result = await revokePushToken(supabase, orgId, 'user_id', userId, body.token_id, 'client_unsubscribed');
+        if ('error' in result) return err(ctx, result.error, 500, 'INTERNAL');
+        return json({ revoked: true });
+      }
+
+      return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
     }
 
     return err(ctx, 'Not found', 404, 'NOT_FOUND');

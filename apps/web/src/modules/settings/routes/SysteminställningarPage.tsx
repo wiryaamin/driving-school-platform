@@ -1,127 +1,54 @@
-import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, Settings, Image as ImageIcon, Upload } from 'lucide-react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChevronRight, Settings } from 'lucide-react';
 import {
-  Button, toast,
-  Card, CardContent, CardHeader, CardTitle, CardFooter,
+  Card, CardContent, CardHeader, CardTitle,
 } from '@platform/ui';
-import { supabase } from '@core/api/supabase.js';
-import { useSession } from '@shared/hooks/useSession.js';
 
-// ─── Toggle ───────────────────────────────────────────────────────────────────
+// ─── Audit finding ─────────────────────────────────────────────────────────────
+//
+// All 9 fields on this page saved to organizations.settings.system, a JSONB
+// blob with zero consumers. Checked for a real underlying system for each:
+//   - bank_id ("BankID för personal"): BankidLogin already renders
+//     unconditionally on the login page (LoginPage.tsx) for every account
+//     type — there is no org-level gate to wire this toggle to. Gating it
+//     would require looking up an organization before the user is
+//     authenticated (a pre-auth org lookup), which is new functionality, not
+//     wiring existing configuration.
+//   - cross_dept_search: no location-scoped student/company search exists
+//     anywhere in the students module.
+//   - lock_days: a real period-lock mechanism DOES exist (ledger PERIOD_LOCKED,
+//     Ekonomi → Bokslut) but it is fundamentally different — explicit
+//     from_date/to_date periods closed by an action, not a rolling
+//     "N days old" auto-lock. The two aren't the same capability.
+//   - allow_pay_date: there is no manual "register a payment" form anywhere
+//     in the frontend — payments are created via the Stripe/Nets webhook
+//     flow, not a form with an editable date field.
+//   - edit_price_role / credit_role: no role check gates price, discount, or
+//     credit editing anywhere in the invoices Edge Function.
+//   - afternoon_time: package_catalog only has flat price/default_price
+//     columns — no time-of-day pricing variation exists.
+//   - credit_limit / block_sales_over: students has no credit_limit column
+//     and no sale/booking flow checks one.
+// None of these have an existing backend to wire into. Removed the fake
+// toggles/inputs entirely rather than leaving controls that silently saved
+// to nothing.
 
-function Toggle({
-  checked,
-  onChange,
-  label,
-  desc,
-}: {
-  checked:  boolean;
-  onChange: (v: boolean) => void;
-  label:    string;
-  desc?:    string;
-}) {
+function NotBuilt({ title, description }: { title: string; description: string }) {
   return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex-1">
-        <p className="text-sm font-medium text-foreground">{label}</p>
-        {desc && <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{desc}</p>}
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors mt-0.5 ${checked ? 'bg-primary' : 'bg-input'}`}
-        aria-label={label}
-      >
-        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-      </button>
-    </div>
+    <Card>
+      <CardHeader className="pb-0 px-5 pt-5">
+        <CardTitle className="text-sm font-semibold">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="px-5 pb-5 pt-4">
+        <div className="rounded-lg border border-border bg-muted/20 p-4">
+          <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-// ─── SysteminställningarPage ──────────────────────────────────────────────────
-
 export function SysteminställningarPage() {
-  const { organization } = useSession();
-  const orgId = organization?.id;
-  const qc = useQueryClient();
-
-  const [bankId,          setBankId]          = useState(false);
-  const [crossDeptSearch, setCrossDeptSearch] = useState(false);
-  const [lockDays,        setLockDays]        = useState(90);
-  const [allowPayDate,    setAllowPayDate]    = useState(false);
-  const [editPriceRole,   setEditPriceRole]   = useState('all');
-  const [creditRole,      setCreditRole]      = useState('all');
-  const [afternoonTime,   setAfternoonTime]   = useState('16:00');
-  const [logoFile,        setLogoFile]        = useState<File | null>(null);
-  const [creditLimit,     setCreditLimit]     = useState(0);
-  const [blockSalesOver,  setBlockSalesOver]  = useState(false);
-
-  const { data: orgSettings } = useQuery<Record<string, unknown> | null>({
-    queryKey: ['org-settings-system', orgId],
-    queryFn: async () => {
-      if (!orgId) return null;
-      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
-      return ((data as unknown as { settings: Record<string, unknown> } | null)?.settings) ?? null;
-    },
-    enabled: !!orgId,
-    staleTime: 60_000,
-  });
-
-  useEffect(() => {
-    if (!orgSettings) return;
-    const s = (orgSettings['system'] as Record<string, unknown> | undefined) ?? {};
-    if (typeof s['bank_id']            === 'boolean') setBankId(s['bank_id']);
-    if (typeof s['cross_dept_search']  === 'boolean') setCrossDeptSearch(s['cross_dept_search']);
-    if (typeof s['lock_days']          === 'number')  setLockDays(s['lock_days']);
-    if (typeof s['allow_pay_date']     === 'boolean') setAllowPayDate(s['allow_pay_date']);
-    if (typeof s['edit_price_role']    === 'string')  setEditPriceRole(s['edit_price_role']);
-    if (typeof s['credit_role']        === 'string')  setCreditRole(s['credit_role']);
-    if (typeof s['afternoon_time']     === 'string')  setAfternoonTime(s['afternoon_time']);
-    if (typeof s['credit_limit']       === 'number')  setCreditLimit(s['credit_limit']);
-    if (typeof s['block_sales_over']   === 'boolean') setBlockSalesOver(s['block_sales_over']);
-  }, [orgSettings]);
-
-  const saveMut = useMutation({
-    mutationFn: async () => {
-      if (!orgId) return;
-      await supabase.from('organizations').update({
-        settings: {
-          ...(orgSettings ?? {}),
-          system: {
-            bank_id: bankId, cross_dept_search: crossDeptSearch, lock_days: lockDays,
-            allow_pay_date: allowPayDate, edit_price_role: editPriceRole, credit_role: creditRole,
-            afternoon_time: afternoonTime, credit_limit: creditLimit, block_sales_over: blockSalesOver,
-          },
-        },
-      } as never).eq('id', orgId);
-    },
-    onSuccess: () => {
-      toast({ title: 'Systeminställningarna sparades' });
-      void qc.invalidateQueries({ queryKey: ['org-settings-system', orgId] });
-    },
-    onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
-  });
-
-  const isPending = saveMut.isPending;
-
-  function SaveBtn() {
-    return (
-      <Button size="sm" onClick={() => saveMut.mutate()} disabled={isPending}>
-        {isPending ? 'Sparar…' : 'Spara'}
-      </Button>
-    );
-  }
-
-  const roleOpts = [
-    { value: 'all',   label: 'Alla' },
-    { value: 'admin', label: 'Administratörer' },
-    { value: 'owner', label: 'Ägare' },
-  ];
-
   return (
     <div className="max-w-xl space-y-5">
 
@@ -147,195 +74,35 @@ export function SysteminställningarPage() {
         </CardContent>
       </Card>
 
-      {/* Inloggning */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Inloggning</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-4">
-          <Toggle
-            checked={bankId}
-            onChange={setBankId}
-            label="Mobilt BankID för personal"
-            desc="Tillåt personalen att logga in med Mobilt BankID istället för e-post och lösenord. Kräver att personnummer är korrekt registrerat."
-          />
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <p className="text-xs text-muted-foreground -mt-2">
+        Logotyp hanteras under <Link to="/settings/website/brand" className="text-primary hover:underline">Webbplats → Varumärke</Link>.
+        Låsning av bokföringsperioder hanteras under <Link to="/finance/close" className="text-primary hover:underline">Ekonomi → Bokslut</Link>.
+      </p>
 
-      {/* Sök */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Sök efter student/företag</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-3">
-          <label className="flex items-start gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={crossDeptSearch}
-              onChange={e => setCrossDeptSearch(e.target.checked)}
-              className="rounded border-border accent-primary w-4 h-4 mt-0.5 shrink-0"
-            />
-            <span className="text-sm text-foreground">Aktivera elev- och företagssökningar över avdelningar</span>
-          </label>
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <NotBuilt
+        title="Inloggning — Mobilt BankID för personal"
+        description="Ett organisationsval för att aktivera/inaktivera BankID-inloggning för personal är inte implementerat ännu — BankID-inloggning visas redan idag för alla kontotyper på inloggningssidan, oavsett organisation."
+      />
 
-      {/* Försäljning och betalningar */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Inställningar för försäljning och betalningar</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-4">
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">Lås redigering av anställda och resurstimmar på försäljning/aktiviteter äldre än:</p>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={lockDays}
-                onChange={e => setLockDays(Number(e.target.value))}
-                min={0}
-                max={365}
-                className="w-20 h-9 px-3 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 text-center tabular-nums"
-              />
-              <span className="text-sm text-muted-foreground">dagar</span>
-            </div>
-          </div>
-          <label className="flex items-start gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={allowPayDate}
-              onChange={e => setAllowPayDate(e.target.checked)}
-              className="rounded border-border accent-primary w-4 h-4 mt-0.5 shrink-0"
-            />
-            <span className="text-sm text-foreground">Kan ställa in betalningsdatum vid registrering av betalning</span>
-          </label>
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-foreground block">
-              Användare som kan redigera pris, rabatter, anställdas timmar och kreditgräns:
-            </label>
-            <p className="text-xs text-muted-foreground">Kunna ändra pris, lägga in rabatt, ändra anställd- och resurstimmar på lektioner och elevens kreditgräns.</p>
-            <select
-              value={editPriceRole}
-              onChange={e => setEditPriceRole(e.target.value)}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 text-foreground"
-            >
-              {roleOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-foreground block">Användare som kan registrera krediteringar:</label>
-            <p className="text-xs text-muted-foreground">Kunna registrera krediteringar (rättelse, rabatt, kom ej etc.) på lektioner/kursartiklar och direkt på elevkonto.</p>
-            <select
-              value={creditRole}
-              onChange={e => setCreditRole(e.target.value)}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 text-foreground"
-            >
-              {roleOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <NotBuilt
+        title="Sök efter student/företag över avdelningar"
+        description="Avdelnings-/platsbaserad sökning är inte implementerad ännu — elev- och företagssökningar är inte begränsade per plats idag."
+      />
 
-      {/* Eftermiddagspris */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Eftermiddagspris</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-2">
-          <label className="text-xs font-medium text-foreground block">Eftermiddagspris efter kl.:</label>
-          <input
-            type="time"
-            value={afternoonTime}
-            onChange={e => setAfternoonTime(e.target.value)}
-            className="h-9 px-3 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-          />
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <NotBuilt
+        title="Inställningar för försäljning och betalningar"
+        description="Låsning av redigering på gamla försäljningar/aktiviteter (rullande antal dagar), valfritt betalningsdatum vid registrering, samt rollstyrd behörighet för pris-, rabatt- och krediteringsändringar är inte implementerade ännu. Bokföringsperioder kan däremot redan låsas explicit via Ekonomi → Bokslut."
+      />
 
-      {/* Logotyp */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Logotyp</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-3">
-          {logoFile ? (
-            <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20">
-              <ImageIcon className="w-6 h-6 text-muted-foreground" aria-hidden="true" />
-              <span className="text-sm text-foreground flex-1 truncate">{logoFile.name}</span>
-              <button
-                type="button"
-                onClick={() => setLogoFile(null)}
-                className="text-xs text-destructive hover:underline shrink-0"
-              >
-                Ta bort
-              </button>
-            </div>
-          ) : (
-            <label className="cursor-pointer block">
-              <div className="border-2 border-dashed border-border rounded-lg py-8 flex flex-col items-center gap-2 text-muted-foreground hover:bg-accent/20 transition-colors">
-                <Upload className="w-6 h-6" strokeWidth={1.75} aria-hidden="true" />
-                <p className="text-sm font-medium">Ladda upp ny logotyp</p>
-                <p className="text-xs">Maximal filstorlek 2 MB</p>
-              </div>
-              <input
-                type="file"
-                className="sr-only"
-                accept="image/*"
-                onChange={e => { const f = e.target.files?.[0]; if (f) setLogoFile(f); }}
-              />
-            </label>
-          )}
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <NotBuilt
+        title="Eftermiddagspris"
+        description="Tidsstyrt pris (annat pris efter en viss klockslag) är inte implementerat ännu — produktkatalogen har endast ett fast pris per artikel/paket idag."
+      />
 
-      {/* Kreditgräns */}
-      <Card>
-        <CardHeader className="pb-0 px-5 pt-5">
-          <CardTitle className="text-sm font-semibold">Kreditgräns</CardTitle>
-        </CardHeader>
-        <CardContent className="px-5 pb-4 pt-4 space-y-3">
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-foreground block">Standardkreditgräns för nya elever</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={creditLimit}
-                onChange={e => setCreditLimit(Number(e.target.value))}
-                min={0}
-                className="w-28 h-9 px-3 text-sm border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 text-center tabular-nums"
-              />
-              <span className="text-sm text-muted-foreground">kr</span>
-            </div>
-          </div>
-          <label className="flex items-start gap-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={blockSalesOver}
-              onChange={e => setBlockSalesOver(e.target.checked)}
-              className="rounded border-border accent-primary w-4 h-4 mt-0.5 shrink-0"
-            />
-            <span className="text-sm text-foreground">Tillåt inte försäljning till elever som har överskridit kreditgränsen</span>
-          </label>
-        </CardContent>
-        <CardFooter className="justify-end px-5 pb-5 pt-0">
-          <SaveBtn />
-        </CardFooter>
-      </Card>
+      <NotBuilt
+        title="Kreditgräns"
+        description="Standardkreditgräns per elev och blockering av försäljning över gränsen är inte implementerade ännu — det finns inget kreditgränsfält på elever och ingen sådan kontroll i köpflödet idag."
+      />
 
     </div>
   );

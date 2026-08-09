@@ -1,0 +1,20 @@
+import { chromium } from 'playwright';
+const SS = 'C:/Users/worya/AppData/Local/Temp/claude/c--Users-worya-Claude-Projects-Driving-Schools/4c399954-7c56-495d-a903-0dee13f6c564/scratchpad';
+const browser = await chromium.launch();
+const page = await browser.newPage();
+const errs = [];
+page.on('response', async (res) => { if (res.status() >= 400) errs.push(`[${res.status()}] ${res.request().method()} ${res.url()}`); });
+
+await page.goto('http://localhost:5173/demo', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(1500);
+await page.getByPlaceholder('Erik Lindqvist').fill('Sprint4H Validation');
+await page.getByPlaceholder('erik@korskola.se').fill('sprint4h-demo-request@example.test');
+await page.getByPlaceholder('070-123 45 67').fill('0701112233');
+await page.getByPlaceholder('Lindqvists Trafikskola').fill('Sprint4H Test Trafikskola');
+await page.getByPlaceholder('Uppsala').fill('Stockholm');
+await page.getByPlaceholder('t.ex. 45').fill('30');
+await page.getByRole('button', { name: 'Boka en personlig visning' }).last().click();
+await page.waitForTimeout(2500);
+await page.screenshot({ path: `${SS}/23-demo-submitted.png`, fullPage: true });
+console.log('errors:', JSON.stringify(errs, null, 2));
+await browser.close();

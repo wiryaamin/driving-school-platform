@@ -1,0 +1,23 @@
+# Trafikcloud — public marketing site only.
+# The authenticated application (dashboard, student/instructor/guardian
+# portals, platform administration) shares this origin but must never be
+# indexed — every route not explicitly allowed below is disallowed.
+
+User-agent: *
+
+# The site root ("/") is the marketing home for signed-out visitors
+# (RootRoute.tsx renders the landing page directly there) — crawlers are
+# never authenticated, so they only ever see the public landing page at "/".
+Allow: /$
+Allow: /business-challenges
+Allow: /onboarding
+Allow: /guides
+Allow: /support
+Allow: /about
+Allow: /contact
+Allow: /demo
+Allow: /legal/
+
+Disallow: /
+
+Sitemap: https://trafikcloud.se/sitemap.xml

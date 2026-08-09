@@ -60,30 +60,26 @@ export function LegalSettingsPage() {
     }
   }
 
-  const sections: { key: keyof LegalContent; title: string; description: string; linkLabel: string }[] = [
+  const sections: { key: keyof LegalContent; title: string; description: string }[] = [
     {
       key:       'terms_of_service',
       title:     'Användarvillkor',
-      description: 'Här fyller du i dina användarvillkor som du vill att eleven godkänner vid inloggning i utbildningsportalen. Du kan se dina användarvillkor här:',
-      linkLabel: 'användarvillkor',
+      description: 'Här fyller du i dina användarvillkor som du vill att eleven godkänner vid inloggning i utbildningsportalen.',
     },
     {
       key:       'privacy_policy',
       title:     'Integritetspolicy',
-      description: 'Här fyller du i din integritetspolicy som du vill att eleven ska godkänna vid inloggning i utbildningsportalen. Du kan se din integritetspolicy här:',
-      linkLabel: 'integritetspolicy',
+      description: 'Här fyller du i din integritetspolicy som du vill att eleven ska godkänna vid inloggning i utbildningsportalen.',
     },
     {
       key:       'ecommerce_terms',
       title:     'Köpvillkor för e-handel',
-      description: 'Här fyller du i dina köpvillkor som du vill att användaren godkänner vid köp i din e-handel. Du kan se dina köpvillkor här:',
-      linkLabel: 'köpvillkor',
+      description: 'Här fyller du i dina köpvillkor som du vill att användaren godkänner vid köp i din e-handel.',
     },
     {
       key:       'referral_terms',
       title:     'Villkor för värva en vän',
-      description: 'Här fyller du i dina villkor för kampanjen värva en vän. Se dina aktuella',
-      linkLabel: 'villkor för värva en vän',
+      description: 'Här fyller du i dina villkor för kampanjen värva en vän.',
     },
   ];
 
@@ -101,35 +97,20 @@ export function LegalSettingsPage() {
         <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
       </div>
 
+      <p className="text-xs text-muted-foreground -mt-2">
+        Texterna sparas här men visas för närvarande inte publikt (t.ex. i kassan eller på en villkorssida) — det finns ingen sådan yta i plattformen ännu.
+      </p>
+
       {sections.map(section => (
         <div key={section.key} className="space-y-2">
           <h2 className="text-sm font-semibold text-primary">{section.title}</h2>
-          <p className="text-xs text-muted-foreground">
-            {section.description}{' '}
-            <button type="button" className="text-primary hover:underline text-xs">
-              {section.linkLabel}
-            </button>.
-          </p>
+          <p className="text-xs text-muted-foreground">{section.description}</p>
 
-          {/* Toolbar */}
-          <div className="flex items-center gap-1 px-2 py-1.5 border border-border border-b-0 rounded-t-md bg-muted/30 text-muted-foreground text-xs">
-            <button type="button" className="hover:text-foreground px-1">↩</button>
-            <button type="button" className="hover:text-foreground px-1">↪</button>
-            <span className="px-1 border-l border-border ml-1">Paragraph</span>
-            <span className="flex-1" />
-            <button type="button" className="font-bold hover:text-foreground px-1">B</button>
-            <button type="button" className="italic hover:text-foreground px-1">I</button>
-            <button type="button" className="hover:text-foreground px-1">&quot;</button>
-            <button type="button" className="hover:text-foreground px-1">≡</button>
-            <button type="button" className="hover:text-foreground px-1">≡</button>
-            <button type="button" className="hover:text-foreground px-1">🔗</button>
-            <button type="button" className="hover:text-foreground px-1">🖼</button>
-          </div>
           <textarea
             value={content[section.key] ?? ''}
             onChange={e => setContent(prev => ({ ...prev, [section.key]: e.target.value }))}
             rows={6}
-            className="w-full px-3 py-2 text-sm border border-border rounded-b-md bg-background text-foreground
+            className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background text-foreground
                        focus:outline-none focus:ring-2 focus:ring-primary/40 resize-y"
           />
 

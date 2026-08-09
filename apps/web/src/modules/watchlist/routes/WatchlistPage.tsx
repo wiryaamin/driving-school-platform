@@ -300,12 +300,6 @@ export function WatchlistPage() {
         <button className="text-xs text-primary hover:underline">Ge feedback</button>
       </div>
 
-      {/* Local-state notice */}
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-300">
-        <Bell className="w-3.5 h-3.5 shrink-0" />
-        Bevakningar sparas bara i den här webbläsaren och försvinner vid radering av webbläsardata.
-      </div>
-
       {/* Tab bar + action */}
       <div className="flex items-end border-b border-border mb-5">
         {([

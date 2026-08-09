@@ -24,10 +24,20 @@
  *     tid?:              string,
  *     trafikskola?:      string,
  *     // Recipient contact (provide whichever channels are needed)
- *     student_phone?:    string,
- *     student_email?:    string,
- *     instructor_phone?: string,
- *     instructor_email?: string,
+ *     student_phone?:          string,
+ *     student_email?:          string,
+ *     instructor_phone?:       string,
+ *     instructor_email?:       string,
+ *     // Recipient identity — required for the push channel, which fans out
+ *     // to every active device registered in push_device_tokens for this
+ *     // recipient (see _shared/push-tokens.ts) rather than a single address.
+ *     student_id?:             string,
+ *     instructor_id?:          string,
+ *     // Optional — attaches the canonical Notification Center record (see
+ *     // runNotify's Step 1) to the business entity it concerns, e.g.
+ *     // reference_type: 'lesson_booking', reference_id: <booking id>.
+ *     reference_type?:         string,
+ *     reference_id?:           string,
  *   }
  *
  * Architecture:
@@ -40,6 +50,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { serveCors }         from '../_shared/cors.ts';
 import { dispatchMessage }   from '../_shared/comm-providers.ts';
 import { applyTemplateVars } from '../_shared/template-utils.ts';
+import { getActivePushTokens, revokePushToken, touchPushToken } from '../_shared/push-tokens.ts';
+import type { PushTokenOwnerColumn } from '../_shared/push-tokens.ts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -120,6 +132,7 @@ async function dispatchClaimed(supabase: any, msg: OutboundRow, cfg: ChannelConf
     from:     cfg?.from_address ?? null,
     subject:  msg.subject ?? undefined,
     body:     msg.body,
+    organizationId: msg.organization_id,
   });
 
   const failed        = result.status === 'failed';
@@ -237,8 +250,57 @@ async function runMaintenanceTick(supabase: any, correlationId: string, requestI
   return json({ dispatched, retried, errors });
 }
 
+// ─── Notification Center — canonical record metadata ─────────────────────────
+// Maps a trigger_event to the Notification Center's category enum, a stable
+// frontend route identifier (never a stored URL — the frontend resolves
+// this + reference_type/reference_id to an actual path, so a routing
+// change never needs a data migration), and a canonical business title.
+//
+// `title` is a deliberate, minimal first step toward the roadmap direction
+// (Handbook, "Push Notifications + Notification Center" entry): the
+// long-term design is a real canonical-template source the Notification
+// Center owns outright, with delivery channels (push/email/sms) holding
+// only channel-specific formatting of that same canonical wording. This
+// hardcoded map is that same idea in its smallest possible form — it
+// guarantees the canonical record always has a stable, business-meaningful
+// subject that does not depend on which delivery channel's template
+// happened to be selected for the body (some channels, e.g. SMS, have no
+// subject field at all).
+
+const TRIGGER_EVENT_META: Record<string, { title: string; category: string; deepLink: string | null }> = {
+  booking_confirmed:         { title: 'Körlektion bokad',           category: 'booking',  deepLink: 'booking_detail' },
+  booking_cancelled:         { title: 'Körlektion inställd',        category: 'booking',  deepLink: 'booking_detail' },
+  booking_rescheduled:       { title: 'Körlektion ombokad',         category: 'booking',  deepLink: 'booking_detail' },
+  booking_reminder_24h:      { title: 'Påminnelse: lektion imorgon', category: 'lesson',   deepLink: 'booking_detail' },
+  booking_reminder_same_day: { title: 'Påminnelse: lektion idag',    category: 'lesson',   deepLink: 'booking_detail' },
+  waitlist_promoted:         { title: 'Väntelistan uppdaterad',     category: 'waitlist', deepLink: 'waitlist' },
+  invoice_issued:            { title: 'Ny faktura',                 category: 'invoice',  deepLink: 'invoice_detail' },
+  invoice_overdue:           { title: 'Betalningspåminnelse',       category: 'invoice',  deepLink: 'invoice_detail' },
+  instructor_schedule_daily: { title: 'Dagens schema',              category: 'lesson',   deepLink: 'instructor_schedule' },
+  lead_created:              { title: 'Nytt lead mottaget',         category: 'system',   deepLink: null },
+  enrollment_request_created: { title: 'Ny anmälan mottagen',       category: 'system',   deepLink: null },
+};
+
+function humanizeTriggerEvent(triggerEvent: string): string {
+  const words = triggerEvent.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function notificationMetaFor(triggerEvent: string): { title: string; category: string; deepLink: string | null } {
+  return TRIGGER_EVENT_META[triggerEvent]
+    ?? { title: humanizeTriggerEvent(triggerEvent), category: 'system', deepLink: null };
+}
+
 // ─── Trigger-based notification dispatch ─────────────────────────────────────
 // Reads notification_rules for the org + trigger, renders templates, enqueues.
+//
+// Two independent steps (Notification Center, Version 1.1):
+//   1. Create exactly one canonical `notifications` row per distinct
+//      recipient among the enabled rules — the permanent, channel-agnostic
+//      business history the portal bell reads.
+//   2. The existing per-rule channel dispatch loop, now linking each
+//      `outbound_messages` row it creates back to that canonical record via
+//      `notification_id`. A channel failing here never touches step 1's row.
 
 // deno-lint-ignore no-explicit-any
 async function runNotify(supabase: any, body: Record<string, string>, correlationId: string, requestId: string): Promise<Response> {
@@ -247,6 +309,15 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
   if (!trigger_event || !organization_id) {
     return err(correlationId, requestId, 'trigger_event and organization_id are required', 400, 'VALIDATION_ERROR');
   }
+
+  // Optional caller-supplied override — e.g. a dunning stage's own
+  // admin-authored subject_template/message_template, which the caller
+  // resolves and passes here rather than this function knowing about
+  // per-stage schedules. When present, takes priority over whatever
+  // notification_templates row the matched rule points to, still rendered
+  // through the same applyTemplateVars(..., body) call below.
+  const overrideSubject = body['override_subject'];
+  const overrideBody    = body['override_body'];
 
   // Load enabled rules for this trigger + org
   const { data: rules = [], error: rulesErr } = await supabase
@@ -268,6 +339,70 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
   // Load channel configs for this org
   const cfgsByChannel = await loadChannelConfigs(supabase, organization_id);
 
+  // ── Step 1: one canonical notification per distinct recipient ────────────
+  const notificationIdByRecipientType = new Map<string, string>();
+  const meta = notificationMetaFor(trigger_event);
+
+  for (const recipientType of new Set(rules.map((r: { recipient_type: string }) => r.recipient_type))) {
+    const recipientId = recipientType === 'student'   ? body['student_id']
+                       : recipientType === 'instructor' ? body['instructor_id']
+                       : body['admin_id']; // recipientType === 'admin' — the org owner, resolved by the emitting handler
+    if (!recipientId) continue; // no identity to attach canonical history to — per-channel errors below still fire
+
+    // Render canonical content from a matching rule's template —
+    // channel-neutral, deterministic; individual channels may still render
+    // their own subject/body variants for actual delivery. Prefer sms/push
+    // over email: some 'email' templates predate the current
+    // {variable}-substitution format (an older Phase 3D seed inserted first,
+    // so a later Phase A seed for the same key+channel silently no-opped on
+    // its ON CONFLICT DO NOTHING) and would render literal unresolved
+    // {{mustache}} placeholders into the canonical record — confirmed via a
+    // live test during this feature's own end-to-end verification.
+    const primaryRule =
+      ['sms', 'push', 'email'].map(ch =>
+        rules.find((r: { recipient_type: string; channel: string }) => r.recipient_type === recipientType && r.channel === ch),
+      ).find(Boolean)
+      ?? rules.find((r: { recipient_type: string }) => r.recipient_type === recipientType);
+    const { data: primaryTpl } = await supabase
+      .from('notification_templates')
+      .select('subject, body_text')
+      .eq('id', primaryRule.template_id)
+      .single();
+
+    const { data: notif, error: notifErr } = await supabase
+      .from('notifications')
+      .insert({
+        organization_id,
+        recipient_id:   recipientId,
+        recipient_type: recipientType,
+        channel:        'internal',
+        status:         'sent',
+        template_key:   trigger_event,
+        locale:         'sv',
+        // subject is always the canonical business title (never the
+        // delivery template's subject, which may be null — SMS templates
+        // have no subject field — or absent depending on which channel was
+        // selected above). A canonical Notification Center record must
+        // always have a meaningful title.
+        subject:        meta.title,
+        body:           overrideBody ? applyTemplateVars(overrideBody, body) : (primaryTpl ? applyTemplateVars(primaryTpl.body_text, body) : null),
+        category:       meta.category,
+        deep_link_identifier: meta.deepLink,
+        reference_type: body['reference_type'] ?? null,
+        reference_id:   body['reference_id'] ?? null,
+        metadata:       { trigger_event },
+      })
+      .select('id')
+      .single();
+
+    if (notifErr) {
+      console.error('[comm-worker] notification create failed:', notifErr.message);
+    } else if (notif) {
+      notificationIdByRecipientType.set(recipientType as string, (notif as { id: string }).id);
+    }
+  }
+
+  // ── Step 2: existing per-channel dispatch, now linked to step 1's record ──
   let queued = 0;
   const errors: string[] = [];
 
@@ -284,11 +419,101 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
       continue;
     }
 
-    // Resolve recipient address from payload
-    const isStudent    = rule.recipient_type === 'student';
-    const channelKey   = rule.channel === 'email'
-      ? (isStudent ? 'student_email' : 'instructor_email')
-      : (isStudent ? 'student_phone' : 'instructor_phone');
+    const isStudent = rule.recipient_type === 'student';
+    const isAdmin   = rule.recipient_type === 'admin';
+    const cfg       = cfgsByChannel.get(rule.channel as Channel);
+
+    // Apply template variables — override takes priority when the caller
+    // supplied one (see overrideBody/overrideSubject above).
+    const finalBody    = overrideBody    ? applyTemplateVars(overrideBody, body)
+                        :                   applyTemplateVars(template.body_text, body);
+    const finalSubject = overrideSubject ? applyTemplateVars(overrideSubject, body)
+                        : template.subject ? applyTemplateVars(template.subject, body) : null;
+
+    // Push fans out to every active device token for the recipient, looked
+    // up from push_device_tokens — it has no single "address" in the payload
+    // the way email/sms/whatsapp do.
+    if (rule.channel === 'push') {
+      // push_device_tokens has no admin/staff owner column — only ever
+      // seeded for student/instructor rules, but guard against a rule an
+      // admin could still hand-create via the rules UI.
+      if (isAdmin) {
+        errors.push(`Push is not supported for recipient_type 'admin' (rule ${rule.id})`);
+        continue;
+      }
+      const ownerColumn: PushTokenOwnerColumn = isStudent ? 'student_id' : 'instructor_id';
+      const ownerId = isStudent ? body['student_id'] : body['instructor_id'];
+
+      if (!ownerId) {
+        errors.push(`No ${ownerColumn} in payload for rule ${rule.id}`);
+        continue;
+      }
+
+      const tokens = await getActivePushTokens(supabase, organization_id, ownerColumn, ownerId);
+      if (tokens.length === 0) {
+        errors.push(`No active device tokens for ${ownerColumn}=${ownerId}, rule ${rule.id}`);
+        continue;
+      }
+
+      for (const deviceToken of tokens) {
+        let status = 'queued';
+        let providerId: string | null = null;
+        let errorMsg: string | null = null;
+
+        if (cfg?.enabled) {
+          const result = await dispatchMessage({
+            channel:  'push',
+            provider: cfg.provider ?? null,
+            to:       deviceToken.token,
+            from:     cfg.from_address ?? null,
+            subject:  finalSubject ?? undefined,
+            body:     finalBody,
+            organizationId: organization_id,
+          });
+          status     = result.status;
+          providerId = result.providerId;
+          errorMsg   = result.error;
+
+          if (result.invalidToken) {
+            await revokePushToken(supabase, organization_id, ownerColumn, ownerId, deviceToken.id, 'provider_reported_invalid');
+          } else if (result.status === 'sent') {
+            void touchPushToken(supabase, deviceToken.id);
+          }
+        }
+
+        const { error: insertErr } = await supabase
+          .from('outbound_messages')
+          .insert({
+            organization_id:     organization_id,
+            channel:             'push',
+            recipient_type:      rule.recipient_type,
+            recipient_address:   deviceToken.token,
+            template_id:         rule.template_id,
+            subject:             finalSubject,
+            body:                finalBody,
+            status,
+            provider:            cfg?.provider ?? null,
+            provider_message_id: providerId,
+            error_message:       errorMsg,
+            sent_at:             status === 'sent' ? new Date().toISOString() : null,
+            metadata:            { trigger_event, rule_id: rule.id, device_token_id: deviceToken.id },
+            notification_id:     notificationIdByRecipientType.get(rule.recipient_type) ?? null,
+            created_by:          null,
+          });
+
+        if (insertErr) {
+          errors.push(`Insert failed for rule ${rule.id} (device ${deviceToken.id}): ${insertErr.message}`);
+        } else {
+          queued++;
+        }
+      }
+      continue;
+    }
+
+    // Resolve recipient address from payload (email/sms/whatsapp/voice)
+    const channelKey = rule.channel === 'email'
+      ? (isAdmin ? 'admin_email' : isStudent ? 'student_email' : 'instructor_email')
+      : (isAdmin ? 'admin_phone' : isStudent ? 'student_phone' : 'instructor_phone');
 
     const recipientAddress = body[channelKey] ?? '';
     if (!recipientAddress) {
@@ -296,11 +521,45 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
       continue;
     }
 
-    // Apply template variables
-    const finalBody    = applyTemplateVars(template.body_text, body);
-    const finalSubject = template.subject ? applyTemplateVars(template.subject, body) : null;
+    // Respect the student's own opt-out, same rule communications/index.ts's
+    // manual /send route already enforces (comment there: "found via live
+    // pilot simulation (a student opted out of email still received one)").
+    // That fix only ever covered the manual-compose path — every automated
+    // trigger (booking confirmed/cancelled/rescheduled, reminders, waitlist
+    // promotions, ...) went through this function and none of them checked
+    // it. Only email/sms have a dedicated opt-in column to enforce.
+    let optedOut = false;
+    if (isStudent && (rule.channel === 'email' || rule.channel === 'sms') && body['student_id']) {
+      const optInColumn = rule.channel === 'email' ? 'communication_opt_in_email' : 'communication_opt_in_sms';
+      const { data: student } = await supabase
+        .from('students')
+        .select(optInColumn)
+        .eq('id', body['student_id'])
+        .eq('organization_id', organization_id)
+        .maybeSingle();
+      optedOut = student != null && (student as Record<string, boolean>)[optInColumn] === false;
+    }
 
-    const cfg = cfgsByChannel.get(rule.channel as Channel);
+    if (optedOut) {
+      const { error: insertErr } = await supabase
+        .from('outbound_messages')
+        .insert({
+          organization_id:     organization_id,
+          channel:             rule.channel,
+          recipient_type:      rule.recipient_type,
+          recipient_address:   recipientAddress,
+          template_id:         rule.template_id,
+          subject:             finalSubject,
+          body:                finalBody,
+          status:              'cancelled',
+          error_message:       `Recipient has opted out of ${rule.channel} communications`,
+          metadata:            { trigger_event, rule_id: rule.id },
+          notification_id:     notificationIdByRecipientType.get(rule.recipient_type) ?? null,
+          created_by:          null,
+        });
+      if (insertErr) errors.push(`Insert failed for rule ${rule.id}: ${insertErr.message}`);
+      continue;
+    }
 
     // Attempt immediate dispatch if channel is configured + enabled
     let status = 'queued';
@@ -315,21 +574,12 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
         from:     cfg.from_address ?? null,
         subject:  finalSubject ?? undefined,
         body:     finalBody,
+        organizationId: organization_id,
       });
       status     = result.status;
       providerId = result.providerId;
       errorMsg   = result.error;
     }
-
-    // An immediate-dispatch failure must still be retry-eligible: without
-    // retry_after set here, claim_retry_messages() (which requires
-    // retry_after IS NOT NULL) can never reclaim this row, so it would stay
-    // 'failed' forever with no automatic recovery — confirmed live: 4 real
-    // Resend failures from this exact path, all retry_count=0/retry_after=
-    // null, never retried. retry_count starts at 1 since this dispatch
-    // attempt already happened; formula matches dispatchClaimed()'s own
-    // 2^retry_count-minutes backoff.
-    const failedImmediately = status === 'failed';
 
     // Insert into outbound_messages (service role bypasses RLS)
     const { error: insertErr } = await supabase
@@ -346,10 +596,9 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
         provider:            cfg?.provider ?? null,
         provider_message_id: providerId,
         error_message:       errorMsg,
-        retry_count:         failedImmediately ? 1 : 0,
-        retry_after:         failedImmediately ? new Date(Date.now() + 2 * 60 * 1000).toISOString() : null,
         sent_at:             status === 'sent' ? new Date().toISOString() : null,
         metadata:            { trigger_event, rule_id: rule.id },
+        notification_id:     notificationIdByRecipientType.get(rule.recipient_type) ?? null,
         created_by:          null,
       });
 

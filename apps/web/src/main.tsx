@@ -10,8 +10,15 @@ import { initMonitoring } from '@/core/monitoring/index.js';
 // rejections during bootstrap are captured too (Action 8).
 initMonitoring();
 
-// Register service worker for PWA + push notification support
-if ('serviceWorker' in navigator) {
+// Register service worker for PWA + push notification support.
+// Production only — sw.js caches JS/CSS cache-first with no revalidation
+// (see public/sw.js), which permanently freezes whatever bundle a dev
+// browser first fetched, silently defeating Vite HMR for every route it
+// touches. That's exactly what was found live: the demo requests table
+// rendered a build from weeks earlier despite the dev server and source
+// file being current, because a service worker registered during an
+// earlier session was still serving its first-ever cached copy.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
       console.warn('[SW] Registration failed:', err);

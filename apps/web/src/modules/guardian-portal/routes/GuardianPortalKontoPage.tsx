@@ -1,8 +1,58 @@
 import { useState } from 'react';
-import { User, Mail, Phone, Shield, AlertCircle, CheckCircle2, Pencil, X, Check, LogOut } from 'lucide-react';
-import { useGuardianMe, useUpdateGuardianMe, clearGuardianSession } from '../hooks/useGuardianPortal.js';
+import { User, Mail, Phone, Shield, AlertCircle, CheckCircle2, Pencil, X, Check, LogOut, Bell, BellOff } from 'lucide-react';
+import { useGuardianMe, useUpdateGuardianMe, useRegisterGuardianPushToken, clearGuardianSession } from '../hooks/useGuardianPortal.js';
 import { useGuardianSession } from './GuardianPortalLayout.js';
+import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
+
+const PUSH_STATUS_LABEL: Record<string, string> = {
+  not_configured: 'Push-notiser är inte tillgängliga just nu',
+  unsupported:    'Din webbläsare stöder inte push-notiser',
+  denied:         'Du har blockerat notiser för denna webbläsare',
+  registering:    'Aktiverar...',
+  error:          'Något gick fel — försök igen',
+};
+
+function GuardianNotificationsCard() {
+  const registerMutation = useRegisterGuardianPushToken();
+  const { status, error, subscribe } = usePushSubscription({
+    storageNamespace: 'guardian-portal',
+    register: (input) => registerMutation.mutateAsync(input),
+  });
+
+  const isGranted = status === 'granted';
+  const canEnable = status === 'default' || status === 'error';
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', isGranted ? 'bg-green-50' : 'bg-gray-50')}>
+          {isGranted ? <Bell className="w-4 h-4 text-green-600" /> : <BellOff className="w-4 h-4 text-gray-400" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Push-notiser</p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {isGranted ? 'Aktiverade för denna enhet.' : (PUSH_STATUS_LABEL[status] ?? 'Få notiser om ditt barns lektioner.')}
+          </p>
+        </div>
+        {canEnable && (
+          <button
+            onClick={() => void subscribe()}
+            className="text-xs font-semibold px-2.5 py-1 rounded-lg border hover:bg-blue-50 transition-colors shrink-0"
+            style={{ color: '#2D5BE3', borderColor: 'rgba(45,91,227,0.3)' }}
+          >
+            Aktivera
+          </button>
+        )}
+      </div>
+      {error && (
+        <div className="px-4 py-2 bg-red-50 border-t border-red-100">
+          <p className="text-[10px] text-red-600">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const BRAND = '#2D5BE3';
 
@@ -218,6 +268,9 @@ export function GuardianPortalKontoPage() {
           />
         </div>
       </div>
+
+      {/* Notifications */}
+      <GuardianNotificationsCard />
 
       {/* Session info */}
       <div className="bg-gray-50 rounded-2xl border border-gray-100 p-4 space-y-2">

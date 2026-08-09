@@ -222,6 +222,51 @@ export function useReverseJournalEntry() {
   });
 }
 
+export function usePostRefundJournalEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (refundId: string): Promise<{ journal_entry_id: string }> => {
+      const { data, error } = await supabase.functions.invoke<{ journal_entry_id: string }>(
+        'ledger/post-refund',
+        { method: 'POST', body: { refund_id: refundId } },
+      );
+      if (error) throw error;
+      return data ?? { journal_entry_id: '' };
+    },
+    onSuccess: () => invalidateLedger(qc),
+  });
+}
+
+export function usePostInvoiceJournalEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (invoiceId: string): Promise<{ journal_entry_id: string }> => {
+      const { data, error } = await supabase.functions.invoke<{ journal_entry_id: string }>(
+        'ledger/post-invoice',
+        { method: 'POST', body: { invoice_id: invoiceId } },
+      );
+      if (error) throw error;
+      return data ?? { journal_entry_id: '' };
+    },
+    onSuccess: () => invalidateLedger(qc),
+  });
+}
+
+export function usePostPaymentJournalEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (paymentId: string): Promise<{ journal_entry_id: string }> => {
+      const { data, error } = await supabase.functions.invoke<{ journal_entry_id: string }>(
+        'ledger/post-payment',
+        { method: 'POST', body: { payment_id: paymentId } },
+      );
+      if (error) throw error;
+      return data ?? { journal_entry_id: '' };
+    },
+    onSuccess: () => invalidateLedger(qc),
+  });
+}
+
 export function useGenerateLedgerSIE4() {
   const qc = useQueryClient();
   return useMutation({

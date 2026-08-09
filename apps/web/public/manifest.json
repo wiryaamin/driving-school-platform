@@ -1,6 +1,6 @@
 {
-  "name": "Trafikskola Platform",
-  "short_name": "Trafikskola",
+  "name": "Trafikcloud",
+  "short_name": "Trafikcloud",
   "description": "Hantera körlektioner, elever och schema",
   "start_url": "/",
   "display": "standalone",

@@ -5,7 +5,7 @@ import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/P
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
-import { useQueueHealth, useBulkRetry, useOutboxHealth } from '../hooks/useCommunication.js';
+import { useQueueHealth, useBulkRetry, useOutboxHealth, useRequeueDeadLetters } from '../hooks/useCommunication.js';
 import { ChannelBadge } from '../components/ChannelIcon.js';
 import type { CommChannel, QueueHealthChannel, OutboxHealthEventType } from '../hooks/useCommunication.js';
 
@@ -85,10 +85,18 @@ export function QueueMonitorPage() {
   const { data: health, isLoading, refetch, isFetching } = useQueueHealth();
   const { data: outboxHealth, isLoading: outboxLoading } = useOutboxHealth();
   const bulkRetry = useBulkRetry();
+  const requeueDeadLetters = useRequeueDeadLetters();
 
   function handleRetry(channel?: CommChannel) {
     bulkRetry.mutate(channel, {
       onSuccess: (r) => toast({ title: `${r.retried} meddelanden återköade` }),
+      onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+    });
+  }
+
+  function handleRequeueDeadLetters(eventType?: string) {
+    requeueDeadLetters.mutate(eventType, {
+      onSuccess: (r) => toast({ title: `${r.requeued} händelser återköade` }),
       onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
     });
   }
@@ -233,10 +241,24 @@ export function QueueMonitorPage() {
               <p className="text-xs text-muted-foreground mt-0.5">Bakgrundshändelser som väntar på bearbetning</p>
             </div>
             {!outboxLoading && (outboxHealth?.total_dead_letter ?? 0) > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                <Skull className="w-3 h-3" />
-                {outboxHealth!.total_dead_letter} i dead-letter
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                  <Skull className="w-3 h-3" />
+                  {outboxHealth!.total_dead_letter} i dead-letter
+                </span>
+                <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleRequeueDeadLetters(undefined)}
+                    disabled={requeueDeadLetters.isPending}
+                    className="h-7 text-xs gap-1"
+                  >
+                    <RotateCcw className={cn('w-3 h-3', requeueDeadLetters.isPending && 'animate-spin')} />
+                    Återköa alla
+                  </Button>
+                </PermissionGate>
+              </div>
             )}
           </div>
 
@@ -264,13 +286,14 @@ export function QueueMonitorPage() {
                   <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Bearbetas</th>
                   <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Dead-letter</th>
                   <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Äldst väntande</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {outboxLoading ? (
                   Array.from({ length: 2 }, (_, i) => (
                     <tr key={i}>
-                      {Array.from({ length: 5 }, (_, j) => (
+                      {Array.from({ length: 6 }, (_, j) => (
                         <td key={j} className="px-4 py-3">
                           <div className="h-4 bg-muted rounded animate-pulse" />
                         </td>
@@ -279,7 +302,7 @@ export function QueueMonitorPage() {
                   ))
                 ) : (outboxHealth?.by_event_type ?? []).length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-10 text-center">
+                    <td colSpan={6} className="py-10 text-center">
                       <p className="text-sm text-muted-foreground">Inga väntande bakgrundshändelser.</p>
                     </td>
                   </tr>
@@ -298,6 +321,22 @@ export function QueueMonitorPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{formatAge(row.oldest_pending_at)}</td>
+                      <td className="px-4 py-3">
+                        {row.dead_letter_count > 0 && (
+                          <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRequeueDeadLetters(row.event_type)}
+                              disabled={requeueDeadLetters.isPending}
+                              className="h-7 text-xs gap-1"
+                            >
+                              <RotateCcw className={cn('w-3 h-3', requeueDeadLetters.isPending && 'animate-spin')} />
+                              Återköa ({row.dead_letter_count})
+                            </Button>
+                          </PermissionGate>
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}

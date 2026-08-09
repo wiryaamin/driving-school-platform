@@ -5,10 +5,11 @@ import {
   Button, Skeleton,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Switch, Label,
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
-import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
+import { SubscriptionGate, useFeatureAccess } from '@core/rbac/SubscriptionGate.js';
 import {
   useMigrationSessions,
   useCreateMigrationSession,
@@ -20,6 +21,24 @@ import {
 import type { ColumnSpec } from '../lib/csvTemplates.js';
 import { cn } from '@/lib/utils.js';
 import { supabase } from '@core/api/supabase.js';
+import { FunctionsHttpError } from '@supabase/supabase-js';
+
+// supabase-js wraps a non-2xx response in FunctionsHttpError whose .message is
+// a generic "Edge Function returned a non-2xx status code" — the real
+// {code, message} body (e.g. the subscription-gate's "requires the
+// 'professional' plan" message) must be read from error.context separately
+// (same idiom as modules/students/hooks/usePersonLookup.ts).
+async function extractErrorMessage(error: unknown, fallback: string): Promise<string> {
+  if (error instanceof FunctionsHttpError) {
+    try {
+      const body = await error.context.json() as { message?: string };
+      if (typeof body.message === 'string' && body.message) return body.message;
+    } catch {
+      // response body wasn't JSON — fall through to fallback
+    }
+  }
+  return error instanceof Error ? error.message : fallback;
+}
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
@@ -204,14 +223,24 @@ function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void })
       const endpoint = ENTITY_ENDPOINT[entity];
       if (!endpoint) throw new Error('Ej tillgänglig');
 
-      const { data, error } = await supabase.functions.invoke<{ data: Record<string, unknown>[] }>(
-        `${endpoint}?per_page=1000`,
-        { method: 'GET' },
-      );
-      if (error) throw error;
+      // The list endpoints cap per_page at 500 server-side, so a school with
+      // more records than that needs multiple pages — keep fetching full
+      // pages (500 records back) until a short page signals the end.
+      const PAGE_SIZE = 500;
+      const MAX_PAGES = 50; // 25,000 records — generous ceiling against a runaway loop
+      const records: Record<string, unknown>[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const { data, error } = await supabase.functions.invoke<{ data: Record<string, unknown>[] }>(
+          `${endpoint}?per_page=${PAGE_SIZE}&page=${page}`,
+          { method: 'GET' },
+        );
+        if (error) throw error;
+        const batch = data?.data ?? [];
+        records.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+      }
 
-      const records = data?.data ?? [];
-      const rows    = records.map((r) => mapToExportRow(entity, r));
+      const rows = records.map((r) => mapToExportRow(entity, r));
       const csv     = buildCsv(entity, rows);
       const date    = new Date().toISOString().slice(0, 10);
       triggerCsvDownload(csv, `export-${entity}-${date}.csv`);
@@ -224,7 +253,7 @@ function ExportDialog({ open, onClose }: { open: boolean; onClose: () => void })
     } catch (e) {
       toast({
         title:       'Export misslyckades',
-        description: e instanceof Error ? e.message : 'Okänt fel',
+        description: await extractErrorMessage(e, 'Okänt fel'),
         variant:     'destructive',
       });
     } finally {
@@ -312,14 +341,19 @@ function CreateSessionDialog({
   const navigate   = useNavigate();
   const createMut  = useCreateMigrationSession();
   const [entity, setEntity] = useState<MigrationEntity>('students');
+  const [dryRun, setDryRun] = useState(false);
 
   const handleStart = async () => {
     try {
-      const session = await createMut.mutateAsync({ entity_type: entity });
+      const session = await createMut.mutateAsync({ entity_type: entity, dry_run: dryRun });
       onClose();
       navigate(`/settings/data-migration/${session.id}`);
-    } catch {
-      toast({ title: 'Kunde inte skapa import', description: 'Försök igen', variant: 'destructive' });
+    } catch (e) {
+      toast({
+        title:       'Kunde inte skapa import',
+        description: await extractErrorMessage(e, 'Försök igen'),
+        variant:     'destructive',
+      });
     }
   };
 
@@ -346,6 +380,13 @@ function CreateSessionDialog({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <Switch id="dry-run-toggle" checked={dryRun} onCheckedChange={setDryRun} />
+            <Label htmlFor="dry-run-toggle" className="text-sm">
+              Testläge (dry run) — validera och förhandsgranska utan att importera något
+            </Label>
           </div>
 
           <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 flex items-start gap-3">
@@ -507,6 +548,7 @@ export function DataMigrationPage() {
 
   const { data, isLoading } = useMigrationSessions();
   const sessions = data?.data ?? [];
+  const hasAccess = useFeatureAccess('admin:data-migration:run');
 
   return (
     <PageLayout>
@@ -523,14 +565,18 @@ export function DataMigrationPage() {
               <Download className="w-4 h-4 mr-2" />
               {showTemplates ? 'Dölj mallar' : 'Mallar'}
             </Button>
-            <Button variant="outline" onClick={() => setExportOpen(true)}>
-              <FileDown className="w-4 h-4 mr-2" />
-              Exportera
-            </Button>
-            <Button onClick={() => setDialogOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Ny import
-            </Button>
+            {hasAccess && (
+              <>
+                <Button variant="outline" onClick={() => setExportOpen(true)}>
+                  <FileDown className="w-4 h-4 mr-2" />
+                  Exportera
+                </Button>
+                <Button onClick={() => setDialogOpen(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Ny import
+                </Button>
+              </>
+            )}
           </div>
         }
       />

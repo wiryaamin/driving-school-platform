@@ -1,5 +1,9 @@
-import { CreditCard, AlertCircle, CheckCircle2, Clock, Lock, Package, Phone, Mail } from 'lucide-react';
-import { useGuardianMe, useGuardianBalance, useGuardianProgress } from '../hooks/useGuardianPortal.js';
+import { useState } from 'react';
+import { CreditCard, AlertCircle, CheckCircle2, Clock, Lock, Package, Phone, Mail, Loader2 } from 'lucide-react';
+import {
+  useGuardianMe, useGuardianBalance, useGuardianProgress,
+  useGuardianRequestCheckout, getStoredGuardianSession,
+} from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#2D5BE3';
@@ -21,6 +25,44 @@ function StatusBadge({ status }: { status: string }) {
     return <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">Betald</span>;
   }
   return <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-100">Obetald</span>;
+}
+
+// ─── Pay now ──────────────────────────────────────────────────────────────────
+// Creates a real Stripe Checkout session for this invoice (guardian-portal's
+// own POST /payments/stripe/checkout, mirroring the already-working
+// student-portal flow) and redirects to it. Closes the gap flagged in the
+// Business Workflow Execution Audit (2026-08-07): the Ekonomi tab's can_pay
+// gate existed but nothing behind it let a guardian actually pay — every
+// invoice dead-ended to "kontakta skolan för betalning".
+function PayNowButton({ invoiceId }: { invoiceId: string }) {
+  const checkout = useGuardianRequestCheckout();
+  const [error, setError] = useState<string | null>(null);
+  const isDemo = getStoredGuardianSession()?.token === 'demo';
+
+  function handleClick() {
+    setError(null);
+    checkout.mutate(invoiceId, {
+      onSuccess: (result) => { window.location.href = result.session_url; },
+      onError:   (e) => setError(e instanceof Error ? e.message : 'Betalning misslyckades. Försök igen.'),
+    });
+  }
+
+  if (isDemo) return null;
+
+  return (
+    <div className="pt-1">
+      <button
+        onClick={handleClick}
+        disabled={checkout.isPending}
+        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-70"
+        style={{ backgroundColor: BRAND }}
+      >
+        {checkout.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
+        Betala nu med kort
+      </button>
+      {error && <p className="text-xs text-red-600 mt-1.5 text-center">{error}</p>}
+    </div>
+  );
 }
 
 export function GuardianPortalEkonomiPage() {
@@ -270,6 +312,10 @@ export function GuardianPortalEkonomiPage() {
                     <p className="text-xs text-gray-500">Kontakta trafikskolan för att reglera betalning.</p>
                   )}
                 </div>
+
+                {(inv.status === 'issued' || inv.status === 'overdue') && (
+                  <PayNowButton invoiceId={inv.id} />
+                )}
               </div>
             ))}
           </div>

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { financeKeys } from './useFinance.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -7,6 +8,12 @@ export type OfferingStatus    = 'active' | 'archived';
 export type PackageType       = 'driving' | 'theory' | 'bundle' | 'other';
 export type LessonCategory    = 'driving' | 'theory' | 'risk1' | 'risk2' | 'intro' | string;
 export type OfferingVisibility = 'public' | 'website' | 'student_portal' | 'internal';
+export type MarketingBadge    = 'featured' | 'best_seller' | 'new' | 'campaign' | 'limited_offer' | 'recommended';
+
+export interface BundleCreditComponent {
+  lesson_category: LessonCategory;
+  quantity:        number;
+}
 
 export interface PackageOffering {
   id:               string;
@@ -17,8 +24,9 @@ export interface PackageOffering {
   package_type:     PackageType;
   lesson_category:  LessonCategory;
   quantity:         number;
-  bundle_credits:   unknown[];
+  bundle_credits:   BundleCreditComponent[];
   price:            number;
+  compare_at_price: number | null;
   currency:         string;
   vat_rate:         number;
   validity_days:    number | null;
@@ -28,6 +36,8 @@ export interface PackageOffering {
   package_code:     string | null;
   visibility:       OfferingVisibility;
   featured:         boolean;
+  included_items:   string[];
+  marketing_badges: MarketingBadge[];
   internal_notes:   string | null;
   archived_at:      string | null;
   archived_by:      string | null;
@@ -77,6 +87,8 @@ export interface CreateOfferingInput {
   lesson_category:   LessonCategory;
   quantity:          number;
   price:             number;
+  compare_at_price?: number | undefined;
+  bundle_credits?:   BundleCreditComponent[] | undefined;
   package_type?:     PackageType | undefined;
   description?:      string | undefined;
   vat_rate?:         number | undefined;
@@ -87,20 +99,25 @@ export interface CreateOfferingInput {
   package_code?:     string | undefined;
   visibility?:       OfferingVisibility | undefined;
   featured?:         boolean | undefined;
+  included_items?:   string[] | undefined;
+  marketing_badges?: MarketingBadge[] | undefined;
   internal_notes?:   string | undefined;
 }
 
 export interface UpdateOfferingInput {
-  name?:           string | undefined;
-  description?:    string | null | undefined;
-  price?:          number | undefined;
-  vat_rate?:       number | undefined;
-  validity_days?:  number | null | undefined;
-  sort_order?:     number | undefined;
-  package_code?:   string | null | undefined;
-  visibility?:     OfferingVisibility | undefined;
-  featured?:       boolean | undefined;
-  internal_notes?: string | null | undefined;
+  name?:             string | undefined;
+  description?:      string | null | undefined;
+  price?:            number | undefined;
+  compare_at_price?: number | null | undefined;
+  vat_rate?:         number | undefined;
+  validity_days?:    number | null | undefined;
+  sort_order?:       number | undefined;
+  package_code?:     string | null | undefined;
+  visibility?:       OfferingVisibility | undefined;
+  featured?:         boolean | undefined;
+  included_items?:   string[] | undefined;
+  marketing_badges?: MarketingBadge[] | undefined;
+  internal_notes?:   string | null | undefined;
 }
 
 export interface CreateCatalogEntryInput {
@@ -177,12 +194,12 @@ export function usePackageOffering(id: string | null) {
   return useQuery({
     queryKey: packageKeys.offering(id ?? ''),
     queryFn:  async (): Promise<PackageOffering> => {
-      const { data, error } = await supabase.functions.invoke<PackageOffering>(
+      const { data, error } = await supabase.functions.invoke<{ data: PackageOffering }>(
         `packages/${id}`, { method: 'GET' },
       );
       if (error) throw error;
-      if (!data) throw new Error('Package offering not found');
-      return data;
+      if (!data?.data) throw new Error('Package offering not found');
+      return data.data;
     },
     enabled:   Boolean(id),
     staleTime: 30_000,
@@ -223,11 +240,11 @@ export function useCreateOffering() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateOfferingInput): Promise<PackageOffering> => {
-      const { data, error } = await supabase.functions.invoke<PackageOffering>(
+      const { data, error } = await supabase.functions.invoke<{ data: PackageOffering }>(
         'packages', { method: 'POST', body: input },
       );
       if (error) throw error;
-      return data ?? ({} as PackageOffering);
+      return data?.data ?? ({} as PackageOffering);
     },
     onSuccess: () => invalidatePackages(qc),
   });
@@ -237,11 +254,11 @@ export function useUpdateOffering(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: UpdateOfferingInput): Promise<PackageOffering> => {
-      const { data, error } = await supabase.functions.invoke<PackageOffering>(
+      const { data, error } = await supabase.functions.invoke<{ data: PackageOffering }>(
         `packages/${id}`, { method: 'PATCH', body: input },
       );
       if (error) throw error;
-      return data ?? ({} as PackageOffering);
+      return data?.data ?? ({} as PackageOffering);
     },
     onSuccess: () => invalidatePackages(qc),
   });
@@ -264,11 +281,11 @@ export function useCreateCatalogEntry() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateCatalogEntryInput): Promise<PackageCatalogEntry> => {
-      const { data, error } = await supabase.functions.invoke<PackageCatalogEntry>(
+      const { data, error } = await supabase.functions.invoke<{ data: PackageCatalogEntry }>(
         'packages/catalog', { method: 'POST', body: input },
       );
       if (error) throw error;
-      return data ?? ({} as PackageCatalogEntry);
+      return data?.data ?? ({} as PackageCatalogEntry);
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: packageKeys.catalog() }),
   });
@@ -304,6 +321,14 @@ export function usePurchasePackage() {
       if (error) throw error;
       return data ?? ({} as StudentPackage);
     },
-    onSuccess: () => invalidatePackages(qc),
+    onSuccess: (_data, variables) => {
+      invalidatePackages(qc);
+      // A package purchase also creates an invoice and a finance-side
+      // package record, both read through separate query keys in
+      // useFinance.ts (the student Konto tab's "Ekonomi" section) —
+      // without this they stay stale until the next full page load.
+      void qc.invalidateQueries({ queryKey: financeKeys.invoices() });
+      void qc.invalidateQueries({ queryKey: financeKeys.packages(variables.studentId) });
+    },
   });
 }

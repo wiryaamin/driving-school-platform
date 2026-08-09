@@ -1,13 +1,15 @@
 import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   MessageSquare, CalendarDays, Bell, Loader2, AlertCircle,
-  CheckCircle2, XCircle, Clock, Mail, Smartphone, Star,
+  CheckCircle2, XCircle, Clock, CreditCard, Users2,
 } from 'lucide-react';
 import {
   usePortalHistory,
   usePortalBookings,
   usePortalNotifications,
+  useMarkNotificationRead,
+  useMarkAllNotificationsRead,
   type PortalNotification,
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
@@ -41,59 +43,63 @@ function timeAgo(iso: string): string {
 }
 
 // ─── Notification template helpers ───────────────────────────────────────────
+// template_key on a canonical notification is the Communication Engine's
+// trigger_event (e.g. 'booking_confirmed') — see communication-worker's
+// runNotify(), Notification Center Step 1.
 
 const TEMPLATE_LABELS: Record<string, string> = {
-  booking_confirmation:    'Bokning bekräftad',
-  booking_reminder:        'Påminnelse om lektion',
-  booking_cancellation:    'Bokning avbokad',
-  booking_rescheduled:     'Lektion ombokad',
-  waitlist_notification:   'Plats tillgänglig',
-  waitlist_reminder:       'Påminnelse — väntelista',
-  payment_reminder:        'Betalningspåminnelse',
-  payment_received:        'Betalning mottagen',
-  invoice_created:         'Ny faktura',
-  welcome:                 'Välkommen',
-  portal_access:           'Tillgång till elevportalen',
-  lesson_feedback:         'Återkoppling från lärare',
-  account_update:          'Kontouppdatering',
+  booking_confirmed:         'Bokning bekräftad',
+  booking_cancelled:         'Bokning avbokad',
+  booking_rescheduled:       'Lektion ombokad',
+  booking_reminder_24h:      'Påminnelse om lektion',
+  booking_reminder_same_day: 'Påminnelse om lektion idag',
+  waitlist_promoted:         'Plats tillgänglig',
+  invoice_issued:            'Ny faktura',
+  invoice_overdue:           'Betalningspåminnelse',
 };
 
 const TEMPLATE_ICONS: Record<string, React.ElementType> = {
-  booking_confirmation:    CheckCircle2,
-  booking_reminder:        Bell,
-  booking_cancellation:    XCircle,
-  booking_rescheduled:     Clock,
-  waitlist_notification:   Bell,
-  waitlist_reminder:       Clock,
-  payment_reminder:        AlertCircle,
-  payment_received:        CheckCircle2,
-  invoice_created:         AlertCircle,
-  welcome:                 Star,
-  portal_access:           Star,
-  lesson_feedback:         Star,
-  account_update:          Bell,
+  booking_confirmed:         CheckCircle2,
+  booking_cancelled:         XCircle,
+  booking_rescheduled:       Clock,
+  booking_reminder_24h:      Bell,
+  booking_reminder_same_day: Bell,
+  waitlist_promoted:         Users2,
+  invoice_issued:            CreditCard,
+  invoice_overdue:           AlertCircle,
 };
 
 const TEMPLATE_COLORS: Record<string, string> = {
-  booking_confirmation:    'bg-green-50 text-green-600',
-  booking_reminder:        'bg-blue-50 text-blue-600',
-  booking_cancellation:    'bg-red-50 text-red-600',
-  booking_rescheduled:     'bg-amber-50 text-amber-600',
-  waitlist_notification:   'bg-blue-50 text-blue-600',
-  waitlist_reminder:       'bg-gray-50 text-gray-500',
-  payment_reminder:        'bg-orange-50 text-orange-600',
-  payment_received:        'bg-green-50 text-green-600',
-  invoice_created:         'bg-orange-50 text-orange-600',
-  welcome:                 'bg-purple-50 text-purple-600',
-  portal_access:           'bg-purple-50 text-purple-600',
-  lesson_feedback:         'bg-amber-50 text-amber-600',
-  account_update:          'bg-blue-50 text-blue-600',
+  booking_confirmed:         'bg-green-50 text-green-600',
+  booking_cancelled:         'bg-red-50 text-red-600',
+  booking_rescheduled:       'bg-amber-50 text-amber-600',
+  booking_reminder_24h:      'bg-blue-50 text-blue-600',
+  booking_reminder_same_day: 'bg-blue-50 text-blue-600',
+  waitlist_promoted:         'bg-blue-50 text-blue-600',
+  invoice_issued:            'bg-orange-50 text-orange-600',
+  invoice_overdue:           'bg-orange-50 text-orange-600',
 };
 
-const CHANNEL_ICON: Record<string, React.ElementType> = {
-  email: Mail,
-  sms:   Smartphone,
-  push:  Bell,
+// Deep-link identifiers are stable route keys chosen by the Communication
+// Engine (never a stored URL) — resolved to an actual student-portal path
+// here, so a future routing change never needs a database migration.
+const DEEP_LINK_ROUTES: Record<string, string> = {
+  booking_detail: '/portal/bokningar',
+  waitlist:       '/portal/boka',
+  invoice_detail: '/portal/konto',
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  booking:     'Bokning',
+  lesson:      'Lektion',
+  payment:     'Betalning',
+  invoice:     'Faktura',
+  waitlist:    'Väntelista',
+  certificate: 'Intyg',
+  account:     'Konto',
+  security:    'Säkerhet',
+  system:      'System',
+  marketing:   'Erbjudande',
 };
 
 function notifLabel(templateKey: string): string {
@@ -105,14 +111,26 @@ function notifIcon(templateKey: string): React.ElementType {
 function notifColor(templateKey: string): string {
   return TEMPLATE_COLORS[templateKey] ?? 'bg-gray-50 text-gray-500';
 }
+function resolveDeepLink(identifier: string | null): string | null {
+  if (!identifier) return null;
+  return DEEP_LINK_ROUTES[identifier] ?? null;
+}
 
 // ─── Notification card ────────────────────────────────────────────────────────
 
 function NotificationCard({ notif }: { notif: PortalNotification }) {
-  const Icon    = notifIcon(notif.template_key);
-  const color   = notifColor(notif.template_key);
-  const label   = notifLabel(notif.template_key);
-  const ChIcon  = CHANNEL_ICON[notif.channel] ?? Bell;
+  const navigate   = useNavigate();
+  const markRead   = useMarkNotificationRead();
+  const Icon       = notifIcon(notif.template_key);
+  const color      = notifColor(notif.template_key);
+  // notif.subject is the Notification Center's canonical business title
+  // (always populated — see communication-worker's TRIGGER_EVENT_META) and
+  // is the single source of truth for the card's headline. notifLabel() is
+  // only a defensive fallback for the (no longer expected) case of a
+  // pre-Notification-Center row that somehow still has no subject.
+  const title      = notif.subject ?? notifLabel(notif.template_key);
+  const isUnread   = notif.read_at === null;
+  const targetPath = resolveDeepLink(notif.deep_link_identifier);
 
   // Strip HTML tags from body for a plain-text preview
   const bodyText = notif.body
@@ -122,29 +140,46 @@ function NotificationCard({ notif }: { notif: PortalNotification }) {
     ? `${bodyText.slice(0, 117)}…`
     : bodyText;
 
+  function handleClick() {
+    if (isUnread) markRead.mutate(notif.id);
+    if (targetPath) navigate(targetPath);
+  }
+
   return (
-    <div className="flex items-start gap-3 px-4 py-4 border-b border-gray-50 last:border-0">
-      <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5', color)}>
-        <Icon className="w-4 h-4" strokeWidth={1.75} />
+    <button
+      onClick={handleClick}
+      className={cn(
+        'w-full flex items-start gap-3 px-4 py-4 border-b border-gray-50 last:border-0 text-left transition-colors',
+        targetPath || isUnread ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-default',
+        isUnread ? 'bg-blue-50/40' : 'bg-transparent',
+      )}
+    >
+      <div className="relative shrink-0">
+        <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center mt-0.5', color)}>
+          <Icon className="w-4 h-4" strokeWidth={1.75} />
+        </div>
+        {isUnread && (
+          <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[#684EFF] border-2 border-white" />
+        )}
       </div>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-gray-900 leading-tight">{label}</p>
+          <p className={cn('text-sm leading-tight', isUnread ? 'font-bold text-gray-900' : 'font-semibold text-gray-700')}>
+            {title}
+          </p>
           <span className="text-[10px] text-gray-400 shrink-0">{timeAgo(notif.created_at)}</span>
         </div>
-        {notif.subject && (
-          <p className="text-xs text-gray-600 mt-0.5 leading-snug">{notif.subject}</p>
-        )}
-        {preview && !notif.subject && (
+        {preview && (
           <p className="text-xs text-gray-500 mt-0.5 leading-snug">{preview}</p>
         )}
-        <div className="flex items-center gap-1 mt-1">
-          <ChIcon className="w-3 h-3 text-gray-300" />
-          <span className="text-[10px] text-gray-400 capitalize">{notif.channel}</span>
-        </div>
+        {notif.category && (
+          <span className="inline-block mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-50 text-gray-500">
+            {CATEGORY_LABELS[notif.category] ?? notif.category}
+          </span>
+        )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -302,8 +337,10 @@ export function StudentPortalMeddelandenPage() {
   const { data: history = [],       isLoading: histLoading }   = usePortalHistory();
   const { data: bookings = [],      isLoading: bookLoading }   = usePortalBookings();
   const { data: notifications = [], isLoading: notifLoading }  = usePortalNotifications();
+  const markAllRead = useMarkAllNotificationsRead();
 
-  const isLoading = histLoading || bookLoading || notifLoading;
+  const isLoading  = histLoading || bookLoading || notifLoading;
+  const unreadCount = notifications.filter(n => n.read_at === null).length;
 
   const notesItems = useMemo(
     () => history
@@ -345,9 +382,19 @@ export function StudentPortalMeddelandenPage() {
           {/* System notifications */}
           {notifications.length > 0 && (
             <div className="space-y-2">
-              <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide">
-                Notiser ({notifications.length})
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide">
+                  Notiser ({notifications.length})
+                </p>
+                {unreadCount > 0 && (
+                  <button
+                    onClick={() => markAllRead.mutate()}
+                    className="text-[10px] font-semibold text-gray-400 hover:text-[#684EFF] transition-colors"
+                  >
+                    Markera alla som lästa
+                  </button>
+                )}
+              </div>
               <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
                 {notifications.map(n => (
                   <NotificationCard key={n.id} notif={n} />

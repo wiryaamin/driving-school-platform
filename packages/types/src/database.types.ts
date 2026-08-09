@@ -755,7 +755,7 @@ export interface Database {
           instructor_id:        string;
           vehicle_id:           string | null;
           location_id:          string | null;
-          lesson_type_id:       string;
+          lesson_type_id:       string | null;
           starts_at:            string;
           ends_at:              string;
           timezone:             string;
@@ -780,7 +780,7 @@ export interface Database {
           instructor_id:         string;
           vehicle_id?:           string | null;
           location_id?:          string | null;
-          lesson_type_id:        string;
+          lesson_type_id?:       string | null;
           starts_at:             string;
           ends_at:               string;
           timezone?:             string;
@@ -813,7 +813,7 @@ export interface Database {
           student_id:           string;
           instructor_id:        string;
           vehicle_id:           string | null;
-          lesson_type_id:       string;
+          lesson_type_id:       string | null;
           location_id:          string | null;
           starts_at:            string;
           ends_at:              string;
@@ -846,7 +846,7 @@ export interface Database {
           // Pass them if you need to override; otherwise leave blank.
           instructor_id?:         string;
           vehicle_id?:            string | null;
-          lesson_type_id?:        string;
+          lesson_type_id?:        string | null;
           location_id?:           string | null;
           starts_at?:             string;
           ends_at?:               string;

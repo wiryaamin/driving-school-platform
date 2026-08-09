@@ -1,22 +1,24 @@
 import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Textarea, Button, Badge, toast,
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
-import { ArrowRight, Building2, User as UserIcon, MessageSquare } from 'lucide-react';
-import type { DemoRequest, DemoRequestStatus } from '../hooks/useDemoRequests.js';
-import { STATUS_LABEL, STATUS_BADGE_CLASS } from '../lib/demoRequestStatus.js';
+import { ArrowRight, Building2, User as UserIcon, MessageSquare, CheckCircle2, Circle, Lock, AlertTriangle, XCircle, Trash2 } from 'lucide-react';
+import { useAdminEmailAvailability, useOrgNumberAvailability } from '../hooks/useAdminEmailAvailability.js';
+import type { DemoRequest, DemoRequestStatus, DemoRequestRejectionReason } from '../hooks/useDemoRequests.js';
+import { STATUS_LABEL, STATUS_BADGE_CLASS, REJECTION_REASON_LABEL, REJECTION_REASON_OPTIONS } from '../lib/demoRequestStatus.js';
 import type { PlatformAdminDetail } from '../hooks/usePlatformOpsCenter.js';
 import {
   useUpdateDemoRequestStatus, useAssignDemoRequest, useUpdateDemoRequestNotes,
-  useConvertDemoRequestToCustomer,
+  useConvertDemoRequestToCustomer, useMarkDemoRequestReviewed, useApproveDemoRequestOnboarding,
+  useRejectDemoRequest, useDeleteDemoRequest,
 } from '../hooks/useDemoRequestMutations.js';
 import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
 
@@ -57,6 +59,104 @@ function SectionCard({ icon: Icon, title, children }: { icon: typeof Building2; 
   );
 }
 
+// ─── Mandatory onboarding workflow: Step 1 (Review Customer) / Step 2
+// (Approve Onboarding) ─────────────────────────────────────────────────────
+//
+// These are the first two of the Product Owner's mandatory 10-step
+// onboarding workflow (see OnboardingJourneyPanel.tsx for the full 10-step
+// view once a customer exists). They live here, on the demo request itself,
+// because both steps happen BEFORE an organization exists — Step 2 (Approve
+// Onboarding) gates Step 3-4-5 (Choose Subscription / Create Organization /
+// Create Administrator, all performed together by Convert to Customer).
+
+function WorkflowStepsCard({ request }: { request: DemoRequest }) {
+  const markReviewed      = useMarkDemoRequestReviewed();
+  const approveOnboarding = useApproveDemoRequestOnboarding();
+
+  const reviewed = Boolean(request.reviewed_at);
+  const approved = Boolean(request.approved_at);
+
+  function handleMarkReviewed() {
+    markReviewed.mutate(request.id, {
+      onSuccess: () => toast({ title: 'Markerad som granskad' }),
+      onError:   err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleApprove() {
+    approveOnboarding.mutate(request.id, {
+      onSuccess: () => toast({ title: 'Onboarding godkänd' }),
+      onError:   err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  return (
+    <SectionCard icon={CheckCircle2} title="Onboarding-arbetsflöde">
+      <div className="py-1">
+        <div className="flex items-start gap-3 py-2.5 border-b border-border last:border-0">
+          <div className="shrink-0 mt-0.5">
+            {reviewed
+              ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              : <Circle className="w-4 h-4 text-amber-500" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className={cn('text-sm', reviewed ? 'text-foreground font-medium' : 'text-muted-foreground')}>1. Review Customer</p>
+              {reviewed && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                  Klar
+                </span>
+              )}
+            </div>
+            {!reviewed && (
+              <Button
+                size="sm"
+                className="mt-1.5 h-7 text-xs bg-amber-500 hover:bg-amber-600 text-white border-0"
+                disabled={markReviewed.isPending}
+                onClick={handleMarkReviewed}
+              >
+                {markReviewed.isPending ? 'Vänta…' : 'Markera som granskad'}
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="flex items-start gap-3 py-2.5">
+          <div className="shrink-0 mt-0.5">
+            {approved
+              ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              : reviewed
+                ? <Circle className="w-4 h-4 text-amber-500" />
+                : <Lock className="w-4 h-4 text-muted-foreground/50" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className={cn('text-sm', approved ? 'text-foreground font-medium' : 'text-muted-foreground')}>2. Approve Onboarding</p>
+              {approved && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                  Klar
+                </span>
+              )}
+            </div>
+            {!approved && !reviewed && (
+              <p className="text-xs text-muted-foreground mt-0.5">Kunden måste granskas först</p>
+            )}
+            {!approved && reviewed && (
+              <Button
+                size="sm"
+                className="mt-1.5 h-7 text-xs bg-amber-500 hover:bg-amber-600 text-white border-0"
+                disabled={approveOnboarding.isPending}
+                onClick={handleApprove}
+              >
+                {approveOnboarding.isPending ? 'Vänta…' : 'Godkänn onboarding'}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 // ─── Convert to Customer (Automated Customer Provisioning) ────────────────────
 //
 // Pre-filled from the demo request, but editable — the platform admin reviews
@@ -65,6 +165,7 @@ function SectionCard({ icon: Icon, title, children }: { icon: typeof Building2; 
 
 function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; request: DemoRequest | null; onClose: () => void }) {
   const convert = useConvertDemoRequestToCustomer();
+  const navigate = useNavigate();
 
   const form = useForm<ProvisioningFormValues>({
     resolver: zodResolver(provisioningSchema),
@@ -99,6 +200,12 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
 
   const tier = form.watch('subscription_tier');
   const isTrial = tier === 'trial';
+  const adminEmail = form.watch('admin_email');
+  const emailCheck = useAdminEmailAvailability(adminEmail, open);
+  const emailBlocked = emailCheck === 'self' || emailCheck === 'taken';
+  const orgNumber = form.watch('org_number');
+  const orgNumberCheck = useOrgNumberAvailability(orgNumber, open);
+  const orgNumberBlocked = orgNumberCheck === 'taken';
 
   function onSubmit(values: ProvisioningFormValues) {
     if (!request) return;
@@ -115,9 +222,13 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
         adminEmail:       values.admin_email,
       },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
           toast({ title: 'Organisation skapad', description: `${values.name} — inbjudan skickas till ${values.admin_email}` });
           onClose();
+          // Continue straight into the Onboarding workspace for the new
+          // customer — the platform administrator should never land back
+          // on the demo request list wondering what happens next.
+          navigate(`/platform/organizations/${result.organization_id}?tab=onboarding`);
         },
         onError: (err) => {
           // POST /provision returns a friendly message, not a raw Postgres
@@ -169,6 +280,14 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
                 <FormLabel>Org.nummer</FormLabel>
                 <FormControl><Input placeholder="556789-1234" {...field} /></FormControl>
                 <FormMessage />
+                {orgNumberCheck === 'taken' && (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-800 dark:text-amber-400">
+                      Det här org.numret används redan av en annan organisation på plattformen.
+                    </p>
+                  </div>
+                )}
               </FormItem>
             )} />
 
@@ -223,18 +342,157 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
                   <FormLabel>E-post *</FormLabel>
                   <FormControl><Input type="email" {...field} /></FormControl>
                   <FormMessage />
+                  {emailCheck === 'checking' && (
+                    <p className="text-xs text-muted-foreground">Kontrollerar e-postadressen…</p>
+                  )}
+                  {emailCheck === 'self' && (
+                    <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-800 dark:text-amber-400">
+                        Det här är din egen inloggning som plattformsadministratör — den kan inte återanvändas som kundens administratörskonto.
+                        Ange en annan e-postadress för kundens administratör.
+                      </p>
+                    </div>
+                  )}
+                  {emailCheck === 'taken' && (
+                    <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-800 dark:text-amber-400">
+                        Det finns redan ett konto på plattformen med den här e-postadressen. Ange en annan e-postadress för att skapa kundens administratör.
+                      </p>
+                    </div>
+                  )}
                 </FormItem>
               )} />
             </div>
 
             <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={onClose} disabled={convert.isPending}>Avbryt</Button>
-              <Button type="submit" disabled={convert.isPending}>
+              <Button
+                type="submit"
+                disabled={convert.isPending || emailBlocked || orgNumberBlocked}
+                title={emailBlocked ? 'Ange en annan e-postadress innan du fortsätter' : orgNumberBlocked ? 'Ange ett annat org.nummer innan du fortsätter' : undefined}
+              >
                 {convert.isPending ? 'Skapar…' : 'Skapa organisation'}
               </Button>
             </DialogFooter>
           </form>
         </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Reject ────────────────────────────────────────────────────────────────────
+//
+// The missing counterpart to Convert to Customer — declining a request needs
+// a real, recorded reason (own records) and a way to tell the prospect
+// something actionable, not just a silent status flip.
+
+function RejectDemoRequestDialog({ open, request, onClose }: { open: boolean; request: DemoRequest | null; onClose: () => void }) {
+  const reject = useRejectDemoRequest();
+  const [reason, setReason] = useState<DemoRequestRejectionReason | ''>('');
+  const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (open) { setReason(''); setDescription(''); }
+  }, [open]);
+
+  function handleSubmit() {
+    if (!request || !reason) return;
+    if (reason === 'other' && description.trim().length === 0) {
+      toast({ title: 'Beskrivning krävs', description: 'Ange en beskrivning när orsaken är "Annat".', variant: 'destructive' });
+      return;
+    }
+    reject.mutate(
+      { id: request.id, reason, description: description.trim() },
+      {
+        onSuccess: (result) => {
+          toast({
+            title: 'Förfrågan avvisad',
+            description: result.email_sent
+              ? 'Kunden har meddelats via e-post.'
+              : 'Kunden kunde inte meddelas via e-post — kontakta dem gärna direkt.',
+          });
+          onClose();
+        },
+        onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Avvisa förfrågan</DialogTitle></DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">
+          {request?.school_name} — kunden meddelas via e-post om orsaken tillåter det.
+        </p>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground" htmlFor="reject-reason">Orsak *</label>
+            <Select value={reason} onValueChange={(v) => setReason(v as DemoRequestRejectionReason)}>
+              <SelectTrigger id="reject-reason"><SelectValue placeholder="Välj orsak…" /></SelectTrigger>
+              <SelectContent>
+                {REJECTION_REASON_OPTIONS.map((r) => (
+                  <SelectItem key={r} value={r}>{REJECTION_REASON_LABEL[r]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {reason === 'duplicate_email' && (
+              <p className="text-xs text-muted-foreground">
+                Kunden uppmanas i mailet att skicka in en ny förfrågan med en annan e-postadress.
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-foreground" htmlFor="reject-description">
+              Beskrivning {reason === 'other' ? '*' : '(valfritt)'}
+            </label>
+            <Textarea
+              id="reject-description" rows={3} value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Intern och/eller kundriktad förklaring…"
+            />
+          </div>
+        </div>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={onClose} disabled={reject.isPending}>Avbryt</Button>
+          <Button variant="destructive" onClick={handleSubmit} disabled={reject.isPending || !reason}>
+            {reject.isPending ? 'Avvisar…' : 'Avvisa förfrågan'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Delete ────────────────────────────────────────────────────────────────────
+
+function DeleteDemoRequestDialog({ open, request, onClose, onDeleted }: { open: boolean; request: DemoRequest | null; onClose: () => void; onDeleted: () => void }) {
+  const del = useDeleteDemoRequest();
+
+  function handleConfirm() {
+    if (!request) return;
+    del.mutate(request.id, {
+      onSuccess: () => { toast({ title: 'Förfrågan borttagen' }); onClose(); onDeleted(); },
+      onError: (err) => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader><DialogTitle>Ta bort förfrågan</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {request?.school_name} tas bort permanent från listan. Detta går inte att ångra.
+        </p>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={onClose} disabled={del.isPending}>Avbryt</Button>
+          <Button variant="destructive" onClick={handleConfirm} disabled={del.isPending}>
+            {del.isPending ? 'Tar bort…' : 'Ta bort permanent'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -258,6 +516,8 @@ interface DemoRequestDetailSheetProps {
 export function DemoRequestDetailSheet({ open, request, admins, onClose }: DemoRequestDetailSheetProps) {
   const [notesDraft, setNotesDraft]     = useState(request?.internal_notes ?? '');
   const [showConvert, setShowConvert]   = useState(false);
+  const [showReject, setShowReject]     = useState(false);
+  const [showDelete, setShowDelete]     = useState(false);
 
   const updateStatus = useUpdateDemoRequestStatus();
   const assign       = useAssignDemoRequest();
@@ -313,15 +573,16 @@ export function DemoRequestDetailSheet({ open, request, admins, onClose }: DemoR
 
   return (
     <>
-      <Sheet open={open} onOpenChange={open => { if (!open) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+      <Dialog open={open} onOpenChange={open => { if (!open) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto flex flex-col p-0 gap-0">
           {request && (
           <>
-          <SheetHeader className="pb-4">
-            <SheetTitle className="text-lg">{request.school_name}</SheetTitle>
-            <SheetDescription className="text-xs text-muted-foreground">{request.name} · {request.email}</SheetDescription>
-          </SheetHeader>
+          <DialogHeader className="px-6 pt-6 pb-4 shrink-0">
+            <DialogTitle className="text-lg">{request.school_name}</DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">{request.name} · {request.email}</DialogDescription>
+          </DialogHeader>
 
+          <div className="px-6 overflow-y-auto flex-1">
           {/* Status chip + selector */}
           <div className="flex items-center gap-2 flex-wrap mb-5">
             <span className={cn('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold', STATUS_BADGE_CLASS[request.status])}>
@@ -332,7 +593,28 @@ export function DemoRequestDetailSheet({ open, request, admins, onClose }: DemoR
             )}
           </div>
 
+          {/* Once a real customer account exists, this demo request becomes
+              historical — operational focus moves entirely to the
+              Onboarding Command Center. A prominent, unmistakable link
+              here (rather than just a badge) is the fix for the exact
+              confusion this session's audit found: a status label alone
+              gives no indication that a live workspace now exists. Deep
+              links via ?open=org:<id> so the Command Center opens straight
+              to this customer's row instead of just landing on the queue. */}
+          {request.converted_organization_id && (
+            <Button asChild size="sm" className="mb-5 w-full">
+              <Link to={`/platform/onboarding?open=org:${request.converted_organization_id}`}>
+                Visa onboarding-resa
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+              </Link>
+            </Button>
+          )}
+
           <div className="space-y-4">
+            {/* Onboarding workflow — Step 1 (Review) / Step 2 (Approve),
+                only relevant before a customer organization exists. */}
+            {!request.converted_organization_id && <WorkflowStepsCard request={request} />}
+
             {/* Customer Information */}
             <SectionCard icon={UserIcon} title="Kundinformation">
               <InfoRow label="Kontaktperson" value={request.name} />
@@ -422,24 +704,69 @@ export function DemoRequestDetailSheet({ open, request, admins, onClose }: DemoR
               {request.converted_at && (
                 <InfoRow label="Konverterad" value={new Date(request.converted_at).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })} />
               )}
+              {request.rejected_at && (
+                <>
+                  <InfoRow label="Avvisad" value={new Date(request.rejected_at).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })} />
+                  <InfoRow label="Orsak" value={request.rejection_reason ? REJECTION_REASON_LABEL[request.rejection_reason] : null} />
+                  {request.rejection_description && (
+                    <div className="py-2">
+                      <p className="text-xs text-muted-foreground mb-1">Beskrivning</p>
+                      <p className="text-xs text-foreground whitespace-pre-wrap">{request.rejection_description}</p>
+                    </div>
+                  )}
+                </>
+              )}
               <InfoRow label="Källa" value={request.source} />
               <InfoRow label="ID"    value={request.id} />
             </SectionCard>
-
-            {/* Convert to customer */}
-            {!request.converted_organization_id && (
-              <Button variant="outline" className="w-full justify-between" onClick={() => setShowConvert(true)}>
-                Konvertera till kund
-                <ArrowRight className="w-4 h-4" />
-              </Button>
-            )}
           </div>
+          </div>
+
+          {/* Persistent footer — always visible regardless of scroll
+              position, per industry-standard modal pattern (Close always
+              available; the one primary action pinned next to it). Convert
+              is gated on Step 2 (Approve Onboarding): Approve must complete
+              before Choose Subscription / Create Organization / Create
+              Administrator (all performed together by conversion). */}
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0 sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={onClose}>Stäng</Button>
+              {!request.converted_organization_id && (
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" title="Ta bort förfrågan" onClick={() => setShowDelete(true)}>
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+            {!request.converted_organization_id && (
+              <div className="flex items-center gap-2">
+                {request.status !== 'declined' && (
+                  <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setShowReject(true)}>
+                    <XCircle className="w-4 h-4 mr-1.5" />
+                    Avvisa
+                  </Button>
+                )}
+                {request.approved_at ? (
+                  <Button onClick={() => setShowConvert(true)}>
+                    Konvertera till kund
+                    <ArrowRight className="w-4 h-4 ml-1.5" />
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    Onboarding måste godkännas (steg 2) innan kunden kan konverteras
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogFooter>
           </>
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       <ConvertToCustomerDialog open={showConvert && !!request} request={request} onClose={() => setShowConvert(false)} />
+      <RejectDemoRequestDialog open={showReject && !!request} request={request} onClose={() => setShowReject(false)} />
+      <DeleteDemoRequestDialog open={showDelete && !!request} request={request} onClose={() => setShowDelete(false)} onDeleted={onClose} />
     </>
   );
 }

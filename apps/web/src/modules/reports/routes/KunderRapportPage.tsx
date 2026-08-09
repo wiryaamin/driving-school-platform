@@ -7,12 +7,12 @@ import {
   DateRange, SelectInput,
   csvDownload, printReport,
 } from '../components/ReportCard.js';
+import { fetchStudentBalanceTotals } from '../lib/creditBalance.js';
 
 function today()      { return new Date().toISOString().slice(0, 10); }
 function monthStart() { return today().slice(0, 8) + '01'; }
 function ago(d: number) { const dt = new Date(); dt.setDate(dt.getDate() - d); return dt.toISOString().slice(0, 10); }
 function dateFmt(s: unknown) { return s ? new Date(s as string).toLocaleDateString('sv-SE') : ''; }
-function cur(n: unknown) { return n == null ? '' : Number(n).toFixed(2); }
 
 interface InstructorRef { id: string; first_name: string; last_name: string; }
 
@@ -80,26 +80,28 @@ export function KunderRapportPage() {
 
   const exportKunder = () => void runExport(async () => {
     let q = supabase.from('students')
-      .select('first_name, last_name, email, phone, status, credit_balance, created_at')
+      .select('id, first_name, last_name, email, phone, status, created_at')
       .is('deleted_at', null).order('last_name');
     if (kunder1 !== 'all') q = q.eq('status', kunder1);
-    const { data } = await q.limit(5000);
+    const [{ data, error }, balances] = await Promise.all([q.limit(5000), fetchStudentBalanceTotals()]);
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => ({
       'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '',
       'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '',
-      'Status': r['status'] ?? '', 'Saldo (kr)': cur(r['credit_balance']), 'Skapad': dateFmt(r['created_at']),
+      'Status': r['status'] ?? '', 'Saldo (lektioner)': balances.get(r['id'] as string) ?? 0, 'Skapad': dateFmt(r['created_at']),
     })) as Record<string, unknown>[];
   }, `kunder_${kunder1}`);
 
   const exportKunderBeh = () => void runExport(async () => {
     let q = supabase.from('students')
-      .select('first_name, last_name, email, phone, status, driving_permits')
+      .select('first_name, last_name, email, phone, status, target_licence_category')
       .is('deleted_at', null).order('last_name');
     if (kunder2cat !== 'all') q = q.eq('status', kunder2cat);
-    const { data } = await q.limit(5000);
+    const { data, error } = await q.limit(5000);
+    if (error) throw error;
     const perm = kunder2perm;
     return ((data ?? []) as Array<Record<string, unknown>>)
-      .filter((r) => perm === 'all' || (Array.isArray(r['driving_permits']) && (r['driving_permits'] as string[]).includes(perm)))
+      .filter((r) => perm === 'all' || r['target_licence_category'] === perm)
       .map((r) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '', 'Status': r['status'] ?? '' })) as Record<string, unknown>[];
   }, `kunder_behorighet_${kunder2perm}`);
 
@@ -142,11 +144,12 @@ export function KunderRapportPage() {
 
   const exportElevöversikt = () => void runExport(async () => {
     let q = supabase.from('students')
-      .select('first_name, last_name, email, phone, status, credit_balance, created_at')
+      .select('id, first_name, last_name, email, phone, status, created_at')
       .is('deleted_at', null).order('last_name');
     if (elevOv_cat !== 'all') q = q.eq('status', elevOv_cat);
-    const { data } = await q.limit(5000);
-    return (data ?? []).map((r: Record<string, unknown>) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '', 'Status': r['status'] ?? '', 'Saldo (kr)': cur(r['credit_balance']), 'Skapad': dateFmt(r['created_at']) })) as Record<string, unknown>[];
+    const [{ data, error }, balances] = await Promise.all([q.limit(5000), fetchStudentBalanceTotals()]);
+    if (error) throw error;
+    return (data ?? []).map((r: Record<string, unknown>) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '', 'Status': r['status'] ?? '', 'Saldo (lektioner)': balances.get(r['id'] as string) ?? 0, 'Skapad': dateFmt(r['created_at']) })) as Record<string, unknown>[];
   }, 'elevöversikt');
 
   const exportElevöversiktPdf = () => void (async () => {
@@ -179,29 +182,32 @@ export function KunderRapportPage() {
   })();
 
   const exportNyaBeh = () => void runExport(async () => {
-    const { data } = await supabase.from('students')
-      .select('first_name, last_name, email, driving_permits, created_at').is('deleted_at', null)
+    const { data, error } = await supabase.from('students')
+      .select('first_name, last_name, email, target_licence_category, created_at').is('deleted_at', null)
       .gte('created_at', nyaBeh_from).lte('created_at', nyaBeh_to + 'T23:59:59')
       .order('created_at', { ascending: false }).limit(2000);
+    if (error) throw error;
     const perm = nyaBeh_perm;
     return ((data ?? []) as Array<Record<string, unknown>>)
-      .filter((r) => perm === 'all' || (Array.isArray(r['driving_permits']) && (r['driving_permits'] as string[]).includes(perm)))
-      .map((r) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Behörigheter': Array.isArray(r['driving_permits']) ? (r['driving_permits'] as string[]).join(', ') : '', 'Registrerad': dateFmt(r['created_at']) })) as Record<string, unknown>[];
+      .filter((r) => perm === 'all' || r['target_licence_category'] === perm)
+      .map((r) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Behörighet': r['target_licence_category'] ?? '', 'Registrerad': dateFmt(r['created_at']) })) as Record<string, unknown>[];
   }, `nya_behörigheter_${nyaBeh_from}_${nyaBeh_to}`);
 
   const exportObl = () => void runExport(async () => {
-    const { data } = await supabase.from('students')
-      .select('first_name, last_name, email, phone, status, driving_permits')
+    const { data, error } = await supabase.from('students')
+      .select('first_name, last_name, email, phone, status, target_licence_category')
       .is('deleted_at', null).eq('status', 'active').order('last_name').limit(2000);
-    return (data ?? []).map((r: Record<string, unknown>) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '', 'Behörigheter': Array.isArray(r['driving_permits']) ? (r['driving_permits'] as string[]).join(', ') : '' })) as Record<string, unknown>[];
+    if (error) throw error;
+    return (data ?? []).map((r: Record<string, unknown>) => ({ 'Förnamn': r['first_name'] ?? '', 'Efternamn': r['last_name'] ?? '', 'E-post': r['email'] ?? '', 'Telefon': r['phone'] ?? '', 'Behörighet': r['target_licence_category'] ?? '' })) as Record<string, unknown>[];
   }, 'obligatorisk_utbildning');
 
   const exportOblPdf = () => void (async () => {
     toast({ title: 'Förbereder PDF…' });
     try {
-      const { data } = await supabase.from('students').select('first_name, last_name, email, driving_permits').is('deleted_at', null).eq('status', 'active').limit(500);
-      printReport('Obligatorisk utbildning', ['Elev', 'E-post', 'Behörigheter'],
-        (data ?? []).map((r: Record<string, unknown>) => [`${r['first_name'] ?? ''} ${r['last_name'] ?? ''}`.trim(), r['email'] ?? '', Array.isArray(r['driving_permits']) ? (r['driving_permits'] as string[]).join(', ') : '']));
+      const { data, error } = await supabase.from('students').select('first_name, last_name, email, target_licence_category').is('deleted_at', null).eq('status', 'active').limit(500);
+      if (error) throw error;
+      printReport('Obligatorisk utbildning', ['Elev', 'E-post', 'Behörighet'],
+        (data ?? []).map((r: Record<string, unknown>) => [`${r['first_name'] ?? ''} ${r['last_name'] ?? ''}`.trim(), r['email'] ?? '', r['target_licence_category'] ?? '']));
     } catch { toast({ title: 'Export misslyckades', variant: 'destructive' }); }
   })();
 

@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
+import { extractFunctionErrorMessage } from '@modules/platform/lib/provisioningSchema.js';
 import type {
   Instructor, InstructorEmploymentType, InstructorListQueryInput,
   InstructorCertification, CreateInstructorCertificationInput,
@@ -96,6 +98,19 @@ export interface CreateInstructorFormValues {
   adi_valid_until?: string;
   employee_number?: string;
   max_lessons_per_day?: number;
+  personnummer?: string;
+  address_line1?: string;
+  postal_code?: string;
+  city?: string;
+  bio?: string;
+  emergency_contact_first_name?: string;
+  emergency_contact_last_name?: string;
+  emergency_contact_email?: string;
+  emergency_contact_phone?: string;
+  sort_order?: number;
+  show_in_booking?: boolean;
+  show_in_ecommerce?: boolean;
+  show_on_website?: boolean;
 }
 
 export type UpdateInstructorFormValues = Partial<CreateInstructorFormValues>;
@@ -154,7 +169,7 @@ async function apiCreateInstructor(input: CreateInstructorFormValues): Promise<I
     method: 'POST',
     body: cleanFormValues(input),
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Det gick inte att skapa läraren'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -170,14 +185,14 @@ async function apiUpdateInstructor({
     method: 'PATCH',
     body: cleanFormValues(input as CreateInstructorFormValues),
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Det gick inte att spara ändringarna'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
 
 async function apiArchiveInstructor(id: string): Promise<void> {
   const { error } = await supabase.functions.invoke(`instructors/${id}`, { method: 'DELETE' });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Det gick inte att arkivera läraren'));
 }
 
 // ─── Query hooks ──────────────────────────────────────────────────────────────
@@ -369,6 +384,45 @@ export function useCreateAvailabilityRule() {
   });
 }
 
+// Batch variant — inserts several rules in one request. Used to auto-seed an
+// instructor's working-hours pattern on creation (one rule per working day);
+// mirrors useCreateAvailabilityRule's single-row insert exactly, just an
+// array instead of one object. Best-effort by design: creating an instructor
+// has already succeeded by the time this runs (see InstructorForm.tsx), so a
+// failure here must not look like the instructor itself failed to save —
+// callers surface it as a secondary, dismissable notice.
+export function useCreateAvailabilityRulesBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      instructorId,
+      organizationId,
+      inputs,
+    }: {
+      instructorId: string;
+      organizationId: string;
+      inputs: CreateAvailabilityRuleInput[];
+    }) => {
+      const rows = inputs.map((input) => ({
+        ...input,
+        instructor_id: instructorId,
+        organization_id: organizationId,
+        timezone: input.timezone ?? 'Europe/Stockholm',
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('instructor_availability_rules')
+        .insert(rows)
+        .select();
+      if (error) throw new Error(error.message);
+      return (data ?? []) as InstructorAvailabilityRule[];
+    },
+    onSuccess: (_data, { instructorId }) => {
+      void queryClient.invalidateQueries({ queryKey: ['instructors', 'availability_rules', instructorId] });
+    },
+  });
+}
+
 export function useDeleteAvailabilityRule() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -471,6 +525,7 @@ export function useCreateTimeOff() {
 
 export function useUpdateTimeOffStatus() {
   const queryClient = useQueryClient();
+  const { user } = useSession();
   return useMutation({
     mutationFn: async ({
       timeOffId,
@@ -481,10 +536,19 @@ export function useUpdateTimeOffStatus() {
       instructorId: string;
       status: TimeOffStatus;
     }) => {
+      // instructor_time_off_approval_consistency requires approved_by +
+      // approved_at whenever status is 'approved' — omitting them (as this
+      // previously did) meant the DB rejected every approval attempt with a
+      // 400, leaving requests permanently stuck in 'pending'.
+      const patch: Record<string, unknown> = { status };
+      if (status === 'approved') {
+        patch['approved_by'] = user?.id ?? null;
+        patch['approved_at'] = new Date().toISOString();
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase as unknown as any)
         .from('instructor_time_off')
-        .update({ status })
+        .update(patch)
         .eq('id', timeOffId);
       if (error) throw new Error(error.message);
     },

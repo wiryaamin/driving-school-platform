@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, ArrowUpDown } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Button, Skeleton } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+//
+// Lokaler/Banor and Platser (LocationsSettingsPage) both read the same
+// organization_locations table — there is no separate venues/tracks entity
+// in the schema. Platser already owns full CRUD (address, hours, contact,
+// primary flag); this page is a read-only pointer into that same data,
+// not a second management surface (Canonical Settings Rule).
 
 interface VenueRow {
   id:         string;
@@ -57,11 +63,16 @@ export function VenuesSettingsPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Skapa lokal/bana
+          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" asChild>
+            <Link to="/settings/locations">Hantera platser</Link>
           </Button>
         </div>
       </div>
+
+      <p className="text-xs text-muted-foreground">
+        Lokaler och banor hanteras tillsammans med skolans övriga platser under{' '}
+        <Link to="/settings/locations" className="text-primary hover:underline">Inställningar → Platser</Link>.
+      </p>
 
       {/* Tabs */}
       <div className="flex items-center gap-2">
@@ -83,27 +94,33 @@ export function VenuesSettingsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                <Th sortable>Namn</Th>
-                <Th sortable>Ordning</Th>
+                <Th>Namn</Th>
+                <Th>Status</Th>
+                <Th />
               </tr>
             </thead>
             <tbody>
               {displayed.length === 0 ? (
                 <tr>
-                  <td colSpan={2} className="py-10 text-center text-muted-foreground text-sm">
+                  <td colSpan={3} className="py-10 text-center text-muted-foreground text-sm">
                     Inga lokaler/banor hittades.
                   </td>
                 </tr>
               ) : (
-                displayed.map((venue, idx) => (
+                displayed.map(venue => (
                   <tr key={venue.id} className="border-b border-border/50 last:border-0 hover:bg-accent/20">
                     <td className="px-4 py-3">
-                      <button type="button" className="text-primary hover:underline font-medium text-left">
+                      <Link to="/settings/locations" className="text-primary hover:underline font-medium">
                         {venue.name}
-                      </button>
+                      </Link>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {(idx + 1) * 10}
+                    <td className="px-4 py-3 text-muted-foreground text-xs">
+                      {venue.status === 'active' ? 'Aktiv' : 'Inaktiv'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link to="/settings/locations" aria-label={`Visa ${venue.name} under Platser`}>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground/50" />
+                      </Link>
                     </td>
                   </tr>
                 ))
@@ -135,15 +152,10 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
   );
 }
 
-function Th({ children, sortable }: { children?: React.ReactNode; sortable?: boolean }) {
+function Th({ children }: { children?: React.ReactNode }) {
   return (
     <th className="px-4 py-2.5 text-left text-xs font-semibold text-foreground whitespace-nowrap">
-      {sortable ? (
-        <button type="button" className="flex items-center gap-1 hover:text-primary">
-          {children}
-          <ArrowUpDown className="w-3 h-3 opacity-50" />
-        </button>
-      ) : children}
+      {children}
     </th>
   );
 }

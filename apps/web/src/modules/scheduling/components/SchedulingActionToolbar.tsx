@@ -1,4 +1,4 @@
-import { Search, Clock, FileText, User } from 'lucide-react';
+import { Search, Clock, FileText, Zap, LayoutTemplate } from 'lucide-react';
 
 interface SchedulingActionToolbarProps {
   onNavigate:       (path: string) => void;
@@ -10,7 +10,7 @@ export function SchedulingActionToolbar({ onNavigate, onHittaLedigTid }: Schedul
   return (
     <div className="flex flex-wrap items-center px-3 py-1 bg-muted/40 border-b border-border min-h-[36px]">
 
-      {/* Customer search + selected customer */}
+      {/* Customer search */}
       <div className="flex items-center gap-1 shrink-0">
         <button
           onClick={() => onNavigate('/students')}
@@ -18,10 +18,6 @@ export function SchedulingActionToolbar({ onNavigate, onHittaLedigTid }: Schedul
         >
           <Search className="w-3 h-3" />
           Sök efter kund
-        </button>
-        <button className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-background text-[11px] text-muted-foreground/60 hover:border-primary/40 transition-colors whitespace-nowrap">
-          <User className="w-3 h-3 shrink-0" />
-          Ingen kund vald
         </button>
       </div>
 
@@ -42,6 +38,29 @@ export function SchedulingActionToolbar({ onNavigate, onHittaLedigTid }: Schedul
         >
           <FileText className="w-3 h-3" />
           Bokningslista
+        </button>
+      </div>
+
+      <div className="w-px h-5 bg-border mx-2 hidden sm:block shrink-0" />
+
+      {/* Generera pass + Passmallar — only reachable via a one-time onboarding
+          link before this was added (Business Workflow Execution Audit,
+          2026-08-07); surfaced here since this calendar is the page staff
+          actually return to day-to-day. */}
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={() => onNavigate('/scheduling/generation')}
+          className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-background text-[11px] font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+        >
+          <Zap className="w-3 h-3" />
+          Generera pass
+        </button>
+        <button
+          onClick={() => onNavigate('/scheduling/mallar')}
+          className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-background text-[11px] font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+        >
+          <LayoutTemplate className="w-3 h-3" />
+          Passmallar
         </button>
       </div>
     </div>

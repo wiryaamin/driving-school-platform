@@ -142,8 +142,16 @@ Deno.serve((req: Request) =>
       );
     }
 
+    // Sprint 2A fix: the hosted gateway delivers req.url already stripped
+    // down to this function's own path (/health, /health/live,
+    // /health/ready) rather than the full /functions/v1/health/* form this
+    // regex previously assumed — confirmed live via curl against all three
+    // routes, each returning 404 "Unknown health route: /health[...]"
+    // because the old prefix never matched. Stripping /health (this
+    // function's own name) instead of /functions/v1/health fixes all three
+    // routes with no change to routing behavior otherwise.
     const path = new URL(req.url).pathname
-      .replace(/^\/functions\/v1\/health/, '')
+      .replace(/^\/health/, '')
       .replace(/\/$/, '') || '/';
 
     if (path === '/live')  return handleLive();

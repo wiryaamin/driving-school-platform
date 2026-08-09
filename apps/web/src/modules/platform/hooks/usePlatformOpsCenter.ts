@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -244,6 +244,127 @@ export function useWorkerRunSummary() {
     staleTime: 20_000,
     refetchInterval: 30_000,
     retry: 1,
+  });
+}
+
+// ─── SaaS Operations Console — platform-wide workspace summaries ────────────
+
+export interface OperationsSummary {
+  pending_count:      number;
+  processing_count:   number;
+  dead_letter_count:  number;
+  failed_count:       number;
+  top_offenders: {
+    organization_id: string; org_name: string | null; event_type: string;
+    pending_count: number; dead_letter_count: number; oldest_pending_at: string | null;
+  }[];
+}
+
+export function usePlatformOperationsSummary() {
+  return useQuery({
+    queryKey: ['platform', 'operations-summary'],
+    queryFn: async (): Promise<OperationsSummary> => {
+      const { data, error } = await supabase.functions.invoke<{ data: OperationsSummary }>(
+        'platform-admin/operations-summary', { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      if (!data?.data) throw new Error('Driftöversikt ej tillgänglig');
+      return data.data;
+    },
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+}
+
+export interface CommunicationsSummary {
+  by_channel: { channel: string; sent: number; failed: number; pending: number }[];
+  recent_failed: {
+    id: string; organization_id: string; org_name: string | null; channel: string;
+    recipient_address: string | null; error_message: string | null; retry_count: number; created_at: string;
+  }[];
+}
+
+export function usePlatformCommunicationsSummary() {
+  return useQuery({
+    queryKey: ['platform', 'communications-summary'],
+    queryFn: async (): Promise<CommunicationsSummary> => {
+      const { data, error } = await supabase.functions.invoke<{ data: CommunicationsSummary }>(
+        'platform-admin/communications-summary', { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      if (!data?.data) throw new Error('Kommunikationsöversikt ej tillgänglig');
+      return data.data;
+    },
+    staleTime: 30_000,
+    retry: 1,
+  });
+}
+
+export interface ComplianceSummary {
+  total_students:            number;
+  gdpr_consent_given_count:  number;
+  regulatory_total:          number;
+  regulatory_overdue:        number;
+  orgs_with_overdue_workflows: { organization_id: string; org_name: string; overdue_count: number }[];
+}
+
+export function usePlatformComplianceSummary() {
+  return useQuery({
+    queryKey: ['platform', 'compliance-summary'],
+    queryFn: async (): Promise<ComplianceSummary> => {
+      const { data, error } = await supabase.functions.invoke<{ data: ComplianceSummary }>(
+        'platform-admin/compliance-summary', { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      if (!data?.data) throw new Error('Efterlevnadsöversikt ej tillgänglig');
+      return data.data;
+    },
+    staleTime: 120_000,
+    retry: 1,
+  });
+}
+
+export interface RecoveryQueueItem {
+  organization_id:      string;
+  org_name:              string;
+  dead_letter_count:     number;
+  failed_message_count:  number;
+  oldest_issue_at:       string | null;
+}
+
+export function usePlatformRecoveryQueue() {
+  return useQuery({
+    queryKey: ['platform', 'recovery-queue'],
+    queryFn: async (): Promise<RecoveryQueueItem[]> => {
+      const { data, error } = await supabase.functions.invoke<{ data: RecoveryQueueItem[] }>(
+        'platform-admin/recovery-queue', { method: 'GET' },
+      );
+      if (error) throw new Error(error.message);
+      return data?.data ?? [];
+    },
+    staleTime: 30_000,
+    retry: 1,
+  });
+}
+
+// Reuses the same per-org retry endpoint Organization Detail's Drift tab
+// calls — Recovery Center is a cross-org list view over the same action.
+export function useRetryOrgFromRecoveryQueue() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (orgId: string): Promise<{ events_requeued: number; messages_requeued: number }> => {
+      const { data, error } = await supabase.functions.invoke<{ data: { events_requeued: number; messages_requeued: number } }>(
+        `platform-admin/orgs/${orgId}/operations/retry`, { method: 'POST' },
+      );
+      if (error) throw new Error(error.message);
+      return data?.data ?? { events_requeued: 0, messages_requeued: 0 };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['platform', 'recovery-queue'] });
+      void queryClient.invalidateQueries({ queryKey: ['platform', 'operations-summary'] });
+    },
   });
 }
 

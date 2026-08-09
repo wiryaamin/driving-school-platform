@@ -208,7 +208,7 @@ function CategorySection({
       {!collapsed && (
         <div className="p-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
           {slots.map(slot => {
-            const lt  = ltMap[slot.lesson_type_id];
+            const lt  = ltMap[slot.lesson_type_id ?? ''];
             return (
               <SessionCard
                 key={slot.id}
@@ -281,7 +281,7 @@ export function KursoverSiktPage() {
 
   // Filter to group categories only
   const groupSlots = useMemo(
-    () => allSlots.filter(s => GROUP_CATEGORIES.includes(ltMap[s.lesson_type_id]?.category ?? 'other' as LessonCategory)),
+    () => allSlots.filter(s => GROUP_CATEGORIES.includes(ltMap[s.lesson_type_id ?? '']?.category ?? 'other' as LessonCategory)),
     [allSlots, ltMap],
   );
 
@@ -290,7 +290,7 @@ export function KursoverSiktPage() {
     const map = new Map<LessonCategory, LessonSlot[]>();
     for (const cat of GROUP_CATEGORIES) map.set(cat, []);
     for (const slot of groupSlots) {
-      const cat = ltMap[slot.lesson_type_id]?.category ?? 'other';
+      const cat = ltMap[slot.lesson_type_id ?? '']?.category ?? 'other';
       if (GROUP_CATEGORIES.includes(cat as LessonCategory)) {
         map.get(cat as LessonCategory)!.push(slot);
       }
@@ -402,7 +402,7 @@ export function KursoverSiktPage() {
         open={reserveOpen}
         onOpenChange={(o) => { if (!o) { setReserveOpen(false); } }}
         slot={reserveSlot}
-        lessonTypeName={reserveSlot ? ltMap[reserveSlot.lesson_type_id]?.name : undefined}
+        lessonTypeName={reserveSlot ? ltMap[reserveSlot.lesson_type_id ?? '']?.name : undefined}
         onSuccess={() => { setReserveOpen(false); setReserveSlot(null); }}
       />
     </>

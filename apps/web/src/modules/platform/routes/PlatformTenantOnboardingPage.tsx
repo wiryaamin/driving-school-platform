@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, Rocket, ListChecks } from 'lucide-react';
 import {
   Input, Skeleton, toast, Button,
@@ -131,7 +132,9 @@ export function PlatformTenantOnboardingPage() {
                 className="grid grid-cols-[1fr_160px_120px_100px] gap-3 px-4 py-3 items-center hover:bg-muted/30 transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">{org.name}</p>
+                  <Link to={`/platform/organizations/${org.id}?tab=onboarding`} className="text-sm font-medium text-foreground hover:text-primary truncate block">
+                    {org.name}
+                  </Link>
                   <p className="text-xs text-muted-foreground truncate">{org.org_number ?? '—'}</p>
                 </div>
 

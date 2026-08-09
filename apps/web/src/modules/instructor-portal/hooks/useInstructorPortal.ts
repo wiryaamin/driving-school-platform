@@ -240,6 +240,18 @@ export async function validateInstructorToken(token: string): Promise<ValidateIn
   return body['data'] as ValidateInstructorTokenResult;
 }
 
+// ─── Push notifications ───────────────────────────────────────────────────────
+
+export function useRegisterInstructorPushToken() {
+  return useMutation({
+    mutationFn: (input: { token: string; previousToken?: string }) =>
+      portalFetch<{ id: string }>('/push/register', {
+        method: 'POST',
+        body:   JSON.stringify({ token: input.token, previous_token: input.previousToken }),
+      }),
+  });
+}
+
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
 export function useInstructorPortalMe() {

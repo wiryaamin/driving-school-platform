@@ -323,7 +323,7 @@ export function TrafikPlatsPage() {
                   pageSlots.map(slot => {
                     const full         = isFull(slot);
                     const remaining    = spotsLeft(slot);
-                    const ltInfo       = ltMap[slot.lesson_type_id];
+                    const ltInfo       = ltMap[slot.lesson_type_id ?? ''];
                     const locationStr  = slot.location_id ? (locationMap[slot.location_id] ?? '–') : '–';
                     const datum        = formatDatum(slot.starts_at, slot.ends_at);
 

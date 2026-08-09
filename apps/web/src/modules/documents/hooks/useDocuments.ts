@@ -31,6 +31,8 @@ export interface StudentDocument {
   expires_at:       string | null;
   uploaded_by:      string | null;
   reviewed_by:      string | null;
+  reviewed_at:      string | null;
+  rejection_reason: string | null;
   created_at:       string;
   updated_at:       string;
   students?:        { id: string; first_name: string; last_name: string } | null;
@@ -64,7 +66,7 @@ export function useDocumentList(studentId?: string) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q = (supabase as unknown as any)
         .from('student_documents')
-        .select('id, organization_id, student_id, category, status, file_name, storage_path, storage_bucket, mime_type, file_size_bytes, description, expires_at, uploaded_by, reviewed_by, created_at, updated_at, students(id, first_name, last_name)')
+        .select('id, organization_id, student_id, category, status, file_name, storage_path, storage_bucket, mime_type, file_size_bytes, description, expires_at, uploaded_by, reviewed_by, reviewed_at, rejection_reason, created_at, updated_at, students(id, first_name, last_name)')
         .is('deleted_at', null)
         .order('created_at', { ascending: false });
 
@@ -146,6 +148,56 @@ export function useDocumentDelete() {
         .eq('id', id);
       if (error) throw new Error(error.message);
       return void studentId;
+    },
+    onSuccess: (_v, { studentId }) => {
+      void qc.invalidateQueries({ queryKey: documentKeys.list(studentId) });
+      void qc.invalidateQueries({ queryKey: documentKeys.list() });
+    },
+  });
+}
+
+export function useApproveDocument() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id }: { id: string; studentId: string }): Promise<void> => {
+      if (!user?.id) throw new Error('Ingen användare');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_documents')
+        .update({
+          status:           'approved',
+          reviewed_by:      user.id,
+          reviewed_at:      new Date().toISOString(),
+          rejection_reason: null,
+        })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: (_v, { studentId }) => {
+      void qc.invalidateQueries({ queryKey: documentKeys.list(studentId) });
+      void qc.invalidateQueries({ queryKey: documentKeys.list() });
+    },
+  });
+}
+
+export function useRejectDocument() {
+  const { user } = useSession();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, reason }: { id: string; studentId: string; reason?: string }): Promise<void> => {
+      if (!user?.id) throw new Error('Ingen användare');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_documents')
+        .update({
+          status:           'rejected',
+          reviewed_by:      user.id,
+          reviewed_at:      new Date().toISOString(),
+          rejection_reason: reason?.trim() || null,
+        })
+        .eq('id', id);
+      if (error) throw new Error(error.message);
     },
     onSuccess: (_v, { studentId }) => {
       void qc.invalidateQueries({ queryKey: documentKeys.list(studentId) });

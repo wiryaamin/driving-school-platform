@@ -5,6 +5,8 @@ import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
+import { decryptCredential } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,8 +34,8 @@ function fail(status: number, message: string): Response {
 // Edge Function: platform admins bypass, otherwise the caller's JWT-derived
 // permissions (ctx.permissions) must include the required code.
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(403, 'Organization context required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(403, `Requires permission: ${code}`);
   return null;
 }
@@ -73,13 +75,22 @@ async function resolveGuardianToken(req: Request): Promise<GuardianSession | nul
 
   const { data, error } = await svc
     .from('guardian_portal_sessions')
-    .select('id, guardian_id, student_id, organization_id, expires_at')
+    .select('id, guardian_id, student_id, organization_id, expires_at, student_guardians!guardian_id(deleted_at), students!student_id(deleted_at)')
     .eq('token_hash', hash)
     .is('revoked_at', null)
     .gt('expires_at', new Date().toISOString())
     .single();
 
   if (error || !data) return null;
+
+  // Same gap as student-portal/instructor-portal: a token issued before the
+  // guardian or their student was removed otherwise stays valid until its
+  // own TTL. Either side being gone should cut off access immediately.
+  const row = data as unknown as {
+    student_guardians: { deleted_at: string | null } | null;
+    students:          { deleted_at: string | null } | null;
+  };
+  if (row.student_guardians?.deleted_at || row.students?.deleted_at) return null;
 
   void svc
     .from('guardian_portal_sessions')
@@ -128,6 +139,16 @@ const CreateGuardianSchema = z.object({
   phone:      z.string().max(30).optional(),
   relation:   z.string().max(50).optional(),
   can_pay:    z.boolean().default(true),
+});
+
+const RegisterPushTokenSchema = z.object({
+  token:          z.string().min(16),
+  previous_token: z.string().min(16).optional(),
+  platform:       z.enum(['web', 'ios', 'android']).optional(),
+});
+
+const RevokePushTokenSchema = z.object({
+  token_id: z.string().uuid(),
 });
 
 const GenerateTokenSchema = z.object({
@@ -370,30 +391,42 @@ Deno.serve((req: Request) =>
           .eq('organization_id', organization_id)
           .maybeSingle(),
         svc.from('invoices')
-          .select('id, invoice_number, amount_sek, due_date, status')
+          // invoices has no amount_sek column — it's total_amount. Aliased here
+          // (not renamed) so the response shape/frontend type is unchanged.
+          // Found via live pilot simulation: every /balance call silently
+          // returned invoices: [] (the query 42703-errored and the ?? []
+          // fallback masked it) — a guardian with can_pay=true could never
+          // see or act on what they owed.
+          .select('id, invoice_number, amount_sek:total_amount, due_date, status')
           .eq('student_id', student_id)
           .eq('organization_id', organization_id)
           .in('status', ['issued', 'overdue'])
           .order('due_date')
           .limit(10),
-        svc.from('student_packages')
-          .select('id, status, quantity_granted, quantity_consumed, quantity_expired, expires_at, purchased_at, package_offerings!offering_id(name, package_type)')
+        // student_package_assignments, not student_packages — quantity_consumed
+        // on the latter is never updated by the consumption pipeline (lesson
+        // completion writes lessons_used on the assignments row only; see
+        // 20260720000006_sync_purchase_package_to_assignments.sql), and
+        // assignments rows only exist once a sale is real, so never-issued
+        // draft purchases don't leak through here either.
+        svc.from('student_package_assignments')
+          .select('id, status, package_name, lesson_category, package_quantity, lessons_used, expires_at, assigned_at')
           .eq('student_id', student_id)
           .eq('organization_id', organization_id)
-          .in('status', ['active', 'depleted'])
-          .order('purchased_at', { ascending: false })
+          .in('status', ['active', 'completed'])
+          .order('assigned_at', { ascending: false })
           .limit(5),
       ]);
 
       type PkgRow = {
         id: string;
         status: string;
-        quantity_granted: number;
-        quantity_consumed: number;
-        quantity_expired: number;
+        package_name: string;
+        lesson_category: string | null;
+        package_quantity: number;
+        lessons_used: number;
         expires_at: string | null;
-        purchased_at: string;
-        package_offerings: { name: string; package_type: string } | null;
+        assigned_at: string;
       };
 
       logGuardianAccess(svc, session, 'guardian_portal.viewed_balance');
@@ -402,15 +435,128 @@ Deno.serve((req: Request) =>
         invoices: invRes.data ?? [],
         packages: ((pkgRes.data ?? []) as PkgRow[]).map(p => ({
           id:                 p.id,
-          name:               p.package_offerings?.name ?? 'Paket',
-          package_type:       p.package_offerings?.package_type ?? 'driving',
-          quantity_granted:   p.quantity_granted,
-          quantity_consumed:  p.quantity_consumed,
-          quantity_remaining: Math.max(0, p.quantity_granted - p.quantity_consumed - p.quantity_expired),
+          name:               p.package_name,
+          package_type:       p.lesson_category ?? 'driving',
+          quantity_granted:   p.package_quantity,
+          quantity_consumed:  p.lessons_used,
+          quantity_remaining: Math.max(0, p.package_quantity - p.lessons_used),
           expires_at:         p.expires_at,
           status:             p.status,
         })),
       });
+    }
+
+    // POST /payments/stripe/checkout — guardian-initiated Stripe Checkout
+    // session for one of their student's unpaid invoices. Business Workflow
+    // Execution Audit (2026-08-07): the guardian portal's own can_pay flag
+    // and Ekonomi tab gated a payment capability that never existed — this
+    // was a dead end to "kontakta skolan för betalning." Mirrors
+    // student-portal's own POST /payments/stripe/checkout exactly (same
+    // Stripe params shape, same payment_requests row shape), scoped to the
+    // guardian's session student instead of a logged-in student.
+    if (req.method === 'POST' && path === '/payments/stripe/checkout') {
+      const { data: guardian } = await svc
+        .from('student_guardians')
+        .select('can_pay')
+        .eq('id', guardian_id)
+        .single();
+
+      if (!(guardian as { can_pay: boolean } | null)?.can_pay) {
+        return fail(403, 'Payment access not granted for this guardian');
+      }
+
+      const body      = await req.json().catch(() => null) as { invoice_id?: string } | null;
+      const invoiceId = body?.invoice_id;
+      if (!invoiceId) return fail(400, 'invoice_id required');
+
+      const { data: inv } = await svc
+        .from('invoices')
+        .select('id, outstanding_amount, invoice_number')
+        .eq('id', invoiceId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['issued', 'overdue', 'partially_paid'])
+        .is('void_at', null)
+        .maybeSingle();
+
+      if (!inv) return fail(404, 'Invoice not found or already paid');
+
+      const { data: orgRow } = await svc
+        .from('organizations')
+        .select('settings')
+        .eq('id', organization_id)
+        .maybeSingle();
+
+      const settings  = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
+      const storedKey = settings['stripe_secret_key'] as string | undefined;
+      const stripeKey = storedKey !== undefined
+        ? await decryptCredential(storedKey)
+        : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
+
+      if (!stripeKey) return fail(503, 'Online card payment is not configured for this school');
+
+      const appUrl    = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+      const prId       = crypto.randomUUID();
+      const invNum    = (inv as { invoice_number: string | null }).invoice_number;
+      const amountSek = (inv as { outstanding_amount: number }).outstanding_amount;
+
+      const params = new URLSearchParams({
+        'mode':                                   'payment',
+        'currency':                               'sek',
+        'line_items[0][price_data][currency]':    'sek',
+        'line_items[0][price_data][unit_amount]': String(Math.round(amountSek * 100)),
+        'line_items[0][price_data][product_data][name]':
+          `Faktura ${invNum ?? invoiceId.slice(0, 8)}`,
+        'line_items[0][quantity]': '1',
+        'success_url':             `${appUrl}/guardian/ekonomi?payment=success&req=${prId}`,
+        'cancel_url':              `${appUrl}/guardian/ekonomi?payment=cancelled`,
+        'metadata[invoice_id]':         invoiceId,
+        'metadata[payment_request_id]': prId,
+        'metadata[organization_id]':    organization_id,
+        'metadata[student_id]':         student_id,
+        'metadata[guardian_id]':        guardian_id,
+      });
+
+      const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${stripeKey}`,
+          'Content-Type':  'application/x-www-form-urlencoded',
+        },
+        body: params.toString(),
+      });
+
+      type StripeSession = { id: string; url: string; error?: { message: string } };
+      const stripeData = await stripeRes.json() as StripeSession;
+
+      if (!stripeRes.ok || stripeData.error) {
+        logger.error('guardian-portal: Stripe session creation failed', {
+          status: stripeRes.status,
+          error:  stripeData.error?.message,
+        });
+        return fail(502, 'Payment provider error — please try again');
+      }
+
+      const { error: prErr } = await svc.from('payment_requests').insert({
+        id:                  prId,
+        organization_id,
+        student_id,
+        invoice_id:          invoiceId,
+        provider:            'stripe',
+        provider_session_id: stripeData.id,
+        amount_sek:          amountSek,
+        status:              'pending',
+        return_url:          `${appUrl}/guardian/ekonomi`,
+        expires_at:          new Date(Date.now() + 30 * 60_000).toISOString(),
+        metadata:            { stripe_session_id: stripeData.id, guardian_id },
+      });
+
+      if (prErr) {
+        logger.warn('guardian-portal: payment_request insert failed, proceeding without record', { prId, error: prErr.message });
+      }
+
+      logGuardianAccess(svc, session, 'guardian_portal.requested_payment');
+      return ok({ session_url: stripeData.url, payment_request_id: prId }, 201);
     }
 
     // GET /progress — student licence progress summary
@@ -537,6 +683,40 @@ Deno.serve((req: Request) =>
 
       if (error || !guardian) return fail(500, 'Failed to update account');
       return ok(guardian);
+    }
+
+    // ── POST /push/register — register or refresh an FCM device token ────────
+    if (req.method === 'POST' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RegisterPushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Valid device token required');
+
+      const result = await registerPushToken(
+        svc,
+        {
+          organizationId: organization_id,
+          ownerColumn:    'guardian_id',
+          ownerId:        guardian_id,
+          token:          parsed.data.token,
+          platform:       parsed.data.platform,
+          userAgent:      req.headers.get('User-Agent'),
+        },
+        parsed.data.previous_token,
+      );
+
+      if ('error' in result) return fail(500, result.error);
+      return ok({ id: result.id });
+    }
+
+    // ── DELETE /push/register — revoke a device token (logout / unsubscribe) ─
+    if (req.method === 'DELETE' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RevokePushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'token_id required');
+
+      const result = await revokePushToken(svc, organization_id, 'guardian_id', guardian_id, parsed.data.token_id, 'client_unsubscribed');
+      if ('error' in result) return fail(500, result.error);
+      return ok({ revoked: true });
     }
 
     return fail(404, 'Route not found');

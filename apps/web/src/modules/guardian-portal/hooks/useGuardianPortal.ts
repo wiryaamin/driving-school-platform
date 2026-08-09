@@ -468,6 +468,18 @@ async function guardianFetch<T>(path: string, options?: RequestInit): Promise<T>
   return body['data'] as T;
 }
 
+// ─── Push notifications ───────────────────────────────────────────────────────
+
+export function useRegisterGuardianPushToken() {
+  return useMutation({
+    mutationFn: (input: { token: string; previousToken?: string }) =>
+      guardianFetch<{ id: string }>('/push/register', {
+        method: 'POST',
+        body:   JSON.stringify({ token: input.token, previous_token: input.previousToken }),
+      }),
+  });
+}
+
 // ─── Portal data hooks ────────────────────────────────────────────────────────
 
 export function useGuardianMe() {
@@ -491,6 +503,21 @@ export function useGuardianBalance() {
     queryKey: ['guardian', 'balance'],
     queryFn:  (): Promise<GuardianBalance> => guardianFetch<GuardianBalance>('/balance'),
     staleTime: 60_000,
+  });
+}
+
+export interface GuardianCheckoutResult {
+  session_url:         string;
+  payment_request_id:  string;
+}
+
+export function useGuardianRequestCheckout() {
+  return useMutation({
+    mutationFn: (invoiceId: string) =>
+      guardianFetch<GuardianCheckoutResult>('/payments/stripe/checkout', {
+        method: 'POST',
+        body:   JSON.stringify({ invoice_id: invoiceId }),
+      }),
   });
 }
 

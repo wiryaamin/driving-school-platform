@@ -7,7 +7,7 @@
  *   - Push notification handling for lesson reminders
  */
 
-const CACHE_NAME = 'trafikskola-v2';
+const CACHE_NAME = 'trafikskola-v3';
 
 const STATIC_EXTENSIONS = ['.js', '.css', '.woff', '.woff2', '.ttf', '.png', '.svg', '.ico'];
 
@@ -51,6 +51,16 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET
   if (event.request.method !== 'GET') return;
 
+  // Skip non-http(s) schemes (chrome-extension://, moz-extension://, etc.) —
+  // the Cache API only supports http/https, so caches.put() throws
+  // "Request scheme '...' is unsupported" for anything else. isStaticAsset()
+  // below matches purely on file extension (e.g. a browser extension's own
+  // content script ending in .js), so without this guard a request that
+  // happens to share a static-asset extension but isn't http(s) reaches
+  // cache.put() and throws — confirmed live via a real browser extension's
+  // requests surfacing this exact error, 2026-08-03.
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
   // API calls: let the browser handle natively (service worker must not intercept)
   if (isApiCall(url)) {
     return;
@@ -84,10 +94,21 @@ self.addEventListener('fetch', (event) => {
 // ── Push notifications ────────────────────────────────────────────────────────
 
 self.addEventListener('push', (event) => {
-  let data = { title: 'Trafikskola', body: '', url: '/' };
+  let payload = {};
   try {
-    data = { ...data, ...event.data?.json() };
-  } catch { /* ignore */ }
+    payload = event.data?.json() ?? {};
+  } catch { /* not JSON — leave payload empty, defaults below apply */ }
+
+  // FCM wraps a webpush.data payload one level deeper at the wire level
+  // ({ data: { title, body, url } }), not flat — unwrap it if present so
+  // real content is actually read instead of always falling through to
+  // the generic defaults below.
+  const inner = payload.data ?? payload;
+  const data = {
+    title: inner.title || 'Trafikskola',
+    body:  inner.body  || '',
+    url:   inner.url   || '/',
+  };
 
   event.waitUntil(
     self.registration.showNotification(data.title, {

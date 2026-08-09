@@ -5,6 +5,7 @@ import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,16 @@ const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 const GenerateTokenSchema = z.object({
   instructor_id: z.string().uuid(),
+});
+
+const RegisterPushTokenSchema = z.object({
+  token:          z.string().min(16),
+  previous_token: z.string().min(16).optional(),
+  platform:       z.enum(['web', 'ios', 'android']).optional(),
+});
+
+const RevokePushTokenSchema = z.object({
+  token_id: z.string().uuid(),
 });
 
 const AttendanceSchema = z.object({
@@ -56,8 +67,8 @@ function fail(status: number, message: string): Response {
 // student-portal): platform admins bypass, otherwise the caller's
 // JWT-derived permissions must include the required code.
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(403, 'Organization context required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(403, `Requires permission: ${code}`);
   return null;
 }
@@ -98,13 +109,19 @@ async function resolvePortalToken(req: Request): Promise<PortalSession | null> {
 
   const { data, error } = await supabase
     .from('instructor_portal_sessions')
-    .select('id, instructor_id, organization_id')
+    .select('id, instructor_id, organization_id, instructors!instructor_id(deleted_at)')
     .eq('token_hash', hash)
     .is('revoked_at', null)
     .gt('expires_at', new Date().toISOString())
     .single();
 
   if (error || !data) return null;
+
+  // Same gap as student-portal: a token issued before the instructor was
+  // removed otherwise stays valid until its own TTL — nothing revokes
+  // already-issued links when the instructor record is later deleted.
+  const instructorRow = (data as unknown as { instructors: { deleted_at: string | null } | null }).instructors;
+  if (instructorRow?.deleted_at) return null;
 
   // Update last_used_at asynchronously — don't await
   void supabase
@@ -285,32 +302,47 @@ Deno.serve((req: Request) =>
       weekStart.setDate(today.getDate() - today.getDay() + (today.getDay() === 0 ? -6 : 1));
 
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-      const baseFilter = supabase
-        .from('lesson_bookings')
-        .select('id, starts_at, ends_at, student_id', { count: 'exact' })
-        .eq('instructor_id', instructor_id)
-        .eq('organization_id', organization_id)
-        .is('deleted_at', null)
-        .not('status', 'eq', 'cancelled');
+      // Each branch below builds its own query from scratch — the postgrest-js
+      // filter builder mutates and returns `this`, so chaining multiple
+      // independent date ranges off one shared builder (as this used to do)
+      // silently ANDs every range together onto the same request, collapsing
+      // today/week/month into one over-constrained query instead of three.
+      function bookingsQuery() {
+        return supabase
+          .from('lesson_bookings')
+          .select('id, starts_at, ends_at, student_id', { count: 'exact' })
+          .eq('instructor_id', instructor_id)
+          .eq('organization_id', organization_id)
+          .is('deleted_at', null)
+          // 'cancelled' alone isn't enough — a rescheduled-away booking keeps
+          // its old row (status: 'rescheduled') at the original slot/time, and
+          // without excluding it too, that superseded row still counts here.
+          .not('status', 'in', '(cancelled,rescheduled)');
+      }
 
       const [todayRes, weekRes, monthRes, upcomingRes] = await Promise.all([
-        baseFilter
+        bookingsQuery()
           .gte('starts_at', today.toISOString())
           .lt('starts_at', new Date(today.getTime() + 86_400_000).toISOString()),
-        baseFilter
+        bookingsQuery()
           .gte('starts_at', weekStart.toISOString())
           .lt('starts_at', now.toISOString()),
-        baseFilter
+        bookingsQuery()
           .gte('starts_at', monthStart.toISOString())
-          .lt('starts_at', now.toISOString()),
+          .lt('starts_at', monthEnd.toISOString()),
         supabase
           .from('lesson_bookings')
           .select('id', { count: 'exact' })
           .eq('instructor_id', instructor_id)
           .eq('organization_id', organization_id)
           .is('deleted_at', null)
-          .not('status', 'eq', 'cancelled')
+          // Forward-looking count: unlike bookingsQuery() above (historical
+          // today/week/month totals, where a completed/no_show lesson still
+          // counts as having happened), a booking already marked completed
+          // or no_show is no longer "upcoming" regardless of its starts_at.
+          .not('status', 'in', '(cancelled,rescheduled,completed,no_show)')
           .gt('starts_at', now.toISOString()),
       ]);
 
@@ -401,7 +433,7 @@ Deno.serve((req: Request) =>
         .eq('instructor_id', instructor_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
-        .not('status', 'eq', 'cancelled')
+        .not('status', 'in', '(cancelled,rescheduled)')
         .gte('starts_at', today.toISOString())
         .lt('starts_at', todayEnd.toISOString())
         .order('starts_at', { ascending: true });
@@ -426,7 +458,10 @@ Deno.serve((req: Request) =>
         .eq('instructor_id', instructor_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
-        .not('status', 'eq', 'cancelled')
+        // Same reasoning as the /stats upcoming_count query above — a lesson
+        // already marked completed/no_show is resolved, not upcoming, even
+        // if its starts_at hasn't passed yet.
+        .not('status', 'in', '(cancelled,rescheduled,completed,no_show)')
         .gte('starts_at', now.toISOString())
         .lte('starts_at', in7days.toISOString())
         .order('starts_at', { ascending: true })
@@ -450,7 +485,7 @@ Deno.serve((req: Request) =>
         .eq('instructor_id', instructor_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
-        .not('status', 'eq', 'cancelled')
+        .not('status', 'in', '(cancelled,rescheduled)')
         .gte('starts_at', twelveMonthsAgo)
         .limit(500);
 
@@ -458,14 +493,18 @@ Deno.serve((req: Request) =>
 
       const rows = bookingRows as Array<{ student_id: string; starts_at: string; ends_at: string; status: string }>;
 
-      // Aggregate per student
+      // Aggregate per student. Bucket by status first, not by comparing
+      // starts_at to "now" — a booking can be marked completed slightly
+      // ahead of its own scheduled starts_at (e.g. logged early, or clock
+      // skew), and a pure date comparison then drops it into neither the
+      // completed count nor the next-lesson slot.
       const byStudent = new Map<string, { completed: number; lastPast: string | null; nextFuture: string | null }>();
       for (const row of rows) {
         const entry = byStudent.get(row.student_id) ?? { completed: 0, lastPast: null, nextFuture: null };
-        if (row.starts_at < now) {
+        if (row.status === 'completed') {
           entry.completed++;
           if (!entry.lastPast || row.starts_at > entry.lastPast) entry.lastPast = row.starts_at;
-        } else {
+        } else if (row.status !== 'no_show' && row.starts_at >= now) {
           if (!entry.nextFuture || row.starts_at < entry.nextFuture) entry.nextFuture = row.starts_at;
         }
         byStudent.set(row.student_id, entry);
@@ -612,6 +651,40 @@ Deno.serve((req: Request) =>
       }
 
       return ok({ success: true });
+    }
+
+    // ── POST /push/register — register or refresh an FCM device token ────────
+    if (req.method === 'POST' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RegisterPushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Valid device token required');
+
+      const result = await registerPushToken(
+        supabase,
+        {
+          organizationId: organization_id,
+          ownerColumn:    'instructor_id',
+          ownerId:        instructor_id,
+          token:          parsed.data.token,
+          platform:       parsed.data.platform,
+          userAgent:      req.headers.get('User-Agent'),
+        },
+        parsed.data.previous_token,
+      );
+
+      if ('error' in result) return fail(500, result.error);
+      return ok({ id: result.id });
+    }
+
+    // ── DELETE /push/register — revoke a device token (logout / unsubscribe) ─
+    if (req.method === 'DELETE' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RevokePushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'token_id required');
+
+      const result = await revokePushToken(supabase, organization_id, 'instructor_id', instructor_id, parsed.data.token_id, 'client_unsubscribed');
+      if ('error' in result) return fail(500, result.error);
+      return ok({ revoked: true });
     }
 
     return fail(404, 'Route not found');

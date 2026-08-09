@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@core/api/supabase.js';
 
@@ -7,13 +7,21 @@ import { supabase } from '@core/api/supabase.js';
 // person-lookup.ts for the provider abstraction this calls into.
 
 export interface PersonLookupData {
-  first_name?:    string;
-  last_name?:     string;
-  address_line1?: string;
-  postal_code?:   string;
-  city?:          string;
-  gender?:        'male' | 'female';
-  date_of_birth?: string;
+  first_name?:         string;
+  last_name?:          string;
+  full_legal_name?:    string;
+  address_line1?:      string;
+  postal_code?:        string;
+  city?:               string;
+  gender?:             'male' | 'female';
+  date_of_birth?:      string;
+  identity_valid?:     boolean;
+  protected_identity?: boolean;
+  deceased?:           boolean;
+  /** True when the registry shows this person as emigrated — address data
+   *  should not be trusted/auto-filled with the same confidence as a
+   *  current resident. */
+  emigrated?:          boolean;
 }
 
 export interface PersonLookupCapabilities {
@@ -31,6 +39,8 @@ export interface PersonLookupResponse {
   data:         PersonLookupData | null;
   provider:     string;
   capabilities: PersonLookupCapabilities;
+  from_cache?:  boolean;
+  confidence?:  'exact' | 'partial' | 'unknown' | null;
 }
 
 // supabase-js wraps a non-2xx response in FunctionsHttpError whose .message is
@@ -94,5 +104,71 @@ export function usePersonLookupStatus(options?: { enabled?: boolean }) {
     queryKey: ['person-lookup', 'status'],
     queryFn:  apiPersonLookupStatus,
     ...(options?.enabled !== undefined ? { enabled: options.enabled } : {}),
+  });
+}
+
+// ─── Tenant configuration (External Services settings page) ───────────────────
+// Only 'mock' and 'roaring' are real, implemented providers today — every
+// other value in KNOWN_PROVIDER_NAMES (_shared/person-lookup.ts) is
+// registered but returns a clean "not implemented" result, so the UI only
+// offers the two that actually work.
+
+export interface PersonLookupConfig {
+  active_provider:              string;
+  credentials_configured:       boolean;
+  base_url:                     string | null;
+  timeout_ms:                   number;
+  max_retries:                  number;
+  retry_backoff_ms:             number;
+  auto_lookup_enabled:          boolean;
+  auto_address_update_enabled:  boolean;
+  cache_ttl_seconds:            number;
+  is_active:                    boolean;
+}
+
+async function apiGetPersonLookupConfig(): Promise<PersonLookupConfig> {
+  const { data, error } = await supabase.functions.invoke<{ data: PersonLookupConfig }>(
+    'person-lookup-config', { method: 'GET' },
+  );
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+export function usePersonLookupConfig(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['person-lookup', 'config'],
+    queryFn:  apiGetPersonLookupConfig,
+    ...(options?.enabled !== undefined ? { enabled: options.enabled } : {}),
+  });
+}
+
+export interface UpdatePersonLookupConfigInput {
+  active_provider?: 'mock' | 'roaring';
+  client_id?:       string;
+  client_secret?:   string;
+  is_active?:       boolean;
+}
+
+async function apiUpdatePersonLookupConfig(input: UpdatePersonLookupConfigInput): Promise<PersonLookupConfig> {
+  const { data, error } = await supabase.functions.invoke<{ data: PersonLookupConfig }>(
+    'person-lookup-config', { method: 'POST', body: input },
+  );
+  if (error) {
+    const message = await extractErrorMessage(error, 'Kunde inte spara konfigurationen');
+    throw new Error(message);
+  }
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+export function useUpdatePersonLookupConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdatePersonLookupConfig,
+    onSuccess: (updated) => {
+      qc.setQueryData(['person-lookup', 'config'], updated);
+      void qc.invalidateQueries({ queryKey: ['person-lookup', 'status'] });
+    },
   });
 }

@@ -29,6 +29,7 @@ import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { buildErrorResponse } from '../_shared/errors.ts';
 import { requireFeature } from '../_shared/subscription.ts';
+import { encryptCredential, decryptCredential } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -274,8 +275,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         await updateOrgSettings(supabase, orgId, {
           fortnox_access_token: null, // clear legacy manual token
           fortnox_oauth: {
-            access_token:  tokens.access_token,
-            refresh_token: tokens.refresh_token ?? '',
+            access_token:  await encryptCredential(tokens.access_token),
+            refresh_token: tokens.refresh_token ? await encryptCredential(tokens.refresh_token) : '',
             token_expiry:  tokenExpiry,
             scope:         tokens.scope ?? FORTNOX_SCOPE,
             connected_at:  new Date().toISOString(),
@@ -292,10 +293,11 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         const clientSecret = Deno.env.get('FORTNOX_CLIENT_SECRET');
         if (!clientId || !clientSecret) return err(ctx, 'Fortnox-integration ej konfigurerad', 503, 'NOT_CONFIGURED');
 
-        const settings     = await getOrgSettings(supabase, orgId);
-        const oauth        = settings['fortnox_oauth'] as Record<string, string> | undefined;
-        const refreshToken = oauth?.['refresh_token'];
-        if (!refreshToken) return err(ctx, 'Inte ansluten till Fortnox', 400, 'NOT_CONNECTED');
+        const settings        = await getOrgSettings(supabase, orgId);
+        const oauth           = settings['fortnox_oauth'] as Record<string, string> | undefined;
+        const storedRefresh   = oauth?.['refresh_token'];
+        if (!storedRefresh) return err(ctx, 'Inte ansluten till Fortnox', 400, 'NOT_CONNECTED');
+        const refreshToken    = await decryptCredential(storedRefresh);
 
         const tokens = await fortnoxTokenRequest(clientId, clientSecret, {
           grant_type:    'refresh_token',
@@ -307,8 +309,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         await updateOrgSettings(supabase, orgId, {
           fortnox_oauth: {
             ...(oauth ?? {}),
-            access_token:  tokens.access_token,
-            refresh_token: tokens.refresh_token ?? refreshToken,
+            access_token:  await encryptCredential(tokens.access_token),
+            refresh_token: tokens.refresh_token ? await encryptCredential(tokens.refresh_token) : storedRefresh,
             token_expiry:  tokenExpiry,
             scope:         tokens.scope ?? oauth?.['scope'] ?? FORTNOX_SCOPE,
           },

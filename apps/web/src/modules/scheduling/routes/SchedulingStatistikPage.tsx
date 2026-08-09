@@ -242,12 +242,13 @@ export function SchedulingStatistikPage() {
   const ltBreakdown = useMemo(() => {
     const counts: Record<string, { name: string; bookings: number; cancelled: number }> = {};
     for (const b of bookings) {
-      const name = ltMap[b.lesson_type_id] ?? 'Okänd';
-      if (!counts[b.lesson_type_id]) counts[b.lesson_type_id] = { name, bookings: 0, cancelled: 0 };
+      const key  = b.lesson_type_id ?? '';
+      const name = ltMap[key] ?? 'Okänd';
+      if (!counts[key]) counts[key] = { name, bookings: 0, cancelled: 0 };
       if (b.status === 'cancelled' || b.status === 'no_show') {
-        counts[b.lesson_type_id]!.cancelled += 1;
+        counts[key]!.cancelled += 1;
       } else {
-        counts[b.lesson_type_id]!.bookings += 1;
+        counts[key]!.bookings += 1;
       }
     }
     return Object.values(counts).sort((a, b) => b.bookings - a.bookings);

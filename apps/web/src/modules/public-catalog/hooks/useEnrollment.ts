@@ -39,6 +39,8 @@ export interface EnrollmentSubmitInput {
   coupon_id:            string | null;
   coupon_code:          string | null;
   form:                 EnrollmentFormValues;
+  /** Honeypot — always empty for a real visitor; never rendered as a visible field. */
+  website?:             string;
 }
 
 export interface EnrollmentSubmitResult {
@@ -149,7 +151,7 @@ export function useCouponValidation(orgId: string | undefined) {
 // ─── Submission mutation ──────────────────────────────────────────────────────
 
 async function apiSubmitEnrollment(input: EnrollmentSubmitInput): Promise<EnrollmentSubmitResult> {
-  const { org_id, package_offering_id, campaign_id, coupon_id, coupon_code, form } = input;
+  const { org_id, package_offering_id, campaign_id, coupon_id, coupon_code, form, website } = input;
 
   const qs = new URLSearchParams({ org_id });
 
@@ -161,6 +163,7 @@ async function apiSubmitEnrollment(input: EnrollmentSubmitInput): Promise<Enroll
     phone:              form.phone.trim(),
     preferred_language: form.preferred_language,
     license_category:   form.license_category,
+    website:            website ?? '',
   };
 
   if (campaign_id)                    body['campaign_id']   = campaign_id;

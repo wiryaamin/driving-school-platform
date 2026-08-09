@@ -96,7 +96,7 @@ export function useInsightsKpi() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: paymentsRaw } = await (supabase as unknown as any)
         .from('payments')
-        .select('amount, paid_at')
+        .select('amount, refund_amount, paid_at')
         .eq('organization_id', orgId)
         .not('paid_at', 'is', null)
         .is('void_at', null)
@@ -109,11 +109,15 @@ export function useInsightsKpi() {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
         monthMap.set(monthLabel(d), 0);
       }
-      for (const p of (paymentsRaw ?? []) as { amount: number; paid_at: string }[]) {
+      // Net of refund_amount — a refunded or partially_refunded payment must not
+      // count its refunded portion as revenue (found via live pilot simulation:
+      // a fully-refunded payment still inflated this trend by its full amount).
+      for (const p of (paymentsRaw ?? []) as { amount: number; refund_amount: number | null; paid_at: string }[]) {
         if (!p.paid_at) continue;
         const key = monthLabel(new Date(p.paid_at));
         if (monthMap.has(key)) {
-          monthMap.set(key, (monthMap.get(key) ?? 0) + Number(p.amount));
+          const net = Number(p.amount) - Number(p.refund_amount ?? 0);
+          monthMap.set(key, (monthMap.get(key) ?? 0) + net);
         }
       }
       const revenueTrend = Array.from(monthMap.entries()).map(([label, value]) => ({

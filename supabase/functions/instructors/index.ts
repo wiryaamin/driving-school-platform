@@ -4,6 +4,7 @@ import { buildEdgeContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
+import { createInstructorRecord } from '../_shared/instructor-provisioning.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline Zod schemas (Deno can't import workspace packages) ───────────────
@@ -11,6 +12,7 @@ import type { EdgeRequestContext } from '../_shared/context.ts';
 const EMPLOYMENT_TYPES = ['employed', 'contractor', 'external', 'on_leave', 'inactive'] as const;
 const IDENTITY_TYPES   = ['personnummer', 'samordningsnummer', 'passport', 'national_id', 'none'] as const;
 const PERSONNUMMER_HASH_RE = /^[a-f0-9]{64}$/i;
+const PERSONNUMMER_RE = /^\d{8}-?\d{4}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CreateInstructorSchema = z.object({
@@ -20,6 +22,11 @@ const CreateInstructorSchema = z.object({
 
   phone:         z.string().max(30).optional(),
   date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+
+  // Raw personnummer (YYYYMMDD-XXXX, dash optional) — never persisted as-is;
+  // handleCreate/handleUpdate turn it into personnummer_encrypted/_hash/_last4
+  // via _shared/bankid-crypto.ts before hitting the database.
+  personnummer: z.string().regex(PERSONNUMMER_RE, 'Format: YYYYMMDD-XXXX').optional(),
 
   identity_type:          z.enum(IDENTITY_TYPES).optional(),
   personnummer_encrypted:  z.string().optional(),
@@ -38,6 +45,20 @@ const CreateInstructorSchema = z.object({
   primary_location_id: z.string().uuid().optional(),
   languages_spoken:    z.array(z.string().min(1).max(50)).optional(),
   max_lessons_per_day: z.number().int().positive().max(20).optional(),
+
+  // ── Overview page profile fields ──────────────────────────────────────────
+  address_line1:                z.string().max(200).optional(),
+  postal_code:                  z.string().max(20).optional(),
+  city:                         z.string().max(100).optional(),
+  bio:                          z.string().max(2000).optional(),
+  emergency_contact_first_name: z.string().max(100).optional(),
+  emergency_contact_last_name:  z.string().max(100).optional(),
+  emergency_contact_email:      z.string().email().max(200).optional(),
+  emergency_contact_phone:      z.string().max(30).optional(),
+  sort_order:                   z.number().int().min(0).optional(),
+  show_in_booking:              z.boolean().optional(),
+  show_in_ecommerce:            z.boolean().optional(),
+  show_on_website:              z.boolean().optional(),
 });
 
 const UpdateInstructorSchema = CreateInstructorSchema.partial().extend({
@@ -98,10 +119,10 @@ function pagedResp<T>(
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) {
     return errorResp(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
   }
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) {
     return errorResp(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   }
@@ -177,47 +198,16 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
   }
 
-  const dto = parsed.data;
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const result = await createInstructorRecord(client, ctx.organizationId as string, parsed.data, ctx.actorId);
 
-  // Duplicate check: email (unique per org)
-  const { data: emailDup } = await (client as any)
-    .from('instructors')
-    .select('id')
-    .eq('organization_id', ctx.organizationId)
-    .eq('email', dto.email)
-    .is('deleted_at', null)
-    .maybeSingle();
-
-  if (emailDup !== null) {
-    return errorResp(ctx, 409, 'CONFLICT', `An instructor with email ${dto.email} already exists in this organisation`);
-  }
-
-  // Duplicate check: personnummer
-  if (dto.personnummer_hash !== undefined) {
-    const { data: pnrDup } = await (client as any)
-      .from('instructors')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('personnummer_hash', dto.personnummer_hash)
-      .is('deleted_at', null)
-      .maybeSingle();
-
-    if (pnrDup !== null) {
-      return errorResp(ctx, 409, 'DUPLICATE_PERSONAL_NUMBER', 'An instructor with this personnummer is already registered in this organisation');
+  if (!result.ok) {
+    logger.error('instructors.create_failed', { correlation_id: ctx.correlationId, code: result.code, error: result.message });
+    if (result.code === 'DUPLICATE_EMAIL' || result.code === 'DUPLICATE_PERSONAL_NUMBER') {
+      return errorResp(ctx, 409, result.code === 'DUPLICATE_EMAIL' ? 'CONFLICT' : 'DUPLICATE_PERSONAL_NUMBER', result.message);
     }
-  }
-
-  const { data: instructor, error } = await (client as any)
-    .from('instructors')
-    .insert({ ...dto, organization_id: ctx.organizationId, created_by: ctx.actorId, updated_by: ctx.actorId })
-    .select()
-    .single();
-
-  if (error) {
-    logger.error('instructors.create_failed', { correlation_id: ctx.correlationId, error: error.message });
-    if (error.code === '23505') {
-      return errorResp(ctx, 409, 'CONFLICT', 'Instructor record already exists (unique constraint violation)');
+    if (result.code === 'IDENTITY_CRYPTO_NOT_CONFIGURED') {
+      return errorResp(ctx, 500, 'INTERNAL_ERROR', result.message);
     }
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create instructor');
   }
@@ -226,11 +216,11 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     request_id:     ctx.requestId,
     correlation_id: ctx.correlationId,
     org_id:         ctx.organizationId,
-    instructor_id:  instructor.id,
+    instructor_id:  result.instructor['id'],
     actor_id:       ctx.actorId,
   });
 
-  return successResp(ctx, instructor, 201);
+  return successResp(ctx, result.instructor, 201);
 }
 
 async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
@@ -273,7 +263,9 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
   }
 
-  const dto = parsed.data;
+  const pnrResult = await resolvePersonnummer(parsed.data, ctx);
+  if (!pnrResult.ok) return pnrResult.response;
+  const dto = pnrResult.dto as Record<string, unknown> & { email?: string; personnummer_hash?: string };
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   if (dto.email !== undefined) {

@@ -141,7 +141,8 @@ export function useTriggerGeneration() {
       startDate,
       endDate,
     }: {
-      lessonTypeId: string;
+      // null = generate generic availability slots (no fixed lesson type).
+      lessonTypeId: string | null;
       startDate:    string;
       endDate:      string;
     }): Promise<TriggerGenerationResult> => {

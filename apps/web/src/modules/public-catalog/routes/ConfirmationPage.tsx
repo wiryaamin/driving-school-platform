@@ -1,10 +1,16 @@
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { CheckCircle2, Mail, ArrowLeft } from 'lucide-react';
+import { usePublicPackages } from '../hooks/usePublicCatalog.js';
+import { TenantIdentity } from '@shared/components/public/TenantIdentity.js';
+import { TenantContactFooter } from '@shared/components/public/TenantContactFooter.js';
 
 export function ConfirmationPage() {
   const { orgId, packageId } = useParams<{ orgId: string; packageId: string }>();
   const [searchParams] = useSearchParams();
   const enrollmentId = searchParams.get('ref');
+
+  const { data } = usePublicPackages(orgId, {});
+  const org = data?.organization;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -14,10 +20,14 @@ export function ConfirmationPage() {
           {orgId && (
             <Link
               to={`/catalog/${orgId}`}
-              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors"
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors min-w-0"
             >
-              <ArrowLeft className="w-4 h-4" />
-              Tillbaka till katalogen
+              <ArrowLeft className="w-4 h-4 shrink-0" />
+              {org ? (
+                <TenantIdentity name={org.name} branding={org.branding} textClassName="text-sm font-medium" logoClassName="h-5 w-auto" />
+              ) : (
+                'Tillbaka till katalogen'
+              )}
             </Link>
           )}
         </div>
@@ -33,7 +43,7 @@ export function ConfirmationPage() {
             Tack för din anmälan!
           </h1>
           <p className="text-gray-600 mb-6 leading-relaxed">
-            Din anmälan har tagits emot. Körskolan granskar den och kontaktar
+            Din anmälan har tagits emot. {org?.name ?? 'Körskolan'} granskar den och kontaktar
             dig inom kort för bekräftelse och betalningsinformation.
           </p>
 
@@ -75,6 +85,8 @@ export function ConfirmationPage() {
             )}
           </div>
         </div>
+
+        <TenantContactFooter branding={org?.branding} />
       </main>
     </div>
   );

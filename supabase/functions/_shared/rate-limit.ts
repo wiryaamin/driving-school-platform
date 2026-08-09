@@ -22,6 +22,15 @@ export const RATE_LIMIT_TIERS = {
   user_write: { requests: 40, windowMs: 60_000 },
   /** Platform Admin workspace (elevated allowance) */
   platform_admin: { requests: 600, windowMs: 60_000 },
+  /** Person Lookup — a real per-call cost once a paid provider is active;
+   *  a receptionist registering students has no legitimate need for more
+   *  than a handful of lookups per minute. Deliberately tighter than
+   *  user_write. */
+  person_lookup: { requests: 20, windowMs: 60_000 },
+  /** Vehicle Registry Lookup — same reasoning as person_lookup: a real
+   *  per-call cost once a paid reseller is active, and vehicle lookups are
+   *  an occasional data-entry aid, not a bulk operation. */
+  vehicle_registry_lookup: { requests: 20, windowMs: 60_000 },
 } as const;
 
 export type RateLimitTier = keyof typeof RATE_LIMIT_TIERS;

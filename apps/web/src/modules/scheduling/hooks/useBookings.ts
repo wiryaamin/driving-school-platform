@@ -98,6 +98,16 @@ export function useBookingsForSlot(slotId: string | null) {
   });
 }
 
+// "Upcoming" means still actionable — exclude bookings that have already
+// resolved (completed/cancelled/no_show/rescheduled) even if their scheduled
+// time falls within the lookahead window (e.g. a lesson marked completed
+// early/late shouldn't keep masking the real next booking).
+const TERMINAL_BOOKING_STATUSES = new Set(['completed', 'cancelled', 'no_show', 'rescheduled']);
+
+function onlyUpcoming(response: BookingListResponse): BookingListResponse {
+  return { ...response, data: response.data.filter((b) => !TERMINAL_BOOKING_STATUSES.has(b.status)) };
+}
+
 export function useInstructorUpcomingBookings(instructorId: string | null | undefined) {
   const from  = new Date().toISOString();
   const to    = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -113,6 +123,7 @@ export function useInstructorUpcomingBookings(instructorId: string | null | unde
       sort_by:   'starts_at',
       sort_dir:  'asc',
     }),
+    select:    onlyUpcoming,
     enabled:   Boolean(instructorId),
     staleTime: 2 * 60 * 1000,
   });
@@ -133,6 +144,7 @@ export function useStudentUpcomingBookings(studentId: string | null | undefined)
       sort_by:    'starts_at',
       sort_dir:   'asc',
     }),
+    select:    onlyUpcoming,
     enabled:   Boolean(studentId),
     staleTime: 2 * 60 * 1000,
   });

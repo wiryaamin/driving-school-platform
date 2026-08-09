@@ -89,15 +89,33 @@ export async function consumeLessonPackageCreditOrCompensate(
     actorEmail:     string | null;
   },
 ): Promise<CreditConsumeResult> {
-  // consume_lesson_credit() uses FOR UPDATE — safe under concurrent load.
-  const { error: consumeErr } = await client.rpc('consume_lesson_credit', {
-    p_assignment_id:   params.assignmentId,
-    p_organization_id: params.organizationId,
-    p_booking_id:      params.bookingId,
-    p_lesson_category: params.category,
-    p_actor_id:        params.actorId,
-    p_actor_email:     params.actorEmail,
-  });
+  // The booking row (inserted by the caller just before this function runs)
+  // and this credit consumption are two separate PostgREST/RPC round-trips,
+  // not one transaction — a genuine gap, but the realistic failure mode
+  // within it is this RPC call itself failing (network blip, timeout),
+  // which previously threw straight out of this function uncaught: the
+  // booking stayed committed with no credit consumed and no compensating
+  // cancellation, while the caller's HTTP response still surfaced as a 500.
+  // Catching here ensures the exact same compensation the controlled-error
+  // branch already had also runs for that failure mode. (A true mid-flight
+  // process kill between the booking insert and this call remains a narrower,
+  // lower-likelihood gap that only combining both into one atomic SQL
+  // function would fully close — out of scope for this fix.)
+  let consumeErr: { message: string } | null;
+  try {
+    // consume_lesson_credit() uses FOR UPDATE — safe under concurrent load.
+    const result = await client.rpc('consume_lesson_credit', {
+      p_assignment_id:   params.assignmentId,
+      p_organization_id: params.organizationId,
+      p_booking_id:      params.bookingId,
+      p_lesson_category: params.category,
+      p_actor_id:        params.actorId,
+      p_actor_email:     params.actorEmail,
+    });
+    consumeErr = result.error;
+  } catch (e) {
+    consumeErr = { message: e instanceof Error ? e.message : String(e) };
+  }
 
   if (consumeErr) {
     // Race edge case: pre-flight passed but a concurrent booking exhausted

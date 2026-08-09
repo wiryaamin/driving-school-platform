@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,11 +79,14 @@ export function useSlotTemplates() {
 
 export function useCreateSlotTemplate() {
   const qc = useQueryClient();
+  const { organization } = useSession();
+  const orgId = organization?.id;
   return useMutation({
     mutationFn: async (input: CreateSlotTemplateInput) => {
+      if (!orgId) throw new Error('Ingen organisation');
       const { error } = await supabase
         .from('slot_templates')
-        .insert(input as never);
+        .insert({ ...input, organization_id: orgId } as never);
       if (error) throw new Error(error.message);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: templateKeys.list() }),

@@ -12,12 +12,12 @@ import { cn } from '@/lib/utils.js';
 
 function formatDateFull(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE', {
-    weekday: 'long', day: 'numeric', month: 'long',
+    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm',
   }).replace(/^./, c => c.toUpperCase());
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
 }
 
 const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
@@ -48,10 +48,20 @@ function RescheduleSheet({
 }: {
   booking: PortalBooking; onClose: () => void;
 }) {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const fromDt = tomorrow.toISOString();
-  const toDt   = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  // Computed once per mount (this sheet mounts fresh every time it opens,
+  // via `{showResch && <RescheduleSheet .../>}` in the parent) — recomputing
+  // fresh Date objects on every render would change usePortalSlots' query
+  // key every render, causing an unbounded refetch loop (the slot list never
+  // stops "loading"). Same fix already applied to the staff-facing
+  // RescheduleBookingDialog for the identical reason.
+  const { fromDt, toDt } = useMemo(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return {
+      fromDt: tomorrow.toISOString(),
+      toDt:   new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    };
+  }, []);
 
   const { data: slots, isLoading } = usePortalSlots(fromDt, toDt);
   const reschedule = usePortalRescheduleBooking();
@@ -113,7 +123,7 @@ function RescheduleSheet({
               <CalendarDays className={cn('w-5 h-5 mt-0.5 shrink-0', selectedSlot === slot.id ? 'text-blue-600' : 'text-gray-400')} />
               <div>
                 <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 capitalize">
-                  {new Date(slot.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short' })}
+                  {new Date(slot.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Stockholm' })}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   {formatTime(slot.starts_at)}–{formatTime(slot.ends_at)}
@@ -254,10 +264,10 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
               : isTerminal ? 'text-gray-400'
               : 'text-blue-600 dark:text-blue-400',
             )}>
-              {new Date(booking.starts_at).getDate()}
+              {new Date(booking.starts_at).toLocaleDateString('sv-SE', { day: 'numeric', timeZone: 'Europe/Stockholm' })}
             </p>
             <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-0.5">
-              {new Date(booking.starts_at).toLocaleDateString('sv-SE', { month: 'short' })}
+              {new Date(booking.starts_at).toLocaleDateString('sv-SE', { month: 'short', timeZone: 'Europe/Stockholm' })}
             </p>
           </div>
 
@@ -374,10 +384,10 @@ function HistoryCard({ item }: { item: PortalHistoryItem }) {
             'text-lg font-bold leading-none',
             item.status === 'completed' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400',
           )}>
-            {new Date(item.starts_at).getDate()}
+            {new Date(item.starts_at).toLocaleDateString('sv-SE', { day: 'numeric', timeZone: 'Europe/Stockholm' })}
           </p>
           <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-0.5">
-            {new Date(item.starts_at).toLocaleDateString('sv-SE', { month: 'short' })}
+            {new Date(item.starts_at).toLocaleDateString('sv-SE', { month: 'short', timeZone: 'Europe/Stockholm' })}
           </p>
         </div>
 

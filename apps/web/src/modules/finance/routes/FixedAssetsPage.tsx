@@ -24,10 +24,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Textarea,
   toast,
 } from '@platform/ui';
@@ -571,14 +567,14 @@ function AssetDetailSheet({ asset, onClose }: { asset: FixedAsset; onClose: () =
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[560px] sm:w-[640px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-2">
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
               <span className="font-mono text-sm text-muted-foreground">{asset.asset_code}</span>
               {asset.asset_name}
-            </SheetTitle>
-          </SheetHeader>
+            </DialogTitle>
+          </DialogHeader>
 
           {/* Status + action row */}
           <div className="mt-4 flex items-center gap-2 flex-wrap">
@@ -731,8 +727,8 @@ function AssetDetailSheet({ asset, onClose }: { asset: FixedAsset; onClose: () =
               </div>
             )}
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {deprecModal  && <DepreciateDialog asset={asset} onClose={() => setDeprecModal(false)} />}
       {disposeModal && <DisposeDialog    asset={asset} onClose={() => setDisposeModal(false)} />}

@@ -7,7 +7,7 @@ import {
   ShoppingBag, Gift, BookOpen, ShoppingCart, Package,
   GraduationCap, ClipboardList, MessageSquare, Mail,
   MessageCircle, Globe, Palette, TrendingUp, FileText,
-  ClipboardCheck, Star, Monitor, Shield, Plug,
+  ClipboardCheck, Star, Monitor, Shield, Plug, Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { useSession } from '@shared/hooks/useSession.js';
@@ -111,6 +111,7 @@ const SECTIONS: SettingSection[] = [
     cards: [
       { label: 'Utbildningsbehörigheter', description: 'Behörigheter som tillhandahålls', icon: GraduationCap, color: 'purple', path: '/settings/education/licenses' },
       { label: 'Undervisningsplan', description: 'Se, redigera och skapa nya', icon: ClipboardList, color: 'red', path: '/curriculum' },
+      { label: 'Material', description: 'Länkar, videor och dokument för elevportalen', icon: BookOpen, color: 'purple', path: '/settings/education/materials' },
     ],
   },
   {
@@ -120,6 +121,7 @@ const SECTIONS: SettingSection[] = [
       { label: 'Mallar för meddelanden', description: 'Återanvändbara meddelandemallar', icon: Mail, color: 'blue', path: '/settings/communication/templates' },
       { label: 'Gemensamma fraser', description: 'Fraser som visas för alla lärare', icon: MessageCircle, color: 'blue', path: '/settings/communication/phrases' },
       { label: 'E-postmallar', description: 'Kräver marknadsföringstillägget', icon: Mail, color: 'blue', path: '/settings/communication/email-templates', beta: true },
+      { label: 'Automationsregler', description: 'Påminnelser, bekräftelser och workflows', icon: Zap, color: 'violet', path: '/settings/communication/automation' },
     ],
   },
   {

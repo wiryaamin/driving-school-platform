@@ -154,6 +154,36 @@ async function apiFetchWallet(studentId: string): Promise<WalletSummary> {
   return unwrap(data);
 }
 
+interface RequestPaymentLinkResult {
+  payment_request_id: string;
+  session_url:         string;
+  student_email:        string;
+  student_name:          string;
+  invoice_number:        string | null;
+  amount_sek:             number;
+}
+
+async function apiRequestPaymentLink(invoiceId: string): Promise<RequestPaymentLinkResult> {
+  const { data, error } = await supabase.functions.invoke<{ data: RequestPaymentLinkResult }>('payments/request', {
+    method: 'POST',
+    body:   JSON.stringify({ invoice_id: invoiceId }),
+  });
+  if (error) {
+    // supabase-js's FunctionsHttpError.message is just "Edge Function
+    // returned a non-2xx status code" — the actual reason (e.g. "Online card
+    // payment is not configured for this school") is in the response body,
+    // reachable via error.context (the raw Response). Surface that instead
+    // so the toast tells staff something they can act on.
+    const context = (error as { context?: Response }).context;
+    if (context) {
+      const body = await context.clone().json().catch(() => null) as { message?: string } | null;
+      if (body?.message) throw new Error(body.message);
+    }
+    throw error;
+  }
+  return unwrap(data);
+}
+
 async function apiFetchStudentPackages(studentId: string): Promise<StudentPackageListResponse> {
   const { data, error } = await supabase.functions.invoke<StudentPackageListResponse>(
     `student-packages?student_id=${studentId}&status=active`,
@@ -202,6 +232,12 @@ export function useVoidInvoice() {
       void qc.invalidateQueries({ queryKey: financeKeys.invoiceDetail(args.id) });
       void qc.invalidateQueries({ queryKey: financeKeys.invoices() });
     },
+  });
+}
+
+export function useRequestPaymentLink() {
+  return useMutation({
+    mutationFn: (invoiceId: string) => apiRequestPaymentLink(invoiceId),
   });
 }
 

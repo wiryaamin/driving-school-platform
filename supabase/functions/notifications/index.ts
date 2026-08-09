@@ -38,8 +38,8 @@ function fail(ctx: EdgeRequestContext, status: number, code: string, message: st
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -65,6 +65,23 @@ function extractPathParts(req: Request): { id: string | null; action: string | n
 async function handleList(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
   const guard = requirePerm(ctx, 'notifications:notification:read');
   if (guard) return guard;
+
+  // requirePerm() lets platform admins through even with no organization_id
+  // (correct — they bypass tenant isolation), but notifications is a
+  // tenant-scoped table: `.eq('organization_id', ctx.organizationId)` below
+  // sends `organization_id=eq.null` to PostgREST when ctx.organizationId is
+  // null, which Postgres can't parse as the column's uuid type — a genuine
+  // 500, confirmed live 2026-08-03 (a platform admin, who has no home
+  // organization, viewing any page with a global notifications
+  // widget/bell). There is no "home org" notification list for a
+  // platform-level actor with no organization specified, so the correct
+  // response is an empty list, not an error.
+  if (ctx.organizationId === null) {
+    return new Response(
+      JSON.stringify({ data: [], meta: { page: 1, per_page: 25, total: 0, has_more: false } }),
+      { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+    );
+  }
 
   const url     = new URL(req.url);
   const page    = Math.max(1, Number(url.searchParams.get('page')     ?? '1'));
@@ -171,6 +188,9 @@ async function handleGetOne(id: string, ctx: EdgeRequestContext, client: any): P
   const guard = requirePerm(ctx, 'notifications:notification:read');
   if (guard) return guard;
 
+  // See handleList's identical guard above for why this is necessary.
+  if (ctx.organizationId === null) return fail(ctx, 404, 'NOT_FOUND', `Notification '${id}' not found`);
+
   const { data, error } = await client
     .from('notifications')
     .select('*')
@@ -190,6 +210,9 @@ async function handleGetOne(id: string, ctx: EdgeRequestContext, client: any): P
 async function handleCancel(id: string, ctx: EdgeRequestContext, client: any): Promise<Response> {
   const guard = requirePerm(ctx, 'notifications:notification:create');
   if (guard) return guard;
+
+  // See handleList's identical guard above for why this is necessary.
+  if (ctx.organizationId === null) return fail(ctx, 404, 'NOT_FOUND', `Notification '${id}' not found`);
 
   const { data: existing } = await client
     .from('notifications')
@@ -227,6 +250,15 @@ async function handleGetPreferences(profileId: string, ctx: EdgeRequestContext, 
     if (guard) return guard;
   }
 
+  // See handleList's identical guard for why this is necessary — a platform
+  // admin (isSelf true, no organization) has no org-scoped preferences row.
+  if (ctx.organizationId === null) {
+    return new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+    );
+  }
+
   const { data, error } = await client
     .from('notification_preferences')
     .select('*')
@@ -260,6 +292,11 @@ async function handleUpsertPreference(req: Request, ctx: EdgeRequestContext, cli
   if (!isSelf) {
     const guard = requirePerm(ctx, 'notifications:preferences:manage');
     if (guard) return guard;
+  }
+
+  // See handleList's identical guard — no organization to scope this row to.
+  if (ctx.organizationId === null) {
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'Notification preferences require an organization context');
   }
 
   const { data, error } = await client

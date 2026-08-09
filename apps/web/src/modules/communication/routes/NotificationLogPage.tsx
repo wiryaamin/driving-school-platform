@@ -24,10 +24,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Switch,
   Tabs,
   TabsContent,
@@ -127,11 +123,11 @@ function NotificationDetailSheet({ id, onClose }: { id: string; onClose: () => v
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[480px] sm:w-[540px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>Notifikation</SheetTitle>
-          </SheetHeader>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Notifikation</DialogTitle>
+          </DialogHeader>
 
           {isLoading ? (
             <div className="mt-6 space-y-3">{[1,2,3,4].map((i) => <div key={i} className="h-8 bg-muted rounded animate-pulse" />)}</div>
@@ -200,8 +196,8 @@ function NotificationDetailSheet({ id, onClose }: { id: string; onClose: () => v
               )}
             </div>
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
       {cancelling && notif && <CancelDialog notification={notif} onClose={() => { setCancelling(false); onClose(); }} />}
     </>
   );

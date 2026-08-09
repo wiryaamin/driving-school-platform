@@ -2,24 +2,24 @@
  * BankID Relying Party REST API v6.0 client (Init/Collect/Cancel + QR data),
  * per Finansiell ID-Teknik BID AB's published specification.
  *
- * Requires mutual TLS: BankID's servers only accept requests presenting a
- * client certificate issued to a registered relying party. That certificate
- * does not exist in this environment (confirmed during Phase 3's Existing
- * Implementation Review — no cert material anywhere in this repository or
- * its secrets documentation) and cannot be fabricated; it must be supplied by
- * the user via BANKID_CLIENT_CERT/BANKID_CLIENT_KEY/BANKID_CA_CERT once they
- * hold a real BankID test or production relying-party agreement.
+ * BankID requires mutual TLS (a client certificate issued to a registered
+ * relying party). Deno — the runtime Supabase Edge Functions run on — has no
+ * client-certificate support on outbound connections at all, at any level
+ * (confirmed: neither Deno.createHttpClient nor Deno.connectTls expose a
+ * cert/key option in the current stable API). This is a hard runtime wall,
+ * not a missing-credential problem, so calls are routed through a small
+ * external relay (a Vercel Node.js function — plain Node `https.Agent`
+ * supports client certs natively) that performs the actual mTLS handshake to
+ * BankID and forwards the response verbatim. See BANKID_RELAY_URL/
+ * BANKID_RELAY_SECRET below; the relay itself holds the cert/key/CA.
  *
  * This client is written to the real, documented protocol and every call
  * site degrades gracefully — via bankidConfigured() — to a clear "not
- * configured" error rather than a confusing network failure when the
- * certificate secrets are absent.
+ * configured" error rather than a confusing network failure when the relay
+ * secrets are absent.
  */
 
 import { logger } from './logger.ts';
-
-const BANKID_TEST_BASE = 'https://appapi2.test.bankid.com/rp/v6.0';
-const BANKID_PROD_BASE = 'https://appapi2.bankid.com/rp/v6.0';
 
 export interface BankidAuthResponse {
   orderRef: string;
@@ -51,59 +51,28 @@ export class BankidApiError extends Error {
   }
 }
 
-/** True only when all three certificate secrets are present. Callers must check this before any protocol call. */
+/** True only when the relay URL and shared secret are present. Callers must check this before any protocol call. */
 export function bankidConfigured(): boolean {
   return !!(
-    Deno.env.get('BANKID_CLIENT_CERT') &&
-    Deno.env.get('BANKID_CLIENT_KEY') &&
-    Deno.env.get('BANKID_CA_CERT')
+    Deno.env.get('BANKID_RELAY_URL') &&
+    Deno.env.get('BANKID_RELAY_SECRET')
   );
-}
-
-function baseUrl(): string {
-  return Deno.env.get('BANKID_ENV') === 'prod' ? BANKID_PROD_BASE : BANKID_TEST_BASE;
-}
-
-let cachedHttpClient: Deno.HttpClient | null = null;
-let httpClientUnsupported = false;
-
-/**
- * Builds the mTLS-capable fetch client once per isolate. Some Deno-based edge
- * runtimes restrict Deno.createHttpClient's client-certificate options — if
- * so, this throws once, is logged distinctly from "not configured," and every
- * subsequent call reuses that same negative result rather than retrying a
- * call known to fail.
- */
-function getHttpClient(): Deno.HttpClient {
-  if (cachedHttpClient) return cachedHttpClient;
-  if (httpClientUnsupported) throw new Error('mTLS client unsupported in this runtime');
-
-  try {
-    cachedHttpClient = Deno.createHttpClient({
-      certChain: Deno.env.get('BANKID_CLIENT_CERT')!,
-      privateKey: Deno.env.get('BANKID_CLIENT_KEY')!,
-      caCerts: [Deno.env.get('BANKID_CA_CERT')!],
-    });
-    return cachedHttpClient;
-  } catch (err) {
-    httpClientUnsupported = true;
-    logger.error('bankid-client: Deno.createHttpClient failed — mTLS unsupported in this runtime', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    throw new Error('mTLS client unsupported in this runtime');
-  }
 }
 
 async function post<T>(path: string, body: Record<string, unknown>): Promise<T> {
   if (!bankidConfigured()) throw new BankidNotConfiguredError();
 
-  const client = getHttpClient();
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const relayUrl = Deno.env.get('BANKID_RELAY_URL')!;
+  const relaySecret = Deno.env.get('BANKID_RELAY_SECRET')!;
+
+  const res = await fetch(`${relayUrl}?path=${encodeURIComponent(path)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Relay-Secret': relaySecret,
+    },
     body: JSON.stringify(body),
-    client,
-  } as RequestInit & { client: Deno.HttpClient });
+  });
 
   if (!res.ok) {
     let errorCode = 'unknown';

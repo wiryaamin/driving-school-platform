@@ -368,16 +368,11 @@ export function PackageDetailPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  {offering.bundle_credits.map((credit, i) => {
-                    const c = credit as Record<string, unknown>;
-                    const cat = c['lesson_category'] as string ?? '';
-                    const qty = c['quantity'] as number ?? 0;
-                    return (
-                      <InfoRow key={i} label={CATEGORY_LABELS[cat] ?? cat}>
-                        {qty} st
-                      </InfoRow>
-                    );
-                  })}
+                  {offering.bundle_credits.map((credit, i) => (
+                    <InfoRow key={i} label={CATEGORY_LABELS[credit.lesson_category] ?? credit.lesson_category}>
+                      {credit.quantity} st
+                    </InfoRow>
+                  ))}
                 </CardContent>
               </Card>
             ) : (

@@ -99,6 +99,9 @@ interface WorkerMetrics {
   instructor_digests_sent: number;
   campaigns_transitioned:  number;
   packages_expired:        number;
+  regulatory_reminders_sent: number;
+  stale_booking_reminders_sent: number;
+  vehicle_compliance_reminders_sent: number;
 }
 
 // ─── Outbox event handlers ────────────────────────────────────────────────────
@@ -155,7 +158,18 @@ async function handleStudentArchived(event: OutboxEvent, client: any): Promise<H
 
   const { error, count } = await client
     .from('lesson_bookings')
-    .update({ status: 'cancelled' })
+    .update({
+      status:                'cancelled',
+      // lesson_bookings_cancel_consistency requires cancelled_at whenever
+      // status = 'cancelled' — this update always violated that check and
+      // never actually cancelled a single booking, found via referential-
+      // integrity hardening (an archived student's future booking was left
+      // dangling as 'reserved').
+      cancelled_at:           new Date().toISOString(),
+      cancellation_reason:    'Eleven arkiverad',
+      cancellation_category:  'other',
+      status_changed_at:      new Date().toISOString(),
+    })
     .eq('student_id', studentId)
     .eq('organization_id', orgId)
     .in('status', ['draft', 'reserved', 'confirmed'])
@@ -172,6 +186,19 @@ async function handleStudentArchived(event: OutboxEvent, client: any): Promise<H
 
   logger.info('handler.student_archived.bookings_cancelled', { event_id: event.id, student_id: studentId, count: count ?? 0 });
   return { success: true };
+}
+
+// student.status_changed fires on every students status transition (see
+// emit_student_status_changed trigger) — this is the event that actually
+// fires in production; 'Student.Archived' below is never emitted by
+// anything (students/index.ts only logs that string, it never calls
+// insert_outbox_event). Only react when the transition is into 'archived';
+// reuses handleStudentArchived's logic since the payload shape is
+// compatible (both carry student_id/organization_id).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleStudentStatusChanged(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  if (event.payload['new_status'] !== 'archived') return { success: true };
+  return handleStudentArchived(event, client);
 }
 
 // Instructor.Created: queue a welcome internal notification for the instructor.
@@ -374,16 +401,19 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
         const slot    = slotRes.data    as { starts_at: string }                                         | null;
         const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
 
-        if (slot !== null && student !== null && (student.phone !== null || student.email !== null)) {
+        if (slot !== null && student !== null) {
           const startsAt    = new Date(slot.starts_at);
           const datum       = startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' });
           const tid         = startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',             timeZone: 'Europe/Stockholm' });
           const commPayload: Record<string, string> = {
             trigger_event:   'booking_confirmed',
             organization_id: orgId,
+            student_id:      booking.student_id,
             förnamn:         student.first_name ?? '',
             datum,
             tid,
+            reference_type:  'lesson_booking',
+            reference_id:    bookingId,
           };
           if (student.phone !== null) commPayload['student_phone'] = student.phone;
           if (student.email !== null) commPayload['student_email'] = student.email;
@@ -424,6 +454,129 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
     booking_id:          bookingId,
     reminders_scheduled: reminderCount ?? 0,
   });
+  return { success: true };
+}
+
+// lead.created (student_leads DB trigger): notify the org owner that a
+// prospective customer submitted the public booking/lead-capture form.
+// The only existing "notify staff" precedent (resolveOrgOwnerId, below) was
+// a single-recipient in-app-only side-channel outside the toggle-driven
+// Kommunikation pipeline — this instead goes through the normal
+// Communication.Requested funnel so it gets a real, per-channel-toggleable
+// row like every customer-facing notification does.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleLeadCreated(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const leadId = event.payload['lead_id'] as string | undefined;
+  const orgId  = event.organization_id;
+
+  if (leadId === undefined || orgId === null) {
+    logger.warn('handler.lead_created.missing_data', { event_id: event.id });
+    return { success: true };
+  }
+
+  try {
+    const ownerId = await resolveOrgOwnerId(client, orgId);
+    if (ownerId === null) {
+      logger.warn('handler.lead_created.no_org_owner', { event_id: event.id, org_id: orgId });
+      return { success: true };
+    }
+
+    const { data: owner } = await client
+      .from('profiles')
+      .select('email, phone')
+      .eq('id', ownerId)
+      .single();
+
+    if (!owner) return { success: true };
+
+    const commPayload: Record<string, string> = {
+      trigger_event:      'lead_created',
+      organization_id:    orgId,
+      admin_id:           ownerId,
+      förnamn:             `${event.payload['first_name'] ?? ''} ${event.payload['last_name'] ?? ''}`.trim(),
+      körkortskategori:    `${event.payload['license_category'] ?? 'B'}`,
+      lead_email:          `${event.payload['email'] ?? ''}`,
+      lead_phone:          `${event.payload['phone'] ?? ''}`,
+      reference_type:      'student_lead',
+      reference_id:        leadId,
+    };
+    if (owner.email) commPayload['admin_email'] = owner.email;
+    if (owner.phone) commPayload['admin_phone'] = owner.phone;
+
+    await client.rpc('insert_outbox_event', {
+      p_event_type:      'Communication.Requested',
+      p_channel:         'internal',
+      p_payload:         commPayload,
+      p_organization_id: orgId,
+      p_causation_id:    event.id,
+    }).then(undefined, (enqueueErr: unknown) => {
+      logger.warn('lead_created.enqueue_failed', { event_id: event.id, lead_id: leadId, error: String(enqueueErr) });
+    });
+  } catch (notifErr) {
+    logger.warn('lead_created.notification_error', { event_id: event.id, lead_id: leadId, error: String(notifErr) });
+  }
+
+  logger.info('handler.lead_created', { event_id: event.id, lead_id: leadId });
+  return { success: true };
+}
+
+// enrollment_request.created (enrollment_requests DB trigger): same gap,
+// same fix as lead.created above — a package enrollment submitted through
+// the public catalog → checkout flow previously notified nobody at all.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleEnrollmentRequestCreated(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const enrollmentId = event.payload['enrollment_id'] as string | undefined;
+  const orgId        = event.organization_id;
+
+  if (enrollmentId === undefined || orgId === null) {
+    logger.warn('handler.enrollment_request_created.missing_data', { event_id: event.id });
+    return { success: true };
+  }
+
+  try {
+    const ownerId = await resolveOrgOwnerId(client, orgId);
+    if (ownerId === null) {
+      logger.warn('handler.enrollment_request_created.no_org_owner', { event_id: event.id, org_id: orgId });
+      return { success: true };
+    }
+
+    const { data: owner } = await client
+      .from('profiles')
+      .select('email, phone')
+      .eq('id', ownerId)
+      .single();
+
+    if (!owner) return { success: true };
+
+    const commPayload: Record<string, string> = {
+      trigger_event:   'enrollment_request_created',
+      organization_id: orgId,
+      admin_id:        ownerId,
+      förnamn:          `${event.payload['first_name'] ?? ''} ${event.payload['last_name'] ?? ''}`.trim(),
+      paket:            `${event.payload['package_name'] ?? ''}`,
+      belopp:           `${event.payload['final_price_incl_vat'] ?? ''}`,
+      lead_email:       `${event.payload['email'] ?? ''}`,
+      lead_phone:       `${event.payload['phone'] ?? ''}`,
+      reference_type:   'enrollment_request',
+      reference_id:     enrollmentId,
+    };
+    if (owner.email) commPayload['admin_email'] = owner.email;
+    if (owner.phone) commPayload['admin_phone'] = owner.phone;
+
+    await client.rpc('insert_outbox_event', {
+      p_event_type:      'Communication.Requested',
+      p_channel:         'internal',
+      p_payload:         commPayload,
+      p_organization_id: orgId,
+      p_causation_id:    event.id,
+    }).then(undefined, (enqueueErr: unknown) => {
+      logger.warn('enrollment_request_created.enqueue_failed', { event_id: event.id, enrollment_id: enrollmentId, error: String(enqueueErr) });
+    });
+  } catch (notifErr) {
+    logger.warn('enrollment_request_created.notification_error', { event_id: event.id, enrollment_id: enrollmentId, error: String(notifErr) });
+  }
+
+  logger.info('handler.enrollment_request_created', { event_id: event.id, enrollment_id: enrollmentId });
   return { success: true };
 }
 
@@ -475,6 +628,25 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
         promoted_entry_id: promotedId,
       });
     }
+
+    // Type-based waitlist (lesson_waitlist_entries) — independent of the
+    // slot-based one above, checked in addition, not instead. A student
+    // waiting for "any slot of lesson type X" should also learn this slot
+    // reopened, even if nobody was waiting for this exact slot specifically.
+    const { data: lessonWaitlistId, error: lessonWaitlistErr } = await client.rpc('promote_lesson_waitlist_next', {
+      p_slot_id: slotId,
+    });
+    if (lessonWaitlistErr !== null) {
+      logger.warn('handler.lesson_cancelled.promote_lesson_waitlist_failed', {
+        event_id: event.id,
+        slot_id:  slotId,
+        error:    lessonWaitlistErr.message,
+      });
+    } else if (lessonWaitlistId !== null) {
+      logger.info('handler.lesson_cancelled.lesson_waitlist_promoted', {
+        event_id: event.id, slot_id: slotId, waitlist_entry_id: lessonWaitlistId,
+      });
+    }
   }
 
   // Send cancellation notification to student
@@ -492,17 +664,20 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
       const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
       const slot    = slotRes.data    as { starts_at: string }                                               | null;
 
-      if (student !== null && (student.phone !== null || student.email !== null)) {
+      if (student !== null) {
           const startsAt    = slot ? new Date(slot.starts_at) : null;
           const datum       = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
           const tid         = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit',             timeZone: 'Europe/Stockholm' }) : '';
           const commPayload: Record<string, string> = {
             trigger_event:   'booking_cancelled',
             organization_id: orgId,
+            student_id:      studentId,
             förnamn:         student.first_name ?? '',
             datum,
             tid,
+            reference_type:  'lesson_booking',
           };
+          if (bookingId !== undefined) commPayload['reference_id'] = bookingId;
           if (student.phone !== null) commPayload['student_phone'] = student.phone;
           if (student.email !== null) commPayload['student_email'] = student.email;
 
@@ -573,16 +748,19 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
           const slot    = slotRes.data    as { starts_at: string }                                         | null;
           const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
 
-          if (slot !== null && student !== null && (student.phone !== null || student.email !== null)) {
+          if (slot !== null && student !== null) {
             const startsAt = new Date(slot.starts_at);
             const datum    = startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' });
             const tid      = startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
             const commPayload: Record<string, string> = {
               trigger_event:   'booking_rescheduled',
               organization_id: orgId,
+              student_id:      b.student_id,
               förnamn:         student.first_name ?? '',
               datum,
               tid,
+              reference_type:  'lesson_booking',
+              reference_id:    newBookingId,
             };
             if (student.phone !== null) commPayload['student_phone'] = student.phone;
             if (student.email !== null) commPayload['student_email'] = student.email;
@@ -636,16 +814,19 @@ async function handleWaitlistPromoted(event: OutboxEvent, client: any): Promise<
       const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
       const slot    = slotRes.data    as { starts_at: string }                                               | null;
 
-      if (student !== null && (student.phone !== null || student.email !== null)) {
+      if (student !== null) {
         const startsAt = slot ? new Date(slot.starts_at) : null;
         const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
         const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }) : '';
         const commPayload: Record<string, string> = {
           trigger_event:   'waitlist_promoted',
           organization_id: orgId,
+          student_id:      studentId,
           förnamn:         student.first_name ?? '',
           datum,
           tid,
+          reference_type:  'waitlist_entry',
+          reference_id:    event.payload['waitlist_entry_id'] as string,
         };
         if (reservationDeadline !== undefined) commPayload['reservation_deadline'] = reservationDeadline;
         if (student.phone !== null) commPayload['student_phone'] = student.phone;
@@ -673,14 +854,89 @@ async function handleWaitlistPromoted(event: OutboxEvent, client: any): Promise<
   return { success: true };
 }
 
-async function handleReservationExpired(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleReservationExpired(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId = event.payload['student_id'] as string | undefined;
+  const slotId    = event.payload['slot_id']    as string | undefined;
+  const orgId     = event.organization_id;
+
   logger.info('handler.reservation_expired', {
     event_id:   event.id,
     booking_id: event.payload['booking_id'],
-    student_id: event.payload['student_id'],
-    slot_id:    event.payload['slot_id'],
+    student_id: studentId,
+    slot_id:    slotId,
   });
-  // TODO Phase 4: dispatch reservation.expired notification email
+
+  // The vacated slot must be re-offered to the next waitlist entry — the
+  // same rpc handleLessonCancelled already uses for the identical situation
+  // (a slot becoming free). Without this, a slot freed by a reservation
+  // that simply timed out (as opposed to an explicit cancellation) would
+  // never cycle to the next person on the waitlist.
+  if (slotId !== undefined) {
+    const { data: promotedId, error: promoteErr } = await client.rpc('promote_waitlist_next', {
+      p_slot_id: slotId,
+    });
+    if (promoteErr !== null) {
+      logger.warn('handler.reservation_expired.promote_waitlist_failed', {
+        event_id: event.id, slot_id: slotId, error: promoteErr.message,
+      });
+    } else if (promotedId) {
+      logger.info('handler.reservation_expired.promoted_next', { event_id: event.id, slot_id: slotId, promoted_entry_id: promotedId });
+    }
+  }
+
+  // Tell the student their reservation lapsed — previously a silent no-op,
+  // so a student promoted off the waitlist who missed the confirmation
+  // window was never told why they lost the slot. Same
+  // Communication.Requested enqueue pattern as handleWaitlistPromoted.
+  if (studentId !== undefined && orgId !== null) {
+    try {
+      const [studentRes, slotRes] = await Promise.all([
+        client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
+        slotId !== undefined
+          ? client.from('lesson_slots').select('starts_at').eq('id', slotId).single()
+          : Promise.resolve({ data: null }),
+      ]);
+
+      const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+      const slot    = slotRes.data    as { starts_at: string }                                               | null;
+
+      if (student !== null) {
+        const startsAt = slot ? new Date(slot.starts_at) : null;
+        const datum    = startsAt ? startsAt.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Stockholm' }) : '';
+        const tid      = startsAt ? startsAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }) : '';
+        const commPayload: Record<string, string> = {
+          trigger_event:   'reservation_expired',
+          organization_id: orgId,
+          student_id:      studentId,
+          förnamn:         student.first_name ?? '',
+          datum,
+          tid,
+          reference_type:  'lesson_booking',
+          reference_id:    event.payload['booking_id'] as string,
+        };
+        if (student.phone !== null) commPayload['student_phone'] = student.phone;
+        if (student.email !== null) commPayload['student_email'] = student.email;
+
+        await client.rpc('insert_outbox_event', {
+          p_event_type:      'Communication.Requested',
+          p_channel:         'internal',
+          p_payload:         commPayload,
+          p_organization_id: orgId,
+          p_causation_id:    event.id,
+        }).then(undefined, (enqueueErr: unknown) => {
+          logger.warn('reservation_expired.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        });
+
+        logger.info('handler.reservation_expired.dispatched', { event_id: event.id, student_id: studentId });
+      } else {
+        logger.info('handler.reservation_expired.no_contact', { event_id: event.id, student_id: studentId });
+      }
+    } catch (notifErr) {
+      logger.warn('reservation_expired.notification_error', { event_id: event.id, error: String(notifErr) });
+    }
+  }
+
   return { success: true };
 }
 
@@ -851,18 +1107,75 @@ async function handleCreditExpired(event: OutboxEvent, _client: unknown): Promis
 
 // ── Phase 4B commercial handlers (accounting + internal channels) ─────────────
 
-async function handleRefundProcessed(event: OutboxEvent, _client: unknown): Promise<HandlerResult> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleRefundProcessed(event: OutboxEvent, client: any): Promise<HandlerResult> {
+  const studentId    = event.payload['student_id']    as string | undefined;
+  const invoiceId     = event.payload['invoice_id']    as string | undefined;
+  const refundAmount = event.payload['refund_amount'] as number | undefined;
+  const orgId        = event.organization_id;
+
   logger.info('handler.refund_processed', {
     event_id:        event.id,
     refund_id:       event.payload['refund_id'],
-    invoice_id:      event.payload['invoice_id'],
-    student_id:      event.payload['student_id'],
+    invoice_id:      invoiceId,
+    student_id:      studentId,
     refund_type:     event.payload['refund_type'],
     reason_code:     event.payload['reason_code'],
-    refund_amount:   event.payload['refund_amount'],
+    refund_amount:   refundAmount,
     credit_quantity: event.payload['credit_quantity'],
   });
-  // TODO: enqueue in accounting_export_queue; notify student of refund
+
+  // Tell the student their refund was processed — previously a silent
+  // no-op, so a student who received money back was never told. Same
+  // Communication.Requested enqueue pattern as handleReservationExpired.
+  // (The ledger side of the same original TODO — posting the refund to
+  // the accounting books — is handled separately via
+  // post_refund_journal_entry, triggered from the Refunds page.)
+  if (studentId !== undefined && orgId !== null && refundAmount !== undefined && refundAmount > 0) {
+    try {
+      const [studentRes, invoiceRes] = await Promise.all([
+        client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
+        invoiceId !== undefined
+          ? client.from('invoices').select('invoice_number').eq('id', invoiceId).single()
+          : Promise.resolve({ data: null }),
+      ]);
+
+      const student = studentRes.data as { first_name: string; phone: string | null; email: string | null } | null;
+      const invoice = invoiceRes.data  as { invoice_number: string | null }                                  | null;
+
+      if (student !== null && (student.phone !== null || student.email !== null)) {
+        const commPayload: Record<string, string> = {
+          trigger_event:   'refund_processed',
+          organization_id: orgId,
+          student_id:      studentId,
+          förnamn:         student.first_name ?? '',
+          belopp:          String(refundAmount),
+          fakturanummer:   invoice?.invoice_number ?? '',
+          reference_type:  'refund',
+          reference_id:    event.payload['refund_id'] as string,
+        };
+        if (student.phone !== null) commPayload['student_phone'] = student.phone;
+        if (student.email !== null) commPayload['student_email'] = student.email;
+
+        await client.rpc('insert_outbox_event', {
+          p_event_type:      'Communication.Requested',
+          p_channel:         'internal',
+          p_payload:         commPayload,
+          p_organization_id: orgId,
+          p_causation_id:    event.id,
+        }).then(undefined, (enqueueErr: unknown) => {
+          logger.warn('refund_processed.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+        });
+
+        logger.info('handler.refund_processed.dispatched', { event_id: event.id, student_id: studentId });
+      } else {
+        logger.info('handler.refund_processed.no_contact', { event_id: event.id, student_id: studentId });
+      }
+    } catch (notifErr) {
+      logger.warn('refund_processed.notification_error', { event_id: event.id, error: String(notifErr) });
+    }
+  }
+
   return { success: true };
 }
 
@@ -991,13 +1304,15 @@ async function handleInvoiceReminderSent(event: OutboxEvent, client: any): Promi
   // template (phase_a_notification_templates.sql) — previously unreachable,
   // since this handler never enqueued anything.
   try {
-    const [{ data: student }, { data: invoice }] = await Promise.all([
+    const [{ data: student }, { data: invoice }, { data: dunningState }] = await Promise.all([
       client.from('students').select('first_name, phone, email').eq('id', studentId).single(),
       client.from('invoices').select('invoice_number, outstanding_amount, due_date').eq('id', invoiceId).single(),
+      client.from('invoice_dunning_state').select('current_stage_id').eq('invoice_id', invoiceId).maybeSingle(),
     ]);
 
     const s   = student as { first_name: string; phone: string | null; email: string | null } | null;
     const inv = invoice as { invoice_number: string; outstanding_amount: number; due_date: string | null } | null;
+    const stageId = (dunningState as { current_stage_id: string | null } | null)?.current_stage_id ?? null;
 
     if (s !== null && inv !== null && (s.phone !== null || s.email !== null)) {
       const commPayload: Record<string, string> = {
@@ -1010,6 +1325,25 @@ async function handleInvoiceReminderSent(event: OutboxEvent, client: any): Promi
       };
       if (s.phone !== null) commPayload['student_phone'] = s.phone;
       if (s.email !== null) commPayload['student_email'] = s.email;
+
+      // Admins can author a custom subject/message per dunning stage
+      // (dunning_schedule_stages.subject_template/message_template — set
+      // via the "Lägg till steg" dialog) but until now nothing ever read
+      // them back: every stage sent the identical generic 'invoice_overdue'
+      // template regardless of whether it was a friendly first reminder or
+      // a final legal-escalation warning. Pass them through as an override
+      // for communication-worker to render instead, when the stage has
+      // actually customized its copy.
+      if (stageId !== null) {
+        const { data: stage } = await client
+          .from('dunning_schedule_stages')
+          .select('subject_template, message_template')
+          .eq('id', stageId)
+          .maybeSingle();
+        const st = stage as { subject_template: string | null; message_template: string | null } | null;
+        if (st?.message_template) commPayload['override_body'] = st.message_template;
+        if (st?.subject_template) commPayload['override_subject'] = st.subject_template;
+      }
 
       const { error: enqueueErr } = await client.rpc('insert_outbox_event', {
         p_event_type:      'Communication.Requested',
@@ -1103,12 +1437,17 @@ const HANDLER_REGISTRY: Record<string, EventHandler> = {
   'Student.Created':         handleStudentCreated,
   'Student.Updated':         handleStudentUpdated,
   'Student.Archived':        handleStudentArchived,
+  'student.status_changed':  handleStudentStatusChanged, // DB trigger alias — see handleStudentStatusChanged comment
   'Instructor.Created':      handleInstructorCreated,
   'Instructor.Updated':      handleInstructorUpdated,
   'Instructor.Archived':     handleInstructorArchived,
   'Lesson.SlotCreated':      handleLessonSlotCreated,
   'Lesson.SlotCancelled':    handleLessonSlotCancelled,
   'booking.created':         handleLessonCreated,   // Phase 2B DB trigger alias
+  'booking.cancelled':       handleLessonCancelled, // Phase 2B DB trigger alias — was missing; cancelling a
+                                                     // booking never re-promoted the waitlist until this was added
+  'lead.created':            handleLeadCreated,     // student_leads DB trigger — notify org owner of a new public lead
+  'enrollment_request.created': handleEnrollmentRequestCreated, // enrollment_requests DB trigger — notify org owner of a new package enrollment
   'Lesson.Created':          handleLessonCreated,
   'Lesson.Updated':          handleLessonUpdated,
   'Lesson.Cancelled':        handleLessonCancelled,
@@ -1151,6 +1490,9 @@ interface MaintenanceMetrics {
   instructor_digests_sent: number;
   campaigns_transitioned:  number;
   packages_expired:        number;
+  regulatory_reminders_sent: number;
+  stale_booking_reminders_sent: number;
+  vehicle_compliance_reminders_sent: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1220,10 +1562,11 @@ async function processReminder(client: any, reminder: Record<string, unknown>, w
 
     // Enqueue Communication.Requested so the dedicated handler dispatches
     // to communication-worker on the next drain cycle (outbox pattern — no direct HTTP).
-    if (!isDuplicate && student !== null && (student.phone !== null || student.email !== null)) {
+    if (!isDuplicate && student !== null) {
       const commPayload: Record<string, string | null> = {
         trigger_event:     triggerEvent,
         organization_id:   orgId,
+        student_id:        booking.student_id,
         förnamn:           student.first_name ?? '',
         datum,
         tid,
@@ -1350,26 +1693,32 @@ async function sendInstructorDigests(client: any, workerId: string): Promise<num
     const instr = instrById.get(instructorId);
     if (instr === undefined) continue;
 
+    // contactAddress dedup below is best-effort for phone/email — an
+    // instructor with neither (push-only) always proceeds since there's no
+    // sensible per-address key for them; worst case is a duplicate digest,
+    // not a missing one, and push dedup would need a different key entirely.
     const contactAddress = instr.phone ?? instr.email ?? '';
-    if (contactAddress === '') continue;
 
-    // Dedup: skip if digest already sent today to this instructor address
-    const { count: alreadySent } = await client
-      .from('outbound_messages')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', orgId)
-      .eq('recipient_address', contactAddress)
-      .gte('created_at', todayStart.toISOString())
-      .filter('metadata->>trigger_event', 'eq', 'instructor_schedule_daily');
+    if (contactAddress !== '') {
+      // Dedup: skip if digest already sent today to this instructor address
+      const { count: alreadySent } = await client
+        .from('outbound_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', orgId)
+        .eq('recipient_address', contactAddress)
+        .gte('created_at', todayStart.toISOString())
+        .filter('metadata->>trigger_event', 'eq', 'instructor_schedule_daily');
 
-    if ((alreadySent ?? 0) > 0) {
-      logger.debug('digest.already_sent_today', { worker_id: workerId, instructor_id: instructorId });
-      continue;
+      if ((alreadySent ?? 0) > 0) {
+        logger.debug('digest.already_sent_today', { worker_id: workerId, instructor_id: instructorId });
+        continue;
+      }
     }
 
     const payload: Record<string, string> = {
       trigger_event:    'instructor_schedule_daily',
       organization_id:  orgId,
+      instructor_id:    instructorId,
       förnamn:          instr.first_name,
       datum,
       antal_lektioner:  String(slotCount),
@@ -1394,6 +1743,142 @@ async function sendInstructorDigests(client: any, workerId: string): Promise<num
   return sent;
 }
 
+// ─── Stale booking reconciliation reminder ────────────────────────────────────
+// Lesson completion (confirmed -> completed/no_show) is entirely
+// instructor-driven — no job auto-transitions a booking once its lesson time
+// passes, by design (the system should never guess whether a lesson actually
+// happened). But that means a booking an instructor forgets to close out
+// stays 'confirmed' forever with nothing prompting them to fix it, silently
+// skewing instructor stats and no-show tracking. Runs once per day (same
+// idiom as sendInstructorDigests) and dedupes per instructor per day via
+// outbound_messages, not per-booking — a single digest count, not one
+// message per stale booking.
+const STALE_BOOKING_GRACE_HOURS = 3;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendStaleBookingReminders(client: any, workerId: string): Promise<number> {
+  const nowUtcHour = new Date().getUTCHours();
+  if (nowUtcHour < 17 || nowUtcHour >= 19) return 0;
+
+  const cutoff = new Date(Date.now() - STALE_BOOKING_GRACE_HOURS * 60 * 60 * 1000);
+
+  const { data: bookings, error: bookingsErr } = await client
+    .from('lesson_bookings')
+    .select('organization_id, instructor_id')
+    .eq('status', 'confirmed')
+    .lt('ends_at', cutoff.toISOString())
+    .is('deleted_at', null)
+    .limit(2000);
+
+  if (bookingsErr !== null) {
+    logger.warn('stale_bookings.query_failed', { worker_id: workerId, error: bookingsErr.message });
+    return 0;
+  }
+  if (!bookings?.length) return 0;
+
+  const instructorMap = new Map<string, { orgId: string; instructorId: string; count: number }>();
+  for (const b of bookings as Array<{ organization_id: string; instructor_id: string }>) {
+    const key = `${b.organization_id}:${b.instructor_id}`;
+    const existing = instructorMap.get(key);
+    if (existing !== undefined) {
+      existing.count++;
+    } else {
+      instructorMap.set(key, { orgId: b.organization_id, instructorId: b.instructor_id, count: 1 });
+    }
+  }
+
+  const instructorIds = [...new Set([...instructorMap.values()].map((v) => v.instructorId))];
+  const { data: instructors, error: instErr } = await client
+    .from('instructors')
+    .select('id, first_name, phone, email')
+    .in('id', instructorIds)
+    .is('deleted_at', null);
+
+  if (instErr !== null || !instructors?.length) {
+    if (instErr !== null) logger.warn('stale_bookings.instructors_query_failed', { worker_id: workerId, error: instErr.message });
+    return 0;
+  }
+
+  const instrById = new Map<string, { first_name: string; phone: string | null; email: string | null }>();
+  for (const instr of instructors as Array<{ id: string; first_name: string; phone: string | null; email: string | null }>) {
+    instrById.set(instr.id, instr);
+  }
+
+  const workerUrl    = `${Deno.env.get('SUPABASE_URL')}/functions/v1/communication-worker/notify`;
+  const workerSecret = Deno.env.get('WORKER_SECRET');
+  if (workerSecret === undefined || workerSecret === '') return 0;
+
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+
+  let sent = 0;
+
+  const todayKey = todayStart.toISOString().slice(0, 10);
+
+  for (const [, { orgId, instructorId, count }] of instructorMap) {
+    const instr = instrById.get(instructorId);
+    if (instr === undefined) continue;
+
+    // Atomically claim "one reminder per instructor per day" via a
+    // deterministic idempotency_key on notifications' existing unique
+    // constraint, instead of a separate read-check-then-dispatch — an
+    // overlapping worker run racing this same window would previously both
+    // observe zero already-sent messages and both dispatch. ON CONFLICT DO
+    // NOTHING makes the claim itself the atomic gate: only the worker whose
+    // insert actually lands proceeds to dispatch.
+    const { data: claimed, error: claimErr } = await client
+      .from('notifications')
+      .insert({
+        organization_id: orgId,
+        recipient_id:    instructorId,
+        recipient_type:  'instructor',
+        channel:         'internal',
+        template_key:    'booking_reconciliation_reminder',
+        idempotency_key: `booking_reconciliation_reminder:${orgId}:${instructorId}:${todayKey}`,
+        reference_type:  'instructor',
+        reference_id:    instructorId,
+        status:           'sent',
+      })
+      .select('id')
+      .maybeSingle();
+
+    if (claimErr) {
+      if ((claimErr as { code?: string }).code !== '23505') {
+        logger.error('stale_bookings.claim_failed', { worker_id: workerId, instructor_id: instructorId, error: claimErr.message });
+      } else {
+        logger.debug('stale_bookings.already_sent_today', { worker_id: workerId, instructor_id: instructorId });
+      }
+      continue;
+    }
+    if (!claimed) continue;
+
+    const payload: Record<string, string> = {
+      trigger_event:    'booking_reconciliation_reminder',
+      organization_id:  orgId,
+      instructor_id:    instructorId,
+      förnamn:          instr.first_name,
+      antal:            String(count),
+    };
+    if (instr.phone !== null) payload['instructor_phone'] = instr.phone;
+    if (instr.email !== null) payload['instructor_email'] = instr.email;
+
+    const resp = await fetch(workerUrl, {
+      method:  'POST',
+      headers: { 'Authorization': `Bearer ${workerSecret}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    }).catch(() => null);
+
+    if (resp?.ok === true) {
+      sent++;
+      logger.info('stale_bookings.reminder_sent', { worker_id: workerId, instructor_id: instructorId, org_id: orgId, count });
+    } else {
+      logger.warn('stale_bookings.dispatch_failed', { worker_id: workerId, instructor_id: instructorId, http_status: resp?.status });
+    }
+  }
+
+  return sent;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runMaintenanceTick(client: any, workerId: string): Promise<MaintenanceMetrics> {
   const metrics: MaintenanceMetrics = {
@@ -1405,6 +1890,9 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     instructor_digests_sent: 0,
     campaigns_transitioned:  0,
     packages_expired:        0,
+    regulatory_reminders_sent: 0,
+    stale_booking_reminders_sent: 0,
+    vehicle_compliance_reminders_sent: 0,
   };
 
   // 1. Drain due reminders (atomic claim via SKIP LOCKED in DB function)
@@ -1533,7 +2021,306 @@ async function runMaintenanceTick(client: any, workerId: string): Promise<Mainte
     }
   }
 
+  // 8. Regulatory Workflow Tracker: notify the org owner of items due within
+  // 7 days that haven't been reminded yet (regulatory_workflows.due_date,
+  // see migration 20260727000003). Same admin-notification idiom as
+  // stripe-webhook's alertSettlementFailure() — a direct write to
+  // `notifications` (recipient_type: 'admin', channel: 'internal') rather
+  // than the outbox/communication-worker pipeline, whose recipient
+  // resolution doesn't yet cover this case either.
+  try {
+    metrics.regulatory_reminders_sent = await checkDueRegulatoryWorkflows(client, workerId);
+  } catch (err) {
+    logger.error('maintenance.regulatory_reminders_failed', {
+      worker_id: workerId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 9. Stale booking reconciliation reminder (17:00-18:59 UTC window, deduped
+  // per instructor per day) — see sendStaleBookingReminders for rationale.
+  try {
+    metrics.stale_booking_reminders_sent = await sendStaleBookingReminders(client as any, workerId);
+  } catch (err) {
+    logger.error('maintenance.stale_booking_reminders_failed', {
+      worker_id: workerId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 10. Vehicle compliance reminders (registration/insurance/besiktning
+  // expiry — see checkDueVehicleCompliance for rationale).
+  try {
+    metrics.vehicle_compliance_reminders_sent = await checkDueVehicleCompliance(client, workerId);
+  } catch (err) {
+    logger.error('maintenance.vehicle_compliance_reminders_failed', {
+      worker_id: workerId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return metrics;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function resolveOrgOwnerId(client: any, orgId: string): Promise<string | null> {
+  const { data: orgMemberships } = await client
+    .from('memberships')
+    .select('id, user_id')
+    .eq('organization_id', orgId)
+    .eq('status', 'active');
+
+  const memberships = (orgMemberships ?? []) as Array<{ id: string; user_id: string }>;
+  if (memberships.length === 0) return null;
+
+  const { data: ownerRole } = await client
+    .from('roles')
+    .select('id')
+    .eq('name', 'org_owner')
+    .maybeSingle();
+  const ownerRoleId = (ownerRole as { id?: string } | null)?.id;
+  if (!ownerRoleId) return null;
+
+  const { data: assignment } = await client
+    .from('membership_roles')
+    .select('membership_id')
+    .eq('role_id', ownerRoleId)
+    .in('membership_id', memberships.map((m) => m.id))
+    .limit(1)
+    .maybeSingle();
+
+  const membershipId = (assignment as { membership_id?: string } | null)?.membership_id;
+  return memberships.find((m) => m.id === membershipId)?.user_id ?? null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function checkDueRegulatoryWorkflows(client: any, workerId: string): Promise<number> {
+  const today       = new Date().toISOString().slice(0, 10);
+  const dueBy       = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  const reReminded  = new Date(Date.now() - 3 * 86_400_000).toISOString();
+
+  type Row = { id: string; organization_id: string; title: string; due_date: string; workflow_type: string };
+
+  // Two passes, not a single OR filter: (a) items due within 7 days that
+  // have never been reminded, and (b) items already overdue whose last
+  // reminder is more than 3 days old — a single one-time reminder was found
+  // insufficient during commissioning review: an item that stays overdue
+  // and unresolved for weeks would otherwise never remind again. Escalating
+  // every 3 days while overdue (not on any fixed schedule before the due
+  // date) balances staying visible against not spamming the admin.
+  const { data: neverReminded, error: err1 } = await client
+    .from('regulatory_workflows')
+    .select('id, organization_id, title, due_date, workflow_type')
+    .is('deleted_at', null)
+    .is('reminder_sent_at', null)
+    .not('status', 'in', '(confirmed,rejected,expired)')
+    .not('due_date', 'is', null)
+    .lte('due_date', dueBy)
+    .limit(100);
+
+  if (err1) {
+    logger.error('maintenance.regulatory_due_query_failed', { worker_id: workerId, error: err1.message });
+  }
+
+  const { data: overdueEscalation, error: err2 } = await client
+    .from('regulatory_workflows')
+    .select('id, organization_id, title, due_date, workflow_type')
+    .is('deleted_at', null)
+    .not('reminder_sent_at', 'is', null)
+    .lt('reminder_sent_at', reReminded)
+    .not('status', 'in', '(confirmed,rejected,expired)')
+    .not('due_date', 'is', null)
+    .lt('due_date', today)
+    .limit(100);
+
+  if (err2) {
+    logger.error('maintenance.regulatory_overdue_query_failed', { worker_id: workerId, error: err2.message });
+  }
+
+  const seen = new Set<string>();
+  const due: Row[] = [...(neverReminded ?? []), ...(overdueEscalation ?? [])]
+    .filter((w: Row) => (seen.has(w.id) ? false : (seen.add(w.id), true)));
+
+  let sent = 0;
+  for (const w of due) {
+    // Atomically claim before notifying — same discipline as
+    // checkVehicleExpiryField above: the WHERE guard re-verifies the read
+    // condition at claim time, so an overlapping worker run that already
+    // claimed this item gets zero rows back instead of duplicating the
+    // notification.
+    const { data: claimed, error: claimErr } = await client
+      .from('regulatory_workflows')
+      .update({ reminder_sent_at: new Date().toISOString() })
+      .eq('id', w.id)
+      .or(`reminder_sent_at.is.null,reminder_sent_at.lt.${reReminded}`)
+      .select('id')
+      .maybeSingle();
+
+    if (claimErr) {
+      logger.error('maintenance.regulatory_claim_failed', { worker_id: workerId, workflow_id: w.id, error: claimErr.message });
+      continue;
+    }
+    if (!claimed) {
+      continue;
+    }
+
+    const recipientId = await resolveOrgOwnerId(client, w.organization_id);
+    if (!recipientId) continue;
+
+    const overdue = w.due_date < today;
+    const { error: notifyErr } = await client.from('notifications').insert({
+      organization_id: w.organization_id,
+      recipient_id:    recipientId,
+      recipient_type:  'admin',
+      channel:         'internal',
+      template_key:    'regulatory_workflow_due_soon',
+      subject:         overdue ? 'Myndighetsärende är försenat' : 'Myndighetsärende förfaller snart',
+      body:            overdue
+        ? `"${w.title}" skulle ha lämnats in ${w.due_date} och är fortfarande inte klart. Kontrollera status i Myndighetsärenden.`
+        : `"${w.title}" förfaller ${w.due_date}. Kontrollera status i Myndighetsärenden.`,
+      priority:        overdue ? 'high' : 'normal',
+      category:        'compliance',
+      reference_type:  'regulatory_workflow',
+      reference_id:    w.id,
+      status:          'sent',
+    });
+
+    if (notifyErr) {
+      logger.error('maintenance.regulatory_reminder_notify_failed', { worker_id: workerId, workflow_id: w.id, error: notifyErr.message });
+      continue;
+    }
+
+    sent++;
+  }
+
+  if (sent > 0) logger.info('maintenance.regulatory_reminders_sent', { worker_id: workerId, count: sent });
+  return sent;
+}
+
+// ─── Vehicle compliance reminders ──────────────────────────────────────────────
+// registration_expires_at / insurance_expires_at / next_inspection_due_at have
+// been indexed for exactly this since Phase 2A, but nothing ever queried them
+// proactively — mirrors checkDueRegulatoryWorkflows' exact due-soon +
+// overdue-escalation pattern, applied to one vehicle expiry field at a time so
+// each of the three compliance concerns dedupes independently via its own
+// reminder_sent_at column (20260728000004).
+
+interface VehicleExpiryRow {
+  id:               string;
+  organization_id:  string;
+  registration_number: string;
+  expiry_date:      string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function checkVehicleExpiryField(
+  client: any,
+  workerId: string,
+  expiryColumn: 'registration_expires_at' | 'insurance_expires_at' | 'next_inspection_due_at',
+  reminderColumn: 'registration_reminder_sent_at' | 'insurance_reminder_sent_at' | 'inspection_reminder_sent_at',
+  labelSv: string,
+): Promise<number> {
+  const today      = new Date().toISOString().slice(0, 10);
+  const dueBy      = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const reReminded = new Date(Date.now() - 7 * 86_400_000).toISOString();
+
+  const { data: neverReminded, error: err1 } = await client
+    .from('vehicles')
+    .select(`id, organization_id, registration_number, expiry_date:${expiryColumn}`)
+    .is('deleted_at', null)
+    .is(reminderColumn, null)
+    .not(expiryColumn, 'is', null)
+    .lte(expiryColumn, dueBy)
+    .limit(100);
+
+  if (err1 !== null) {
+    logger.error('maintenance.vehicle_expiry_due_query_failed', { worker_id: workerId, field: expiryColumn, error: err1.message });
+  }
+
+  const { data: overdueEscalation, error: err2 } = await client
+    .from('vehicles')
+    .select(`id, organization_id, registration_number, expiry_date:${expiryColumn}`)
+    .is('deleted_at', null)
+    .not(reminderColumn, 'is', null)
+    .lt(reminderColumn, reReminded)
+    .not(expiryColumn, 'is', null)
+    .lt(expiryColumn, today)
+    .limit(100);
+
+  if (err2 !== null) {
+    logger.error('maintenance.vehicle_expiry_overdue_query_failed', { worker_id: workerId, field: expiryColumn, error: err2.message });
+  }
+
+  const seen = new Set<string>();
+  const due: VehicleExpiryRow[] = [...(neverReminded ?? []), ...(overdueEscalation ?? [])]
+    .filter((v: VehicleExpiryRow) => (seen.has(v.id) ? false : (seen.add(v.id), true)));
+
+  let sent = 0;
+  for (const v of due) {
+    // Atomically claim this vehicle's reminder slot before notifying — the
+    // WHERE guard re-verifies the same eligibility condition from the SELECT
+    // above (never reminded, or last reminder stale) at claim time, so a
+    // concurrent worker run that already claimed it (its own UPDATE already
+    // committed) fails to match and correctly gets zero rows back instead of
+    // duplicating the notification. This was found sending duplicate
+    // compliance notifications under overlapping worker runs — background
+    // jobs must claim ownership before acting, not act then mark done.
+    const { data: claimed, error: claimErr } = await client
+      .from('vehicles')
+      .update({ [reminderColumn]: new Date().toISOString() })
+      .eq('id', v.id)
+      .or(`${reminderColumn}.is.null,${reminderColumn}.lt.${reReminded}`)
+      .select('id')
+      .maybeSingle();
+
+    if (claimErr) {
+      logger.error('maintenance.vehicle_expiry_claim_failed', { worker_id: workerId, vehicle_id: v.id, field: expiryColumn, error: claimErr.message });
+      continue;
+    }
+    if (!claimed) {
+      // Another worker instance already claimed this reminder — skip silently.
+      continue;
+    }
+
+    const recipientId = await resolveOrgOwnerId(client, v.organization_id);
+    if (!recipientId) continue;
+
+    const overdue = v.expiry_date < today;
+    const { error: notifyErr } = await client.from('notifications').insert({
+      organization_id: v.organization_id,
+      recipient_id:    recipientId,
+      recipient_type:  'admin',
+      channel:         'internal',
+      template_key:    'vehicle_compliance_due_soon',
+      subject:         overdue ? `${labelSv} har gått ut` : `${labelSv} går ut snart`,
+      body:            overdue
+        ? `${labelSv} för fordon ${v.registration_number} gick ut ${v.expiry_date} och har inte förnyats. Kontrollera fordonet i Resurser.`
+        : `${labelSv} för fordon ${v.registration_number} går ut ${v.expiry_date}. Kontrollera fordonet i Resurser.`,
+      priority:        overdue ? 'high' : 'normal',
+      category:        'compliance',
+      reference_type:  'vehicle',
+      reference_id:    v.id,
+      status:          'sent',
+    });
+
+    if (notifyErr) {
+      logger.error('maintenance.vehicle_expiry_notify_failed', { worker_id: workerId, vehicle_id: v.id, field: expiryColumn, error: notifyErr.message });
+      continue;
+    }
+
+    sent++;
+  }
+
+  return sent;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function checkDueVehicleCompliance(client: any, workerId: string): Promise<number> {
+  const [registration, insurance, inspection] = await Promise.all([
+    checkVehicleExpiryField(client, workerId, 'registration_expires_at', 'registration_reminder_sent_at', 'Fordonsregistrering'),
+    checkVehicleExpiryField(client, workerId, 'insurance_expires_at',    'insurance_reminder_sent_at',    'Fordonsförsäkring'),
+    checkVehicleExpiryField(client, workerId, 'next_inspection_due_at',  'inspection_reminder_sent_at',   'Besiktning'),
+  ]);
+  const total = registration + insurance + inspection;
+  if (total > 0) logger.info('maintenance.vehicle_compliance_reminders_sent', { worker_id: workerId, count: total });
+  return total;
 }
 
 // ─── Worker core ──────────────────────────────────────────────────────────────
@@ -1560,6 +2347,9 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
     instructor_digests_sent: 0,
     campaigns_transitioned:  0,
     packages_expired:        0,
+    regulatory_reminders_sent: 0,
+    stale_booking_reminders_sent: 0,
+    vehicle_compliance_reminders_sent: 0,
   };
 
   const client = createServiceClient();
@@ -1719,6 +2509,9 @@ async function runWorker(workerId: string): Promise<WorkerMetrics> {
   metrics.instructor_digests_sent = maintMetrics.instructor_digests_sent;
   metrics.campaigns_transitioned  = maintMetrics.campaigns_transitioned;
   metrics.packages_expired        = maintMetrics.packages_expired;
+  metrics.regulatory_reminders_sent = maintMetrics.regulatory_reminders_sent;
+  metrics.stale_booking_reminders_sent = maintMetrics.stale_booking_reminders_sent;
+  metrics.vehicle_compliance_reminders_sent = maintMetrics.vehicle_compliance_reminders_sent;
 
   metrics.run_duration_ms = Date.now() - startedAt;
 

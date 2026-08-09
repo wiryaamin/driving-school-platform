@@ -17,6 +17,8 @@ export interface PublicCampaign {
   badge_label:         string | null;
 }
 
+export type PublicMarketingBadge = 'featured' | 'best_seller' | 'new' | 'campaign' | 'limited_offer' | 'recommended';
+
 export interface PublicPackage {
   id:                        string;
   name:                      string;
@@ -32,23 +34,51 @@ export interface PublicPackage {
   featured:                  boolean;
   sort_order:                number;
   validity_days:             number | null;
+  included_items:            string[];
+  marketing_badges:          PublicMarketingBadge[];
   active_campaign:           PublicCampaign | null;
+  original_price:            number | null;
+  original_price_incl_vat:   number | null;
   discounted_price:          number | null;
   discounted_price_incl_vat: number | null;
   discount_amount:           number | null;
+  discount_percentage:       number | null;
   savings_label:             string | null;
 }
 
+export interface PublicBundleCredit {
+  lesson_category: string;
+  quantity:        number;
+}
+
 export interface PublicPackageDetail extends PublicPackage {
-  bundle_credits: unknown[];
+  bundle_credits: PublicBundleCredit[];
   all_campaigns:  PublicCampaign[];
   organization:   PublicOrganization;
+}
+
+export interface PublicOrgBranding {
+  logo_url:      string | null;
+  primary_color: string | null;
+  about_text:    string | null;
+  contact: {
+    email:   string | null;
+    phone:   string | null;
+    address: string | null;
+  };
+  social: {
+    instagram?: string;
+    facebook?:  string;
+    tiktok?:    string;
+    youtube?:   string;
+  };
 }
 
 export interface PublicOrganization {
   id:                  string;
   name:                string;
   subscription_status: string;
+  branding:            PublicOrgBranding;
 }
 
 export interface CatalogListResponse {

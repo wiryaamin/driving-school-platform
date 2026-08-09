@@ -65,8 +65,15 @@ export function CancelBookingDialog({
         ...(reason.trim()   ? { cancellation_reason:   reason.trim() } : {}),
       },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
           toast({ title: 'Bokning avbokad' });
+          if (data.credit_reversal_failed) {
+            toast({
+              title:       'Kredit kunde inte återställas automatiskt',
+              description: 'Bokningen är avbokad, men elevens paketkredit kunde inte återställas. Kontrollera elevens paket manuellt.',
+              variant:     'destructive',
+            });
+          }
           handleClose();
           onSuccess?.();
         },

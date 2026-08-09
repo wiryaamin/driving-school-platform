@@ -7,6 +7,7 @@
  *   GET  /payments/:id                    — get single payment
  *   GET  /payments/:id/allocations        — get allocations for a payment
  *   POST /payments/:id/allocate           — manually allocate payment to invoice
+ *   POST /payments/request                — staff-initiated Stripe payment link for an invoice
  */
 
 import { serveCors }            from '../_shared/cors.ts';
@@ -14,6 +15,7 @@ import { buildEdgeContext }     from '../_shared/context.ts';
 import { createSupabaseClient }  from '../_shared/supabase.ts';
 import { createFunctionLogger }  from '../_shared/logger.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
+import { decryptCredential }     from '../_shared/credential-crypto.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 const log     = createFunctionLogger('payments');
@@ -37,8 +39,8 @@ function fail(ctx: EdgeRequestContext, status: number, code: string, message: st
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -242,6 +244,146 @@ async function handleAllocate(req: Request, id: string, ctx: EdgeRequestContext,
   return ok(ctx, { allocation_id: allocationId as string }, 201);
 }
 
+// Staff-initiated payment link — mirrors student-portal's own
+// POST /payments/stripe/checkout Stripe Checkout Session creation exactly
+// (same params shape, same payment_requests row shape), the difference being
+// this is invoked by staff on behalf of a student who hasn't self-initiated
+// payment via the portal (Business Workflow Execution Audit 2026-08-07, "Let
+// staff send a payment request from Finance"). Delivery (email) is the
+// caller's responsibility via the existing communications/send pipeline —
+// this endpoint only creates the session and returns the URL, so it stays a
+// single-purpose Stripe integration rather than reimplementing message
+// dispatch (opt-in checks, daily limits, retry) a second time.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleRequestLink(req: Request, ctx: EdgeRequestContext, client: any): Promise<Response> {
+  const guard = requirePerm(ctx, 'finance:payment:create');
+  if (guard) return guard;
+
+  let body: Record<string, unknown>;
+  try { body = await req.json(); }
+  catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+
+  const invoiceId = body['invoice_id'];
+  if (typeof invoiceId !== 'string' || !invoiceId) {
+    return fail(ctx, 422, 'VALIDATION_ERROR', 'invoice_id is required');
+  }
+
+  const { data: invoice } = await client
+    .from('invoices')
+    .select('id, student_id, outstanding_amount, invoice_number, status, void_at')
+    .eq('id', invoiceId)
+    .eq('organization_id', ctx.organizationId)
+    .maybeSingle();
+
+  if (invoice === null) return fail(ctx, 404, 'NOT_FOUND', 'Invoice not found');
+  if (invoice.void_at !== null || !['issued', 'overdue', 'partially_paid'].includes(invoice.status)) {
+    return fail(ctx, 409, 'CONFLICT', 'Invoice is not in a payable status');
+  }
+  if (Number(invoice.outstanding_amount) <= 0) {
+    return fail(ctx, 409, 'CONFLICT', 'Invoice has no outstanding balance');
+  }
+
+  const { data: student } = await client
+    .from('students')
+    .select('id, first_name, last_name, email')
+    .eq('id', invoice.student_id)
+    .eq('organization_id', ctx.organizationId)
+    .maybeSingle();
+
+  if (student === null) return fail(ctx, 404, 'NOT_FOUND', 'Student not found');
+  if (!student.email) return fail(ctx, 422, 'VALIDATION_ERROR', 'Student has no email address on file');
+
+  const { data: orgRow } = await client
+    .from('organizations')
+    .select('settings')
+    .eq('id', ctx.organizationId)
+    .maybeSingle();
+
+  const settings  = (orgRow?.settings as Record<string, unknown> | undefined) ?? {};
+  const storedKey = settings['stripe_secret_key'] as string | undefined;
+  const stripeKey = storedKey !== undefined
+    ? await decryptCredential(storedKey)
+    : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
+
+  if (!stripeKey) return fail(ctx, 503, 'PROVIDER_NOT_CONFIGURED', 'Online card payment is not configured for this school');
+
+  const appUrl = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+  const prId   = crypto.randomUUID();
+
+  const params = new URLSearchParams({
+    'mode':                                   'payment',
+    'currency':                               'sek',
+    'line_items[0][price_data][currency]':    'sek',
+    'line_items[0][price_data][unit_amount]': String(Math.round(Number(invoice.outstanding_amount) * 100)),
+    'line_items[0][price_data][product_data][name]':
+      `Faktura ${invoice.invoice_number ?? invoiceId.slice(0, 8)}`,
+    'line_items[0][quantity]':      '1',
+    'success_url':                  `${appUrl}/portal/konto?payment=success&req=${prId}`,
+    'cancel_url':                   `${appUrl}/portal/konto?payment=cancelled`,
+    'metadata[invoice_id]':         invoiceId,
+    'metadata[payment_request_id]': prId,
+    'metadata[organization_id]':    ctx.organizationId ?? '',
+    'metadata[student_id]':         invoice.student_id,
+    'metadata[requested_by]':       ctx.actorId ?? '',
+  });
+
+  const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method:  'POST',
+    headers: {
+      'Authorization': `Bearer ${stripeKey}`,
+      'Content-Type':  'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+
+  type StripeSession = { id: string; url: string; error?: { message: string } };
+  const stripeData = await stripeRes.json() as StripeSession;
+
+  if (!stripeRes.ok || stripeData.error) {
+    log.error('payments.request_link_stripe_failed', {
+      correlation_id: ctx.correlationId,
+      status: stripeRes.status,
+      error:  stripeData.error?.message,
+    });
+    return fail(ctx, 502, 'PROVIDER_ERROR', 'Payment provider error — please try again');
+  }
+
+  const { error: prErr } = await client.from('payment_requests').insert({
+    id:                  prId,
+    organization_id:     ctx.organizationId,
+    student_id:          invoice.student_id,
+    invoice_id:          invoiceId,
+    provider:            'stripe',
+    provider_session_id: stripeData.id,
+    amount_sek:          invoice.outstanding_amount,
+    status:              'pending',
+    return_url:          `${appUrl}/portal/konto`,
+    expires_at:          new Date(Date.now() + 30 * 60_000).toISOString(),
+    metadata:            { stripe_session_id: stripeData.id, requested_by: ctx.actorId },
+  });
+
+  if (prErr) {
+    log.error('payments.request_link_insert_failed', { correlation_id: ctx.correlationId, error: prErr.message });
+    // Session already created at Stripe — return it anyway rather than
+    // stranding a valid, payable link the student could still use.
+  }
+
+  log.info('Payment.LinkRequested', {
+    correlation_id: ctx.correlationId,
+    org_id: ctx.organizationId, student_id: invoice.student_id,
+    invoice_id: invoiceId, pr_id: prId, actor_id: ctx.actorId,
+  });
+
+  return ok(ctx, {
+    payment_request_id: prId,
+    session_url:         stripeData.url,
+    student_email:        student.email as string,
+    student_name:          `${student.first_name} ${student.last_name}`,
+    invoice_number:        invoice.invoice_number as string | null,
+    amount_sek:             Number(invoice.outstanding_amount),
+  }, 201);
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 Deno.serve((req: Request) => serveCors(req, async () => {
@@ -261,11 +403,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const { id, sub } = extractPathParts(req);
   const method = req.method;
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const lastSegment = new URL(req.url).pathname.split('/').filter(Boolean).pop();
 
   let response: Response;
 
   try {
-    if (id !== null && sub === 'allocations' && method === 'GET')  { response = await handleGetAllocations(id, ctx, client); }
+    if (id === null && lastSegment === 'request' && method === 'POST') { response = await handleRequestLink(req, ctx, client); }
+    else if (id !== null && sub === 'allocations' && method === 'GET')  { response = await handleGetAllocations(id, ctx, client); }
     else if (id !== null && sub === 'allocate'    && method === 'POST') { response = await handleAllocate(req, id, ctx, client); }
     else if (id !== null && sub === null) {
       if (method === 'GET') { response = await handleGetOne(id, ctx, client); }

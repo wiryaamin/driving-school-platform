@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { logger } from './logger.ts';
+import { checkTrialLock } from './subscription.ts';
 
 // Mirrors packages/api-core TenantContext — keep in sync
 export interface EdgeTenantContext {
@@ -11,6 +12,10 @@ export interface EdgeTenantContext {
   permissions: string[];
   /** Subscription tier from JWT claims. Defaults to 'trial' if not present. */
   subscriptionTier: string;
+  /** Subscription status from JWT claims (e.g. 'trialing', 'active'). Null for platform admins. */
+  subscriptionStatus: string | null;
+  /** Trial end date from JWT claims, ISO string. Null once upgraded or for platform admins. */
+  trialEndsAt: string | null;
   correlationId: string;
   isPlatformAdmin: boolean;
   isWorker: false;
@@ -86,20 +91,31 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
   });
 
   const ctx: EdgeRequestContext = {
-    organizationId:   (claims['organization_id']  as string | null) ?? null,
-    actorId:          user.id,
-    actorEmail:       user.email ?? null,
-    actorRole:        (claims['role']             as string | null) ?? null,
-    permissions:      (claims['permissions']      as string[])      ?? [],
-    subscriptionTier: (claims['subscription_tier'] as string)       ?? 'trial',
+    organizationId:     (claims['organization_id']   as string | null) ?? null,
+    actorId:            user.id,
+    actorEmail:         user.email ?? null,
+    actorRole:          (claims['role']              as string | null) ?? null,
+    permissions:        (claims['permissions']       as string[])      ?? [],
+    subscriptionTier:   (claims['subscription_tier']  as string)       ?? 'trial',
+    subscriptionStatus: (claims['subscription_status'] as string | null) ?? null,
+    trialEndsAt:        (claims['trial_ends_at']      as string | null) ?? null,
     correlationId,
-    isPlatformAdmin:  (claims['is_platform_admin'] as boolean)      ?? false,
-    isWorker:         false,
+    isPlatformAdmin:    (claims['is_platform_admin']  as boolean)      ?? false,
+    isWorker:           false,
     requestId,
-    userAgent:        req.headers.get('User-Agent'),
-    ipAddress:        req.headers.get('X-Forwarded-For'),
-    startedAt:        Date.now(),
+    userAgent:          req.headers.get('User-Agent'),
+    ipAddress:          req.headers.get('X-Forwarded-For'),
+    startedAt:          Date.now(),
   };
+
+  // 7-day-grace-then-lock trial expiry — enforced here so every Edge
+  // Function is protected uniformly, the same way JWT verification already
+  // is, with no per-handler opt-in to forget. See checkTrialLock for the
+  // exact rule (mirrors the frontend's getTrialLockState).
+  const lockResponse = checkTrialLock(ctx);
+  if (lockResponse !== null) {
+    return { ok: false, response: lockResponse };
+  }
 
   return { ok: true, ctx };
 }
@@ -111,10 +127,10 @@ export async function buildEdgeContext(req: Request): Promise<ContextResult> {
  * Platform admins bypass. Returns null when allowed, or a 403 Response.
  */
 export function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) {
     return errorResponse(403, 'FORBIDDEN', 'Organisation context is required', ctx.correlationId, ctx.requestId);
   }
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) {
     return errorResponse(403, 'FORBIDDEN', `Requires permission: ${code}`, ctx.correlationId, ctx.requestId);
   }

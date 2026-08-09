@@ -24,10 +24,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Tabs,
   TabsContent,
   TabsList,
@@ -185,11 +181,11 @@ function AgiDetailSheet({ agiId, onClose }: { agiId: string; onClose: () => void
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[640px] sm:w-[700px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>AGI-export detaljer</SheetTitle>
-          </SheetHeader>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>AGI-export detaljer</DialogTitle>
+          </DialogHeader>
 
           {isLoading ? (
             <div className="mt-6 space-y-3">{[1,2,3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}</div>
@@ -284,8 +280,8 @@ function AgiDetailSheet({ agiId, onClose }: { agiId: string; onClose: () => void
               )}
             </div>
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
       {locking && agi && <LockAgiDialog agi={agi} onClose={() => setLocking(false)} />}
     </>
   );

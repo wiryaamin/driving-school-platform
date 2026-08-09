@@ -2,18 +2,29 @@
 <html lang="sv">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Körskoleplattformen — administratörspanel" />
+    <meta name="description" content="Trafikcloud — administratörspanel för körskolor" />
     <meta name="robots" content="noindex, nofollow" />
+    <!-- Default Open Graph tags — the authenticated app's own identity.
+         Public pages (apps/web/src/modules/public-site/lib/usePageMeta.ts)
+         override title/description/og:*/robots per route on mount and
+         restore these on unmount, so the app's own defaults are the safe
+         fallback if a public page's JS override never runs. -->
+    <meta property="og:site_name" content="Trafikcloud" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Trafikcloud — administratörspanel för körskolor" />
+    <meta property="og:description" content="Trafikcloud — administratörspanel för körskolor" />
+    <meta property="og:image" content="/og-default.png" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="Trafikskola" />
+    <meta name="apple-mobile-web-app-title" content="Trafikcloud" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
-    <title>Körskoleplattformen</title>
+    <title>Trafikcloud</title>
     <!-- Inter font -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

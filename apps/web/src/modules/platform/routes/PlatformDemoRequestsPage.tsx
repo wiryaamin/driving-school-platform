@@ -50,6 +50,7 @@ export function PlatformDemoRequestsPage() {
   const qParam       = searchParams.get('q')      ?? '';
   const statusFilter  = searchParams.get('status') ?? '';
   const page          = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10));
+  const openParam     = searchParams.get('open')  ?? null;
 
   // ── Local state ────────────────────────────────────────────────────────────
   const [localSearch, setLocalSearch] = useState(qParam);
@@ -59,7 +60,19 @@ export function PlatformDemoRequestsPage() {
   // fresh from `requests` on every render, so it reflects mutations (status
   // change, assignment, notes) as soon as the query cache is invalidated
   // instead of showing stale data until the sheet is closed and reopened.
-  const [selectedId, setSelectedId]   = useState<string | null>(null);
+  // Seeded from ?open=<id> so a specific request's sheet can be deep-linked
+  // directly (e.g. from a notification or another page) without requiring a
+  // click on its list row first.
+  const [selectedId, setSelectedIdState] = useState<string | null>(openParam);
+
+  function setSelectedId(id: string | null) {
+    setSelectedIdState(id);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (id) next.set('open', id); else next.delete('open');
+      return next;
+    });
+  }
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { setLocalSearch(qParam); }, [qParam]);

@@ -17,7 +17,7 @@ import type { PlatformOrganization } from '../hooks/usePlatformOrganizations.js'
 import { usePlatformOrganizations } from '../hooks/usePlatformOrganizations.js';
 import { usePlatformOrgCounts } from '../hooks/usePlatformOrgDetail.js';
 import type { OrgCounts } from '../hooks/usePlatformOrgDetail.js';
-import { useSuspendOrg, useReactivateOrg, useTerminateOrg, useStartTrial, useExtendTrial, useEndTrial } from '../hooks/usePlatformOrgMutations.js';
+import { useSuspendOrg, useReactivateOrg, useTerminateOrg, useDeleteOrg, useStartTrial, useExtendTrial, useEndTrial } from '../hooks/usePlatformOrgMutations.js';
 import { useSwitchTenant } from '@modules/auth/hooks/useSwitchTenant.js';
 import { CreateOrgDialog } from '../components/CreateOrgDialog.js';
 import { EditOrgDialog } from '../components/EditOrgDialog.js';
@@ -43,6 +43,7 @@ type PageModal =
   | { type: 'suspend';      org: PlatformOrganization }
   | { type: 'reactivate';   org: PlatformOrganization }
   | { type: 'terminate';    org: PlatformOrganization }
+  | { type: 'delete';       org: PlatformOrganization }
   | { type: 'trial-start';  org: PlatformOrganization }
   | { type: 'trial-extend'; org: PlatformOrganization }
   | { type: 'trial-end';    org: PlatformOrganization };
@@ -214,6 +215,50 @@ function EndTrialDialog({
   );
 }
 
+// ─── Delete organization dialog ───────────────────────────────────────────────
+//
+// Stronger confirmation than ConfirmDialog (type the org's name) — this is
+// the least reversible action here: every vehicle, instructor, and branch
+// is soft-deleted and every user's access (membership + auth account) is
+// permanently removed, on top of removing the organization from every
+// platform-admin list/report. Finance/audit records are never touched (see
+// handleDeleteTenantData). Only reachable once already suspended or
+// terminated, so access was already cut off before this runs.
+
+function DeleteOrgDialog({
+  open, orgName, loading, onConfirm, onCancel,
+}: {
+  open: boolean; orgName: string; loading: boolean;
+  onConfirm: () => void; onCancel: () => void;
+}) {
+  const [confirmText, setConfirmText] = useState('');
+  useEffect(() => { if (open) setConfirmText(''); }, [open]);
+  const matches = confirmText.trim() === orgName;
+
+  return (
+    <Dialog open={open} onOpenChange={open => { if (!open) onCancel(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Ta bort organisation</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {orgName} tas bort från organisationslistan och alla rapporter. Fordon, instruktörer och filialer tas bort, och alla användares konton raderas permanent. Fakturor, bokföring och granskningslogg bevaras. Detta kan endast återställas av en utvecklare direkt i databasen — inte via gränssnittet.
+        </p>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-foreground" htmlFor="delete-org-confirm">
+            Skriv <span className="font-semibold">{orgName}</span> för att bekräfta
+          </label>
+          <Input id="delete-org-confirm" value={confirmText} onChange={e => setConfirmText(e.target.value)} autoComplete="off" />
+        </div>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={onCancel} disabled={loading}>Avbryt</Button>
+          <Button variant="destructive" onClick={onConfirm} disabled={loading || !matches}>
+            {loading ? 'Tar bort…' : 'Ta bort organisation'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Sort header button ───────────────────────────────────────────────────────
 
 function SortHeader({
@@ -286,12 +331,17 @@ function OrgRowActions({
               Suspendera
             </DropdownMenuItem>
           )}
-          {(isSuspended || isTerminated) && (
+          {isSuspended && (
             <DropdownMenuItem onClick={() => onAction({ type: 'reactivate', org })}>Återaktivera</DropdownMenuItem>
           )}
-          {!isTerminated && (
+          {isActive && (
             <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'terminate', org })}>
               Avsluta organisation
+            </DropdownMenuItem>
+          )}
+          {(isSuspended || isTerminated) && (
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => onAction({ type: 'delete', org })}>
+              Ta bort organisation
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
@@ -347,6 +397,7 @@ export function PlatformOrganizationsPage() {
   const suspendOrg    = useSuspendOrg();
   const reactivateOrg = useReactivateOrg();
   const terminateOrg  = useTerminateOrg();
+  const deleteOrg      = useDeleteOrg();
   const startTrial    = useStartTrial();
   const extendTrial   = useExtendTrial();
   const endTrial      = useEndTrial();
@@ -475,6 +526,15 @@ export function PlatformOrganizationsPage() {
     const { org } = modal;
     terminateOrg.mutate(org.id, {
       onSuccess: () => { toast({ title: 'Avslutad', description: `${org.name} har avslutats` }); closeModal(); },
+      onError: err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
+    });
+  }
+
+  function handleDelete() {
+    if (modal?.type !== 'delete') return;
+    const { org } = modal;
+    deleteOrg.mutate(org.id, {
+      onSuccess: () => { toast({ title: 'Borttagen', description: `${org.name} har tagits bort` }); closeModal(); },
       onError: err => toast({ title: 'Fel', description: err.message, variant: 'destructive' }),
     });
   }
@@ -801,6 +861,13 @@ export function PlatformOrganizationsPage() {
           modal?.type === 'reactivate' ? handleReactivate :
           modal?.type === 'terminate'  ? handleTerminate : closeModal
         }
+        onCancel={closeModal}
+      />
+      <DeleteOrgDialog
+        open={modal?.type === 'delete'}
+        orgName={modal?.type === 'delete' ? modal.org.name : ''}
+        loading={deleteOrg.isPending}
+        onConfirm={handleDelete}
         onCancel={closeModal}
       />
       <TrialDaysDialog

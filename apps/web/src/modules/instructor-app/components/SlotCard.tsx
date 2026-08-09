@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import {
-  ChevronDown, ChevronUp, Check, Loader2, PenLine, Send, Star, Phone,
+  ChevronDown, ChevronUp, Check, Loader2, PenLine, Send, Star, Phone, Car,
 } from 'lucide-react';
 import {
   useMarkAttendance, useAddBookingNote, useSetBookingFeedback,
   type BookingDetail, type ScheduleSlot,
 } from '../hooks/useInstructorApp.js';
 import { cn } from '@/lib/utils.js';
+import { formatTime } from '@platform/utils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -20,12 +21,6 @@ const BOOKING_STATUS: Record<string, { label: string; cls: string }> = {
 };
 
 const ACTIONABLE = new Set(['reserved', 'confirmed']);
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-export function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-}
 
 // ─── StatusBadge ──────────────────────────────────────────────────────────────
 
@@ -96,8 +91,8 @@ export function StudentRow({ booking }: { booking: BookingDetail }) {
   const setFeedback = useSetBookingFeedback();
 
   const [justCompleted, setJustCompleted] = useState(false);
-  const [note,          setNote]          = useState('');
-  const [noteSaved,     setNoteSaved]     = useState(false);
+  const [note,          setNote]          = useState(booking.latest_note ?? '');
+  const [noteSaved,     setNoteSaved]     = useState(booking.latest_note !== null);
   const [rating,      setRating]    = useState<number | null>(booking.performance_rating ?? null);
   const [ratingSaved, setRatingSaved] = useState(
     booking.performance_rating !== null && booking.performance_rating > 0,
@@ -354,6 +349,13 @@ export function SlotCard({ slot, dim }: { slot: ScheduleSlot; dim?: boolean }) {
                 {slot.current_bookings}/{slot.max_bookings} elever
                 {slot.lesson_type_name ? ` · ${slot.lesson_type_name}` : ''}
               </p>
+              {slot.vehicle_registration && (
+                <p className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                  <Car className="w-3 h-3 shrink-0" />
+                  {slot.vehicle_registration}
+                  {slot.vehicle_model ? ` · ${slot.vehicle_model}` : ''}
+                </p>
+              )}
             </>
           )}
         </div>

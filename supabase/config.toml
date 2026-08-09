@@ -71,6 +71,36 @@ double_confirm_changes = true
 enable_confirmations = false
 secure_password_change = true
 
+# Custom branded/Swedish templates — the default Supabase templates are
+# generic, unbranded, English boilerplate ("You've been invited"/"Reset your
+# password") that gave a new pilot customer no indication this was Trafikcloud
+# or what to actually do, confirmed live 2026-08-03. The recovery template
+# also has to work for two distinct real flows that share GoTrue's one
+# resetPasswordForEmail mechanism (see platform-admin/index.ts
+# handleResendInvitation's own comment on why): a genuine password reset, and
+# a brand-new administrator setting their first-ever password after
+# "Konvertera till kund" — worded neutrally ("ange (eller återställ)") to
+# read correctly for both.
+#
+# LOCAL DEV ONLY, same as [auth.hook.custom_access_token] below — confirmed
+# 2026-08-03 that `supabase config push` diffs and would overwrite this
+# entire [auth] block (site_url, redirect URLs, hook URI/secret, signup, MFA)
+# against whatever's live in production, not just this template section; this
+# file's production Auth values have drifted from local dev (expected — see
+# the hook comment's own "Production: configure via Dashboard" note) and a
+# push very nearly reverted live production Auth to these local-dev values.
+# Never run `supabase config push` against the hosted project for Auth
+# changes — production email templates must be pasted manually via
+# Dashboard → Authentication → Email Templates, using the same subject/HTML
+# content as the files below.
+[auth.email.template.invite]
+subject = "Ert Trafikcloud-konto är klart"
+content_path = "./supabase/templates/invite.html"
+
+[auth.email.template.recovery]
+subject = "Ange ert lösenord – Trafikcloud"
+content_path = "./supabase/templates/recovery.html"
+
 [auth.sms]
 enable_signup = false
 
@@ -324,6 +354,12 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# verify_jwt = false: gated by its own bearer secret (E2E_BOOTSTRAP_SECRET),
+# not a Supabase JWT — same pattern as platform-bootstrap.
+[functions.e2e-bootstrap]
+enabled = true
+verify_jwt = false
+
 # verify_jwt = false: unauthenticated uptime-monitor endpoint. Monitors do
 # not send a Supabase JWT.
 [functions.health]
@@ -356,8 +392,20 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# verify_jwt = false: Nets delivers webhook events with an Authorization
+# header holding the shared secret registered at payment-creation time, not
+# a Supabase JWT; authenticity is verified via direct comparison inside the
+# function.
+[functions.nets-webhook]
+enabled = true
+verify_jwt = false
+
 # ─── Standard platform-JWT authenticated functions (implicit default was
 # already correct; made explicit below for manifest completeness) ─────────────
+
+[functions.invite-user]
+enabled = true
+verify_jwt = true
 
 [functions.campaigns]
 enabled = true
@@ -376,6 +424,22 @@ enabled = true
 verify_jwt = true
 
 [functions.stripe-credentials]
+enabled = true
+verify_jwt = true
+
+[functions.nets-credentials]
+enabled = true
+verify_jwt = true
+
+[functions.person-lookup-config]
+enabled = true
+verify_jwt = true
+
+[functions.vehicle-registry]
+enabled = true
+verify_jwt = true
+
+[functions.vehicle-registry-config]
 enabled = true
 verify_jwt = true
 

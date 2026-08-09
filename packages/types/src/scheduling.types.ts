@@ -50,7 +50,8 @@ export interface LessonSlot {
   instructor_id:        UUID;
   vehicle_id:           UUID | null;
   location_id:          UUID | null;
-  lesson_type_id:       UUID;
+  /** NULL = generic availability, no predefined lesson type — chosen at booking time. */
+  lesson_type_id:       UUID | null;
   starts_at:            Timestamp;
   ends_at:              Timestamp;
   timezone:             string;
@@ -77,7 +78,8 @@ export interface LessonBooking {
   student_id:            UUID;
   instructor_id:         UUID;
   vehicle_id:            UUID | null;
-  lesson_type_id:        UUID;
+  /** Denormalised from the slot when typed; otherwise whatever the booker chose at booking time. */
+  lesson_type_id:        UUID | null;
   location_id:           UUID | null;
   starts_at:             Timestamp;
   ends_at:               Timestamp;
@@ -133,6 +135,8 @@ export interface CreateBookingInput {
   student_id:       UUID;
   status?:          BookingStatus;
   price_sek?:       number | null;
+  /** Required only when the target slot has no predefined lesson type. */
+  lesson_type_id?:  UUID;
 }
 
 export interface UpdateBookingInput {
@@ -145,7 +149,9 @@ export interface CancelBookingInput {
 }
 
 export interface RescheduleBookingInput {
-  new_slot_id: UUID;
+  new_slot_id:      UUID;
+  /** Required only when the target slot has no predefined lesson type. */
+  lesson_type_id?:  UUID;
 }
 
 // ─── Insert/Update types (repository layer, no org_id) ───────────────────────
@@ -168,6 +174,7 @@ export interface LessonBookingInsert {
   rescheduled_from_id?:  UUID | null;
   booked_by?:            UUID | null;
   price_sek?:            number | null;
+  lesson_type_id?:       UUID | null;
   payment_status?:       string;
   created_by?:           UUID | null;
   updated_by?:           UUID | null;

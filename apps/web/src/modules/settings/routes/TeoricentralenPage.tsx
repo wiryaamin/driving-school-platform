@@ -1,7 +1,25 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight, Smartphone } from 'lucide-react';
-import { Button } from '@platform/ui';
+
+// ─── Corrective pass (2026-07-25) ──────────────────────────────────────────────
+//
+// Full re-audit of every field this page saves to organizations.settings.teoricentralen.
+// An earlier pass this session claimed the product↔license mapping ("product_links")
+// was wired to real packages because the page queries package_offerings — but that
+// query only populates this page's own <select> dropdown. Fresh grep across
+// supabase/functions and apps/web/src confirms zero external consumers for every
+// field, including product_links:
+//   - modules (booking/education/directLink/bankId): StudentPortalLayout's nav is a
+//     static, unconditional array — no module toggle gates any tab or the booking
+//     flow. Registration has no BankID-required check tied to this setting either.
+//   - theory_validity_months: no material-expiry computation anywhere reads it.
+//   - exam_threshold_pct / ova_thresholds: no exam or Öva-mode pass/fail logic
+//     reads either value — there is no exam-grading or Öva-scoring code that
+//     consumes a configurable threshold at all.
+//   - product_links: no purchase/enrollment flow grants theory-material access
+//     based on this mapping; it is only used to render this page's own dropdown.
+// Converted to full honest disclosure — no field on this page has a runtime
+// consumer, so no interactive control is kept.
 
 const OVA_LICENSES = [
   'B - Svenska', 'A - Svenska', 'BE - Svenska', 'B - العربية',
@@ -10,33 +28,22 @@ const OVA_LICENSES = [
   'YKB-Persontransporter - Svenska', 'B - Pусский', 'Snöskoter - Svenska',
 ];
 
-const PRODUCT_LICENSES = [
-  'B-körkortet', 'AM-körkortet', 'A-körkortet', 'BE-körkortet',
-  'C1-körkortet', 'C-körkortet', 'C1E-körkortet', 'CE-körkortet',
-  'D1-körkortet', 'D-körkortet', 'D1E-körkortet', 'DE-körkortet',
-  'YKB-C Godstransporter', 'YKB-D Persontransporter', 'Taxi', 'Snöskoter',
-];
+function NotBuilt({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card divide-y divide-border">
+      <div className="px-5 py-4">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+      </div>
+      <div className="px-5 py-4">
+        <div className="rounded-lg border border-border bg-muted/20 p-4">
+          <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function TeoricentralenPage() {
-  const [modules, setModules] = useState({
-    booking:      true,
-    education:    true,
-    directLink:   false,
-    bankId:       false,
-  });
-  const [theoryValidity, setTheoryValidity] = useState(12);
-  const [examThreshold,  setExamThreshold]  = useState(80);
-  const [ovaThresholds,  setOvaThresholds]  = useState<Record<string, number>>(
-    Object.fromEntries(OVA_LICENSES.map(l => [l, 0]))
-  );
-  const [products, setProducts] = useState<Record<string, string>>(
-    Object.fromEntries(PRODUCT_LICENSES.map(l => [l, '']))
-  );
-
-  function toggleModule(key: keyof typeof modules) {
-    setModules(prev => ({ ...prev, [key]: !prev[key] }));
-  }
-
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center justify-between">
@@ -55,153 +62,34 @@ export function TeoricentralenPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold text-foreground">Teoricentralen</h1>
-          <p className="text-sm text-muted-foreground mt-1">Konfigurera moduler, tillstånd och teorimaterial</p>
+          <p className="text-sm text-muted-foreground mt-1">Moduler, tillstånd och teorimaterial</p>
         </div>
       </div>
 
-      {/* Moduler */}
-      <div className="rounded-xl border border-border bg-card divide-y divide-border">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Moduler</h2>
-          <p className="text-xs text-muted-foreground mt-1">Välj vilka moduler som ska vara aktiva i elevportalen.</p>
-        </div>
-        <div className="px-5 py-4 space-y-4">
-          {(
-            [
-              { key: 'booking',    label: 'Bokningsmodul',                    desc: 'Låt elever boka lektioner direkt i elevportalen' },
-              { key: 'education',  label: 'Utbildningsmodul',                 desc: 'Ger elever tillgång till teorimaterial och övningsprov' },
-              { key: 'directLink', label: 'Direkt bokningslänk',              desc: 'Aktivera direktlänk för bokning utan inloggning' },
-              { key: 'bankId',     label: 'Registrering med Mobilt BankID',   desc: 'Kräv BankID-verifiering vid elevregistrering' },
-            ] as { key: keyof typeof modules; label: string; desc: string }[]
-          ).map(({ key, label, desc }) => (
-            <div key={key} className="flex items-start gap-3">
-              <input
-                id={`mod-${key}`}
-                type="checkbox"
-                checked={modules[key]}
-                onChange={() => toggleModule(key)}
-                className="mt-0.5 h-4 w-4 rounded border-border text-primary"
-              />
-              <label htmlFor={`mod-${key}`} className="flex-1 cursor-pointer">
-                <p className="text-sm font-medium text-foreground">{label}</p>
-                <p className="text-xs text-muted-foreground">{desc}</p>
-              </label>
-            </div>
-          ))}
-          <Button size="sm">Spara</Button>
-        </div>
-      </div>
+      <NotBuilt
+        title="Moduler"
+        description="Att aktivera/inaktivera bokningsmodul, utbildningsmodul, direkt bokningslänk eller krav på BankID-registrering är inte implementerat ännu — elevportalens flikar och registreringsflöde styrs inte av dessa val idag."
+      />
 
-      {/* Teorimaterial giltighetstid */}
-      <div className="rounded-xl border border-border bg-card divide-y divide-border">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Digital teorimaterial - giltighetstid</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Antal månader som teorimaterialet är tillgängligt för eleven efter aktivering.
-          </p>
-        </div>
-        <div className="px-5 py-4 space-y-3">
-          <div className="flex items-center gap-3">
-            <input
-              type="number"
-              min={1}
-              max={60}
-              value={theoryValidity}
-              onChange={e => setTheoryValidity(Number(e.target.value))}
-              className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
-            />
-            <span className="text-sm text-muted-foreground">månader</span>
-          </div>
-          <Button size="sm">Spara</Button>
-        </div>
-      </div>
+      <NotBuilt
+        title="Digital teorimaterial — giltighetstid"
+        description="En konfigurerbar giltighetstid för teorimaterial efter aktivering är inte implementerad ännu — det finns ingen sådan förfallologik idag."
+      />
 
-      {/* Procentuellt tröskel på prov */}
-      <div className="rounded-xl border border-border bg-card divide-y divide-border">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Procentuellt tröskel på prov</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Minsta procentandel rätt svar som krävs för att eleven ska godkännas på ett prov.
-          </p>
-        </div>
-        <div className="px-5 py-4 space-y-3">
-          <div className="flex items-center gap-3">
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={examThreshold}
-              onChange={e => setExamThreshold(Number(e.target.value))}
-              className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
-            />
-            <span className="text-sm text-muted-foreground">%</span>
-          </div>
-          <Button size="sm">Spara</Button>
-        </div>
-      </div>
+      <NotBuilt
+        title="Procentuellt tröskel på prov"
+        description="En konfigurerbar godkäntgräns för prov är inte implementerad ännu — det finns ingen provrättning eller godkänt/underkänt-logik i plattformen idag."
+      />
 
-      {/* Procentuellt tröskel på Öva-delen */}
-      <div className="rounded-xl border border-border bg-card divide-y divide-border">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Procentuellt tröskel på Öva-delen</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Ange minsta procentandel rätt svar för varje körkortstyp och språk i Öva-läget.
-          </p>
-        </div>
-        <div className="px-5 py-4 space-y-3">
-          <div className="space-y-2">
-            {OVA_LICENSES.map(license => (
-              <div key={license} className="flex items-center gap-3">
-                <span className="flex-1 text-sm text-foreground">{license}</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={ovaThresholds[license] ?? 0}
-                    onChange={e => setOvaThresholds(prev => ({ ...prev, [license]: Number(e.target.value) }))}
-                    className="w-20 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground text-right"
-                  />
-                  <span className="text-sm text-muted-foreground w-4">%</span>
-                </div>
-              </div>
-            ))}
-          </div>
-          <Button size="sm">Spara</Button>
-        </div>
-      </div>
+      <NotBuilt
+        title="Procentuellt tröskel på Öva-delen"
+        description={`Konfigurerbara godkäntgränser per körkortstyp och språk (${OVA_LICENSES.length} kombinationer) för Öva-läget är inte implementerade ännu — det finns ingen poängsättning i Öva-läget som läser ett sådant värde idag.`}
+      />
 
-      {/* Koppla teorimaterial till produkt */}
-      <div className="rounded-xl border border-border bg-card divide-y divide-border">
-        <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold text-foreground">Koppla teorimaterial till produkt</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            Koppla varje körkortstyp till en produkt i ert produktregister. När en elev köper produkten
-            får de automatiskt tillgång till teorimaterialet.
-          </p>
-        </div>
-        <div className="px-5 py-4 space-y-2">
-          {PRODUCT_LICENSES.map(license => (
-            <div key={license} className="flex items-center gap-3">
-              <span className="flex-1 text-sm text-foreground">{license}</span>
-              <select
-                value={products[license] ?? ''}
-                onChange={e => setProducts(prev => ({ ...prev, [license]: e.target.value }))}
-                className="w-48 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
-              >
-                <option value="">Välj produkt...</option>
-                <option value="p1">Paket B-körkort</option>
-                <option value="p2">Teorimaterial B</option>
-                <option value="p3">Teorimaterial A</option>
-                <option value="p4">Teorimaterial C</option>
-              </select>
-            </div>
-          ))}
-          <div className="pt-2">
-            <Button size="sm">Spara</Button>
-          </div>
-        </div>
-      </div>
+      <NotBuilt
+        title="Koppla teorimaterial till produkt"
+        description="En koppling mellan körkortstyp och produkt som automatiskt ger eleven tillgång till teorimaterial vid köp är inte implementerad ännu — inget köp- eller anmälningsflöde beviljar åtkomst baserat på en sådan koppling idag."
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { supabase } from '@core/api/supabase.js';
 import type { LessonBooking } from '@platform/types';
 import { bookingKeys } from './useBookings.js';
 import { slotKeys } from './useSlots.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -198,10 +199,11 @@ export interface AddToWaitlistInput {
   expires_at?: string;
 }
 
-async function apiAddToWaitlist(input: AddToWaitlistInput): Promise<WaitlistEntry> {
+async function apiAddToWaitlist(input: AddToWaitlistInput, organizationId: string): Promise<WaitlistEntry> {
   const { data, error } = await supabase
     .from('waitlist_entries')
     .insert({
+      organization_id: organizationId,
       slot_id:    input.slot_id,
       student_id: input.student_id,
       status:     'waiting',
@@ -217,8 +219,16 @@ async function apiAddToWaitlist(input: AddToWaitlistInput): Promise<WaitlistEntr
 
 export function useAddToWaitlist() {
   const queryClient = useQueryClient();
+  const { organization } = useSession();
   return useMutation({
-    mutationFn: apiAddToWaitlist,
+    // RLS requires organization_id = auth_organization_id() on insert (see
+    // waitlist_entries_insert policy) — this was previously omitted entirely,
+    // so every "Add to waitlist" attempt failed with a permission-denied
+    // error for every real user, always. Confirmed via live testing.
+    mutationFn: (input: AddToWaitlistInput) => {
+      if (!organization?.id) throw new Error('Ingen organisation');
+      return apiAddToWaitlist(input, organization.id);
+    },
     onSuccess: (_data, { slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.all });
       void queryClient.invalidateQueries({ queryKey: waitlistKeys.bySlot(slot_id) });

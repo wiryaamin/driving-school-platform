@@ -9,10 +9,14 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Button,
   Separator,
+  toast,
 } from '@platform/ui';
-import { useCreateInstructor, useUpdateInstructor } from '../hooks/useInstructors.js';
+import { useCreateInstructor, useUpdateInstructor, useCreateAvailabilityRulesBatch } from '../hooks/useInstructors.js';
 import { INSTRUCTOR_STATUS_OPTIONS } from './InstructorStatusBadge.js';
+import { useSession } from '@shared/hooks/useSession.js';
+import { logger } from '@platform/utils';
 import type { Instructor, CreateInstructorFormValues } from '../hooks/useInstructors.js';
+import type { CreateAvailabilityRuleInput } from '@platform/types';
 
 // ─── Teaching category options (full Baseline list) ───────────────────────────
 
@@ -41,6 +45,7 @@ const instructorFormSchema = z.object({
   last_name:             z.string().min(1, 'Efternamn krävs').max(100),
   email:                 z.string().email('Ogiltig e-postadress').max(200),
   phone:                 z.string().max(30).optional(),
+  personnummer:          z.string().regex(/^(\d{8}-?\d{4})?$/, 'Format: YYYYMMDD-XXXX').optional(),
   employment_type:       z.enum(['employed', 'contractor', 'external', 'on_leave', 'inactive'] as const).optional(),
   employment_started_at: z.string().optional(),
   employment_ended_at:   z.string().optional(),
@@ -59,6 +64,7 @@ const EMPTY_DEFAULTS: InstructorFormFields = {
   last_name:             '',
   email:                 '',
   phone:                 '',
+  personnummer:          '',
   employment_type:       undefined,
   employment_started_at: '',
   employment_ended_at:   '',
@@ -74,6 +80,7 @@ function instructorToFormFields(i: Instructor): InstructorFormFields {
     last_name:             i.last_name,
     email:                 i.email,
     phone:                 i.phone ?? '',
+    personnummer:          '', // never re-populated from the encrypted/hashed value; leave blank to keep unchanged
     employment_type:       i.employment_type,
     employment_started_at: i.employment_started_at ?? '',
     employment_ended_at:   i.employment_ended_at ?? '',
@@ -92,6 +99,7 @@ function fieldsToInput(fields: InstructorFormFields, categories: string[]): Crea
   };
 
   if (fields.phone)                  result.phone                  = fields.phone;
+  if (fields.personnummer)           result.personnummer           = fields.personnummer;
   if (fields.employment_type)        result.employment_type        = fields.employment_type;
   if (fields.employment_started_at)  result.employment_started_at  = fields.employment_started_at;
   if (fields.employment_ended_at)    result.employment_ended_at    = fields.employment_ended_at;
@@ -118,9 +126,36 @@ interface InstructorFormProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+// Mon-Fri in the DB's day_of_week encoding (0=Sunday…6=Saturday, per
+// generate_slots_for_rule's EXTRACT(DOW) comment) — matches the
+// e2e-bootstrap fixture convention already used elsewhere in this codebase.
+const WORKING_DAYS = [
+  { value: 1, label: 'Mån' },
+  { value: 2, label: 'Tis' },
+  { value: 3, label: 'Ons' },
+  { value: 4, label: 'Tor' },
+  { value: 5, label: 'Fre' },
+] as const;
+
+// duration + buffer = 60 → generated slots land exactly on the hour
+// (08:00-08:45, 09:00-09:45, ...) — see generate_slots_for_rule's v_slot_step.
+const WORKING_HOURS_SLOT_DURATION_MIN = 45;
+const WORKING_HOURS_SLOT_BUFFER_MIN   = 15;
+
 export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: InstructorFormProps) {
   const isEdit = instructor != null;
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  // Arbetstider — instructor-creation-time only (not shown/used on edit).
+  // Left blank/unchanged, instructor creation works exactly as before.
+  const [workingDays, setWorkingDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [workStart,   setWorkStart]   = useState('08:00');
+  const [workEnd,     setWorkEnd]     = useState('17:00');
+
+  // AuthUser.organization_id comes straight from the JWT (synchronous, always
+  // available once authenticated) — unlike useSession().organization, which is
+  // populated by an async background fetch and can stay null for the whole
+  // session if that fetch fails. See packages/types/src/auth.types.ts.
+  const { user } = useSession();
 
   const form = useForm<InstructorFormFields>({
     resolver:      zodResolver(instructorFormSchema),
@@ -129,18 +164,57 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
 
   const createMutation = useCreateInstructor();
   const updateMutation = useUpdateInstructor();
+  const createRulesBatch = useCreateAvailabilityRulesBatch();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   useEffect(() => {
     if (open) {
       form.reset(isEdit ? instructorToFormFields(instructor) : EMPTY_DEFAULTS);
       setSelectedCategories(isEdit ? (instructor?.teaching_categories ?? []) : []);
+      setWorkingDays([1, 2, 3, 4, 5]);
+      setWorkStart('08:00');
+      setWorkEnd('17:00');
     }
   }, [open, instructor, isEdit, form]);
 
   function toggleCategory(key: string) {
     setSelectedCategories((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  }
+
+  function toggleWorkingDay(day: number) {
+    setWorkingDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day],
+    );
+  }
+
+  // Best-effort: instructor creation has already succeeded and the dialog is
+  // about to close by the time this runs — a failure here must not read as
+  // "the instructor wasn't saved". Logged and surfaced as a secondary toast.
+  function seedWorkingHours(instructorId: string) {
+    if (workingDays.length === 0 || !user?.organization_id) return;
+    const inputs: CreateAvailabilityRuleInput[] = workingDays.map((day_of_week) => ({
+      day_of_week,
+      start_time:            workStart,
+      end_time:               workEnd,
+      slot_duration_minutes: WORKING_HOURS_SLOT_DURATION_MIN,
+      slot_buffer_minutes:   WORKING_HOURS_SLOT_BUFFER_MIN,
+    }));
+    createRulesBatch.mutate(
+      { instructorId, organizationId: user.organization_id, inputs },
+      {
+        onError: (e) => {
+          logger.warn('InstructorForm: failed to seed working-hours availability rules', {
+            instructorId, error: e instanceof Error ? e.message : String(e),
+          });
+          toast({
+            title: 'Arbetstiderna kunde inte sparas automatiskt',
+            description: 'Läraren skapades, men lägg till arbetstiderna manuellt under lärarens Tillgänglighet.',
+            variant: 'destructive',
+          });
+        },
+      },
     );
   }
 
@@ -152,17 +226,30 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
         { id: instructor.id, input },
         {
           onSuccess: (updated) => {
+            toast({ title: 'Läraren uppdaterad' });
             onSuccess?.(updated);
             onOpenChange(false);
           },
+          onError: (e) => toast({
+            title: 'Kunde inte spara ändringarna',
+            description: e instanceof Error ? e.message : undefined,
+            variant: 'destructive',
+          }),
         }
       );
     } else {
       createMutation.mutate(input, {
         onSuccess: (created) => {
+          toast({ title: 'Läraren skapad' });
+          seedWorkingHours(created.id);
           onSuccess?.(created);
           onOpenChange(false);
         },
+        onError: (e) => toast({
+          title: 'Kunde inte skapa läraren',
+          description: e instanceof Error ? e.message : undefined,
+          variant: 'destructive',
+        }),
       });
     }
   }
@@ -240,6 +327,24 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                     <FormControl>
                       <Input type="tel" placeholder="070-123 45 67" {...field} />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="personnummer"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Personnummer</FormLabel>
+                    <FormControl>
+                      <Input placeholder="ÅÅÅÅMMDD-XXXX" {...field} />
+                    </FormControl>
+                    {isEdit && (
+                      <p className="text-xs text-muted-foreground">
+                        Lämna tomt för att behålla nuvarande personnummer.
+                      </p>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -333,6 +438,59 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                 )}
               />
             </div>
+
+            {/* ── Arbetstider (endast vid skapande) ────────────────────── */}
+            {!isEdit && (
+              <>
+                <Separator />
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                      Arbetstider
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Skapar automatiskt återkommande 45-minuters tillgänglighet för valda dagar.
+                      Lämna tomt för att hoppa över — kan läggas till senare under lärarens Tillgänglighet.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    {WORKING_DAYS.map(({ value, label }) => (
+                      <label key={value} className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={workingDays.includes(value)}
+                          onChange={() => toggleWorkingDay(value)}
+                          className="w-4 h-4 accent-blue-500 shrink-0"
+                        />
+                        <span className="text-sm text-foreground">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium mb-1.5 block">Från</label>
+                      <Input
+                        type="time"
+                        value={workStart}
+                        onChange={(e) => setWorkStart(e.target.value)}
+                        disabled={workingDays.length === 0}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium mb-1.5 block">Till</label>
+                      <Input
+                        type="time"
+                        value={workEnd}
+                        onChange={(e) => setWorkEnd(e.target.value)}
+                        disabled={workingDays.length === 0}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* ── Behörigheter ─────────────────────────────────────────── */}
             <Separator />

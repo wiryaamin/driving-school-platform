@@ -207,7 +207,7 @@ export function StudentDashboardPage() {
           <PermissionGate permission={Permissions.STUDENTS_CREATE}>
             <Button
               size="sm"
-              onClick={() => navigate('/students/list')}
+              onClick={() => navigate('/students/list?create=1')}
               className="bg-green-600 hover:bg-green-700 text-white border-0"
             >
               <Plus className="w-4 h-4 mr-1.5" />
@@ -226,7 +226,7 @@ export function StudentDashboardPage() {
 
       {/* ── Empty state or quick links ──────────────────────────────────────── */}
       {isEmpty ? (
-        <StudentWorkspaceEmptyState onAdd={() => navigate('/students/list')} />
+        <StudentWorkspaceEmptyState onAdd={() => navigate('/students/list?create=1')} />
       ) : (
         <section>
           <h2 className="text-sm font-semibold text-foreground mb-3">Snabbåtkomst</h2>

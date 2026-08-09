@@ -16,10 +16,11 @@ import { useInstructor } from '@modules/instructors/index.js';
 import { useStudentUpcomingBookings, useBookingList, BookingStatusBadge, StudentBookingDialog, CancelBookingDialog, RescheduleBookingDialog } from '@modules/scheduling/index.js';
 import { Button, Input, Skeleton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@platform/ui';
 import { toast } from '@platform/ui';
-import { useSendMessage, useStudentMessages, type CommChannel } from '@modules/communication/hooks/useCommunication.js';
+import { useSendMessage, useStudentMessages, useChannelConfigs, type CommChannel } from '@modules/communication/hooks/useCommunication.js';
 import { StatusBadge, ChannelBadge } from '@modules/communication/index.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { useFeatureAccess } from '@core/rbac/SubscriptionGate.js';
 import { formatTime } from '@platform/utils';
 import type { LessonBooking } from '@platform/types';
 import {
@@ -53,7 +54,7 @@ import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type DetailTab = 'meddelande' | 'sms' | 'epost' | 'elevkort' | 'utbildning' | 'historik' | 'konto' | 'ovrigt' | 'avtal';
+type DetailTab = 'meddelande' | 'sms' | 'whatsapp' | 'epost' | 'elevkort' | 'utbildning' | 'historik' | 'konto' | 'ovrigt' | 'avtal';
 type LogSubTab = 'bokningsloggar' | 'kommunikationsloggar' | 'aktivitetsloggar';
 type UtbildningSubTab = 'behorigheteter' | 'korprovsprotokoll' | 'lektionslogg' | 'korjournal' | 'utbildningskort' | 'utbildningsplan' | 'provresultat';
 type TeorimaterialSubTab = 'teorimaterial' | 'digital_teoribok' | 'ovriga_bocker' | 'fragestatistik' | 'provstatistik' | 'checklista';
@@ -363,6 +364,7 @@ export function StudentDetailPage() {
   const TABS: { key: DetailTab; label: string }[] = [
     { key: 'meddelande', label: 'Meddelande' },
     { key: 'sms',        label: 'SMS' },
+    { key: 'whatsapp',   label: 'WhatsApp' },
     { key: 'epost',      label: 'E-post' },
     { key: 'elevkort',   label: 'Elevkort' },
     { key: 'utbildning', label: 'Utbildning' },
@@ -417,10 +419,20 @@ export function StudentDetailPage() {
       {/* ── Tab content ───────────────────────────────────────── */}
       <div className="px-4 md:px-6 py-5">
 
-        {activeTab === 'meddelande' && <MeddelandeTab />}
+        {activeTab === 'meddelande' && (
+          <MeddelandeTab studentEmail={student.email ?? null} studentPhone={student.phone ?? null} />
+        )}
 
         {activeTab === 'sms' && (
           <SmsTab
+            studentId={student.id}
+            studentName={fullName}
+            studentPhone={student.phone ?? null}
+          />
+        )}
+
+        {activeTab === 'whatsapp' && (
+          <WhatsAppTab
             studentId={student.id}
             studentName={fullName}
             studentPhone={student.phone ?? null}
@@ -1523,7 +1535,15 @@ function KundkortTab({
   const updateNotes        = useUpdateStudent();
   const updateCompany      = useUpdateStudent();
   const [linkedCompanyId, setLinkedCompanyId] = useState(student.corporate_customer_id ?? '');
-  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' });
+  // Elevkort is the default tab on the single most-visited page in the app —
+  // unconditionally querying a starter-tier-gated endpoint here meant every
+  // trial-tier org (effectively every pilot tenant) hit a 402 on nearly
+  // every page load, confirmed live via the recurring corporate-customers
+  // 402 showing up in console logs regardless of what the user was actually
+  // doing. StudentForm.tsx already gates the same query correctly — this
+  // was the one caller that didn't.
+  const hasCorporateAccess = useFeatureAccess('corporate:customers:manage');
+  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: hasCorporateAccess });
   const allCompanies = corporateData?.data ?? [];
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
 
@@ -2158,7 +2178,7 @@ function KundkortTab({
         {student.status !== 'archived' && (
           <div className="bg-card border border-border rounded-lg p-4">
             <SectionHeading title="Arkivera kund" />
-            {student.status === 'active' ? (
+            {student.status === 'active' && (upcomingBookings.data?.data?.length ?? 0) > 0 ? (
               <div className="space-y-2">
                 <div className="flex items-start gap-2 p-2.5 bg-red-50 dark:bg-red-950/20 rounded border border-red-100 dark:border-red-900/50">
                   <AlertTriangle className="w-3.5 h-3.5 text-red-500 mt-0.5 shrink-0" />
@@ -2209,17 +2229,27 @@ function KundkortTab({
 
 // ─── Lesson progress panel ────────────────────────────────────────────────────
 
-// Stable date range for lesson history queries — computed once at module load
-const PROGRESS_RANGE = {
-  from: new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString(),
-  to:   new Date().toISOString(),
-};
+// Lesson history range used for progress stats. `to` must not be pinned to
+// "now" — a completed booking's starts_at can fall after the moment this
+// module first loaded (a long-lived SPA session, or a lesson logged slightly
+// ahead of schedule), and a tight upper bound silently drops it from the
+// completed-lesson count. Widen well past "now" instead of trying to track
+// the exact instant a lesson resolves. Memoized per-mount (not module-level)
+// so it's still fresh on a fresh visit, but stable across re-renders — an
+// inline `new Date()` here would change the query key every render and
+// loop the query forever.
+function useProgressRange() {
+  return useMemo(() => ({
+    from: new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString(),
+    to:   new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+  }), []);
+}
 
 function LessonProgressPanel({ studentId }: { studentId: string }) {
+  const progressRange = useProgressRange();
   const { data: historyData, isLoading } = useBookingList({
     student_id: studentId,
-    from:       PROGRESS_RANGE.from,
-    to:         PROGRESS_RANGE.to,
+    ...progressRange,
     per_page:   200,
     sort_by:    'starts_at',
     sort_dir:   'desc',
@@ -3065,7 +3095,178 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
 
 // ─── Teorimaterial tab ────────────────────────────────────────────────────────
 
-function TeorimaterialTab({ licenceCat: _licenceCat }: { licenceCat: string }) {
+const QUIZ_CATEGORY_LABELS: Record<string, string> = {
+  trafikregler:  'Trafikregler',
+  vagmarken:     'Vägmärken',
+  miljo:         'Miljö & Ekonomi',
+  fordon:        'Fordon & Teknik',
+  riskhantering: 'Riskhantering',
+};
+
+function quizCategoryLabel(cat: string): string {
+  return QUIZ_CATEGORY_LABELS[cat] ?? cat;
+}
+
+interface QuizCategoryStat {
+  category:       string;
+  question_count: number;
+  last_score:     number | null;
+  last_total:     number | null;
+  last_attempt:   string | null;
+}
+
+interface QuizSessionRow {
+  id:             string;
+  category:       string | null;
+  question_count: number;
+  score:          number | null;
+  completed_at:   string;
+  time_spent_sec: number | null;
+}
+
+// Staff-facing read of the same quiz_questions/quiz_sessions tables the student
+// portal writes to (quiz_sessions_tenant_read / quiz_questions_tenant_read RLS
+// policies already grant authenticated staff org-scoped SELECT — no new
+// endpoint or table needed).
+function useStudentQuizData(studentId: string) {
+  return useQuery({
+    queryKey: ['student-quiz-data', studentId],
+    queryFn: async () => {
+      const [{ data: questions, error: qErr }, { data: sessions, error: sErr }] = await Promise.all([
+        supabase.from('quiz_questions').select('category').eq('is_active', true),
+        supabase
+          .from('quiz_sessions')
+          .select('id, category, question_count, score, completed_at, time_spent_sec')
+          .eq('student_id', studentId)
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false }),
+      ]);
+      if (qErr) throw qErr;
+      if (sErr) throw sErr;
+
+      const sessionRows = (sessions ?? []) as QuizSessionRow[];
+
+      const questionCounts = new Map<string, number>();
+      for (const q of (questions ?? []) as { category: string }[]) {
+        questionCounts.set(q.category, (questionCounts.get(q.category) ?? 0) + 1);
+      }
+
+      const categoryStats: QuizCategoryStat[] = Array.from(questionCounts.entries())
+        .map(([category, question_count]) => {
+          const last = sessionRows.find((s) => s.category === category);
+          return {
+            category,
+            question_count,
+            last_score:   last?.score ?? null,
+            last_total:   last?.question_count ?? null,
+            last_attempt: last?.completed_at ?? null,
+          };
+        })
+        .sort((a, b) => a.category.localeCompare(b.category));
+
+      return { categoryStats, sessions: sessionRows };
+    },
+    enabled: Boolean(studentId),
+    staleTime: 60_000,
+  });
+}
+
+function FragestatistikPanel({ studentId }: { studentId: string }) {
+  const { data, isLoading } = useStudentQuizData(studentId);
+  const categoryStats = data?.categoryStats ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[...Array(5)].map((_, i) => <div key={i} className="h-14 rounded-lg bg-muted animate-pulse" />)}
+      </div>
+    );
+  }
+
+  if (categoryStats.every((c) => c.last_attempt === null)) {
+    return (
+      <div className="text-center py-12 text-sm text-muted-foreground">
+        Eleven har inte gjort några teorifrågor ännu.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {categoryStats.map((c) => {
+        const pct = c.last_total ? Math.round(((c.last_score ?? 0) / c.last_total) * 100) : null;
+        const passed = pct !== null && pct >= 75;
+        return (
+          <div key={c.category} className="bg-card border border-border rounded-lg p-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">{quizCategoryLabel(c.category)}</p>
+              <p className="text-xs text-muted-foreground">{c.question_count} frågor i banken</p>
+            </div>
+            {pct !== null ? (
+              <div className="text-right">
+                <p className={cn('text-sm font-semibold', passed ? 'text-green-600' : 'text-amber-600')}>
+                  {c.last_score}/{c.last_total} ({pct}%)
+                </p>
+                <p className="text-xs text-muted-foreground">Senast: {formatDate(c.last_attempt)}</p>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Inte påbörjad</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProvstatistikPanel({ studentId }: { studentId: string }) {
+  const { data, isLoading } = useStudentQuizData(studentId);
+  const sessions = data?.sessions ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[...Array(4)].map((_, i) => <div key={i} className="h-14 rounded-lg bg-muted animate-pulse" />)}
+      </div>
+    );
+  }
+
+  if (sessions.length === 0) {
+    return (
+      <div className="text-center py-12 text-sm text-muted-foreground">
+        Inga avslutade quiz ännu.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {sessions.map((s) => {
+        const pct = Math.round(((s.score ?? 0) / s.question_count) * 100);
+        const passed = pct >= 75;
+        return (
+          <div key={s.id} className="bg-card border border-border rounded-lg p-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">{s.category ? quizCategoryLabel(s.category) : 'Blandat quiz'}</p>
+              <p className="text-xs text-muted-foreground">
+                {formatDateTime(s.completed_at)}
+                {s.time_spent_sec ? ` · ${Math.round(s.time_spent_sec / 60)} min` : ''}
+              </p>
+            </div>
+            <span className={cn(
+              'text-xs font-semibold px-2 py-1 rounded-full',
+              passed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+            )}>
+              {s.score}/{s.question_count} ({pct}%)
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TeorimaterialTab({ licenceCat: _licenceCat, studentId }: { licenceCat: string; studentId: string }) {
   const [subTab, setSubTab] = useState<TeorimaterialSubTab>('teorimaterial');
 
   const SUB_TABS: { key: TeorimaterialSubTab; label: string }[] = [
@@ -3153,7 +3354,10 @@ function TeorimaterialTab({ licenceCat: _licenceCat }: { licenceCat: string }) {
           </>
         )}
 
-        {subTab !== 'teorimaterial' && (
+        {subTab === 'fragestatistik' && <FragestatistikPanel studentId={studentId} />}
+        {subTab === 'provstatistik' && <ProvstatistikPanel studentId={studentId} />}
+
+        {(subTab === 'digital_teoribok' || subTab === 'ovriga_bocker' || subTab === 'checklista') && (
           <div className="text-center py-12 text-sm text-muted-foreground">
             Ingen data tillgänglig
           </div>
@@ -3229,10 +3433,10 @@ function BokningarTab({
   }
 
   // Past bookings — all completed/cancelled/no-show before today
+  const pastRange = useProgressRange();
   const pastBookingsQuery = useBookingList({
     student_id: student.id,
-    from:       PROGRESS_RANGE.from,
-    to:         PROGRESS_RANGE.to,
+    ...pastRange,
     sort_by:    'starts_at',
     sort_dir:   'desc',
     per_page:   20,
@@ -4102,10 +4306,18 @@ function LoggarTab({
 
 // ─── Meddelande tab ───────────────────────────────────────────────────────────
 
-function MeddelandeTab() {
+function MeddelandeTab({ studentEmail, studentPhone }: {
+  studentEmail: string | null;
+  studentPhone: string | null;
+}) {
+  const hasContactInfo = Boolean(studentEmail || studentPhone);
+  const message = hasContactInfo
+    ? 'Meddelandeöversikt är inte tillgänglig här ännu. Använd flikarna SMS eller E-post för att skicka meddelanden till eleven.'
+    : 'Det finns ingen e-postadress eller telefonnummer registrerat för den här eleven. Lägg till kontaktuppgifter under "Redigera" för att kunna skicka meddelanden.';
+
   return (
     <div className="bg-muted/30 border border-border rounded-lg px-4 py-3 text-sm text-muted-foreground">
-      Meddelande är inte aktiverade på den här skolan.
+      {message}
     </div>
   );
 }
@@ -4139,9 +4351,11 @@ function SmsTab({ studentId, studentName, studentPhone }: {
   const sendMessage  = useSendMessage();
   const { data: messagesData, isLoading: historyLoading } = useStudentMessages(studentId);
   const messages = messagesData?.data ?? [];
+  const { data: channels } = useChannelConfigs();
+  const smsEnabled = channels?.find((c) => c.channel === 'sms')?.enabled ?? false;
 
   function handleSend() {
-    if (!selected || !message.trim() || !studentPhone) return;
+    if (!selected || !message.trim() || !studentPhone || !smsEnabled) return;
     const fullBody = message + '\n' + signature;
     sendMessage.mutate(
       {
@@ -4271,7 +4485,7 @@ function SmsTab({ studentId, studentName, studentPhone }: {
           </button>
           <button
             onClick={handleSend}
-            disabled={!selected || !message.trim() || !studentPhone || sendMessage.isPending}
+            disabled={!selected || !message.trim() || !studentPhone || !smsEnabled || sendMessage.isPending}
             className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {sendMessage.isPending ? 'Skickar...' : 'Skicka SMS'}
@@ -4279,6 +4493,11 @@ function SmsTab({ studentId, studentName, studentPhone }: {
         </div>
         {!studentPhone && (
           <p className="text-xs text-amber-600 dark:text-amber-400">Inget mobilnummer registrerat för denna elev.</p>
+        )}
+        {!smsEnabled && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            SMS-kanalen är inte aktiverad för skolan. Aktivera den under Kommunikation → Kanaler för att kunna skicka SMS.
+          </p>
         )}
       </div>
 
@@ -4297,6 +4516,216 @@ function SmsTab({ studentId, studentName, studentPhone }: {
         ) : messages.length === 0 ? (
           <div className="p-4 text-center py-12">
             <p className="text-xs text-muted-foreground">Inga meddelanden skickade till denna elev.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {messages.map((msg) => (
+              <div key={msg.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
+                <ChannelBadge channel={msg.channel} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-foreground line-clamp-2">{msg.body}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {new Date(msg.created_at).toLocaleDateString('sv-SE', {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </p>
+                </div>
+                <StatusBadge status={msg.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+// ─── WhatsApp tab ─────────────────────────────────────────────────────────────
+// Mirrors SmsTab — same phone-number recipient, same template/compose shape,
+// same useChannelConfigs() gating — WhatsApp is already a fully implemented
+// channel (Twilio/Meta providers in _shared/comm-providers.ts, configurable
+// under Kommunikation → Kanaler) that was simply missing from this page's
+// per-student tabs.
+
+const WHATSAPP_TEMPLATES = [
+  { value: '', label: 'Välj mall' },
+  { value: 'upcoming_lesson', label: 'Påminnelse om kommande lektion' },
+  { value: 'cancel',          label: 'Avbokningsbekräftelse' },
+  { value: 'welcome',         label: 'Välkommen som elev' },
+  { value: 'payment',         label: 'Betalningspåminnelse' },
+];
+
+function WhatsAppTab({ studentId, studentName, studentPhone }: {
+  studentId:    string;
+  studentName:  string;
+  studentPhone: string | null;
+}) {
+  const [selected, setSelected] = useState(true);
+  const [template, setTemplate] = useState('');
+  const [message,  setMessage]  = useState('');
+
+  const sender = 'Trafikskolan';
+
+  const sendMessage = useSendMessage();
+  const { data: messagesData, isLoading: historyLoading } = useStudentMessages(studentId);
+  const messages = useMemo(() => (messagesData?.data ?? []).filter((m) => m.channel === 'whatsapp'), [messagesData]);
+  const { data: channels } = useChannelConfigs();
+  const whatsappEnabled = channels?.find((c) => c.channel === 'whatsapp')?.enabled ?? false;
+
+  function handleSend() {
+    if (!selected || !message.trim() || !studentPhone || !whatsappEnabled) return;
+    sendMessage.mutate(
+      {
+        channel:           'whatsapp',
+        recipient_type:    'student',
+        recipient_id:      studentId,
+        recipient_address: studentPhone,
+        body:              message,
+        metadata:          { manual: true },
+      },
+      {
+        onSuccess: () => {
+          toast({ title: 'WhatsApp-meddelande skickat' });
+          setMessage('');
+          setTemplate('');
+        },
+        onError: (e) => toast({
+          title:       'Kunde inte skicka WhatsApp-meddelande',
+          description: e instanceof Error ? e.message : undefined,
+          variant:     'destructive',
+        }),
+      }
+    );
+  }
+
+  function handleTemplate(val: string) {
+    setTemplate(val);
+    const MAP: Record<string, string> = {
+      upcoming_lesson: `Hej ${studentName}. Din körlektion är inbokad. Kontakta oss om du behöver avboka.`,
+      cancel:          `Hej ${studentName}. Din körlektion har avbokats. Kontakta oss för att boka om.`,
+      welcome:         `Hej ${studentName}, välkommen som ny elev!`,
+      payment:         `Hej ${studentName}. Du har en obetald faktura. Vänligen betala snarast.`,
+    };
+    setMessage(MAP[val] ?? '');
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_1fr] gap-5 items-start">
+
+      {/* Recipient selector */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-3 py-2 border-b border-border bg-muted/20 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Skicka till
+        </div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="px-2 py-2 w-8"></th>
+              <th className="px-2 py-2 text-left font-medium text-muted-foreground">Namn</th>
+              <th className="px-2 py-2 text-left font-medium text-muted-foreground">Mobilnummer</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="hover:bg-accent/20">
+              <td className="px-2 py-2">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={(e) => setSelected(e.target.checked)}
+                  className="rounded accent-primary"
+                />
+              </td>
+              <td className="px-2 py-2 font-medium">{studentName}</td>
+              <td className="px-2 py-2 text-muted-foreground">{studentPhone ?? '—'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Compose form */}
+      <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Avsändare</label>
+          <input
+            type="text"
+            value={sender}
+            readOnly
+            className="w-full h-8 px-2.5 text-sm rounded border border-input bg-muted/20 text-muted-foreground"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Meddelandemall</label>
+          <div className="relative">
+            <select
+              value={template}
+              onChange={(e) => handleTemplate(e.target.value)}
+              className="w-full h-8 pl-2.5 pr-7 text-sm rounded border border-input bg-background appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {WHATSAPP_TEMPLATES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground">Meddelande</label>
+          <textarea
+            rows={5}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Ange ditt meddelande"
+            className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+          />
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Använda tecken: <span className="font-medium text-foreground">{message.length}</span>
+        </p>
+
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            onClick={() => { setMessage(''); setTemplate(''); }}
+            className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background hover:bg-accent text-foreground transition-colors"
+          >
+            Återställ
+          </button>
+          <button
+            onClick={handleSend}
+            disabled={!selected || !message.trim() || !studentPhone || !whatsappEnabled || sendMessage.isPending}
+            className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {sendMessage.isPending ? 'Skickar...' : 'Skicka WhatsApp'}
+          </button>
+        </div>
+        {!studentPhone && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">Inget mobilnummer registrerat för denna elev.</p>
+        )}
+        {!whatsappEnabled && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            WhatsApp-kanalen är inte aktiverad för skolan. Aktivera den under Kommunikation → Kanaler för att kunna skicka WhatsApp-meddelanden.
+          </p>
+        )}
+      </div>
+
+      {/* Message history */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meddelandehistorik</p>
+          {messages.length > 0 && (
+            <span className="text-[10px] text-muted-foreground">{messages.length} meddelanden</span>
+          )}
+        </div>
+        {historyLoading ? (
+          <div className="p-4 space-y-2">
+            {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="p-4 text-center py-12">
+            <p className="text-xs text-muted-foreground">Inga WhatsApp-meddelanden skickade till denna elev.</p>
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -4476,9 +4905,8 @@ function HistorikTab({ studentId }: { studentId: string }) {
     queryFn: async () => {
       const { data: invoices } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, issued_at, due_date, total_amount_sek, created_at')
+        .select('id, invoice_number, status, issued_at, due_date, total_amount, created_at')
         .eq('student_id', studentId)
-        .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .limit(50);
       return (invoices ?? []) as Array<{
@@ -4487,7 +4915,7 @@ function HistorikTab({ studentId }: { studentId: string }) {
         status: string;
         issued_at: string | null;
         due_date: string | null;
-        total_amount_sek: number;
+        total_amount: number;
         created_at: string;
       }>;
     },
@@ -4560,7 +4988,7 @@ function HistorikTab({ studentId }: { studentId: string }) {
                       {STATUS_LABEL[inv.status] ?? inv.status}
                     </td>
                     <td className="px-4 py-2.5 text-sm text-right tabular-nums font-medium">
-                      {SEK.format(inv.total_amount_sek)}
+                      {SEK.format(inv.total_amount)}
                     </td>
                   </tr>
                 ))}
@@ -5280,7 +5708,7 @@ function OvrigtTab({
           <AnteckningarTab studentId={student.id} />
         )}
         {subTab === 'teorimaterial' && (
-          <TeorimaterialTab licenceCat={licenceCat} />
+          <TeorimaterialTab licenceCat={licenceCat} studentId={student.id} />
         )}
         {subTab === 'loggar' && <LoggarTab student={student} />}
         {subTab === 'dokument' && (

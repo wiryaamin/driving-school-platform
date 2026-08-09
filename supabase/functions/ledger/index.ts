@@ -10,6 +10,7 @@
  *   GET  /ledger/trial-balance                — trial balance for a period
  *   POST /ledger/post-invoice                 — post invoice journal entry
  *   POST /ledger/post-payment                 — post payment journal entry
+ *   POST /ledger/post-refund                  — post refund journal entry
  *   POST /ledger/post-void                    — post void/reversal journal entry
  *   POST /ledger/deferred/post                — post deferred revenue entry
  *   POST /ledger/deferred/recognize           — recognize lesson revenue
@@ -76,6 +77,10 @@ function handlePgError(ctx: EdgeRequestContext, e: { message?: string }, prefix:
   if (msg.includes('PERIOD_LOCKED'))           return err(ctx, 'Financial period is locked', 409, 'PERIOD_LOCKED');
   if (msg.includes('INVOICE_NOT_FOUND'))       return err(ctx, 'Invoice not found', 404, 'NOT_FOUND');
   if (msg.includes('PAYMENT_NOT_FOUND'))       return err(ctx, 'Payment not found', 404, 'NOT_FOUND');
+  if (msg.includes('REFUND_NOT_FOUND'))        return err(ctx, 'Refund not found', 404, 'NOT_FOUND');
+  if (msg.includes('REFUND_NOT_COMPLETED'))    return err(ctx, 'Refund must be completed before posting', 409, 'CONFLICT');
+  if (msg.includes('REFUND_NOTHING_TO_POST'))  return err(ctx, 'Refund has no monetary amount to post (credit-only)', 422, 'NOTHING_TO_POST');
+  if (msg.includes('REFUND_NO_PAYMENT'))       return err(ctx, 'Refund has no linked payment', 422, 'NO_PAYMENT');
   console.error(`[${prefix}]`, msg);
   return null;
 }
@@ -111,8 +116,12 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     if (writeGuard) return writeGuard;
   }
 
-  const subGuard = requireFeature(ctx, 'finance:ledger:read');
-  if (subGuard) return subGuard;
+  // Subscription gating is applied per-route below, not blanket here: posting
+  // invoices/payments/refunds and recognizing revenue are mandatory Day-1
+  // operations a trial org must be able to do (same reasoning as
+  // finance:vat:report and communication:templates:manage in FEATURE_GATES —
+  // see _shared/subscription.ts). Only the reporting/export routes
+  // (journal browsing, balances, SIE4) are gated behind a paid tier.
 
   const orgId = ctx.organizationId;
   if (!orgId) return err(ctx, 'No organization context', 403, 'NO_ORG');
@@ -172,6 +181,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // GET /ledger/journal-entries/:id
       if (req.method === 'GET' && entryId) {
         if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+        const subGuard = requireFeature(ctx, 'finance:ledger:read');
+        if (subGuard) return subGuard;
         const { data: entry, error: eErr } = await supabase
           .from('journal_entries' as never)
           .select('*')
@@ -195,6 +206,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // GET /ledger/journal-entries
       if (req.method === 'GET' && !entryId) {
         if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+        const subGuard = requireFeature(ctx, 'finance:ledger:read');
+        if (subGuard) return subGuard;
         const periodId  = url.searchParams.get('period_id');
         const entryType = url.searchParams.get('entry_type');
         const status    = url.searchParams.get('status');
@@ -226,6 +239,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     if (seg1 === 'account-balances' && req.method === 'GET') {
       if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      const subGuard = requireFeature(ctx, 'finance:ledger:read');
+      if (subGuard) return subGuard;
       const periodId = url.searchParams.get('period_id');
       if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
 
@@ -244,6 +259,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
     if (seg1 === 'trial-balance' && req.method === 'GET') {
       if (!hasPerm(ctx, 'finance:ledger:read')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      const subGuard = requireFeature(ctx, 'finance:ledger:read');
+      if (subGuard) return subGuard;
       const periodId = url.searchParams.get('period_id');
       if (!periodId) return err(ctx, 'period_id query param is required', 400, 'VALIDATION_ERROR');
 
@@ -303,6 +320,25 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       });
       if (error) {
         const mapped = handlePgError(ctx, error, 'ledger/post-payment');
+        if (mapped) return mapped;
+        throw error;
+      }
+      return json({ journal_entry_id: data }, 201);
+    }
+
+    // ── /ledger/post-refund ───────────────────────────────────────────────────
+
+    if (seg1 === 'post-refund' && req.method === 'POST') {
+      if (!hasPerm(ctx, 'finance:ledger:manage')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+      const body = await req.json().catch(() => ({}));
+      const { refund_id } = body;
+      if (!refund_id || !UUID_RE.test(refund_id)) return err(ctx, 'refund_id is required', 400, 'VALIDATION_ERROR');
+      const { data, error } = await supabase.rpc('post_refund_journal_entry' as never, {
+        p_refund_id:  refund_id,
+        p_actor_id:   ctx.actorId,
+      });
+      if (error) {
+        const mapped = handlePgError(ctx, error, 'ledger/post-refund');
         if (mapped) return mapped;
         throw error;
       }
@@ -405,6 +441,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // POST /ledger/sie4/generate
       if (req.method === 'POST' && seg2 === 'generate') {
         if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+        const subGuard = requireFeature(ctx, 'finance:sie4:export');
+        if (subGuard) return subGuard;
         const body = await req.json().catch(() => ({}));
         const { period_id } = body;
         if (!period_id || !UUID_RE.test(period_id)) return err(ctx, 'period_id is required', 400, 'VALIDATION_ERROR');
@@ -424,6 +462,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // GET /ledger/sie4/:id
       if (req.method === 'GET' && exportId) {
         if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+        const subGuard = requireFeature(ctx, 'finance:sie4:export');
+        if (subGuard) return subGuard;
         const { data, error } = await supabase
           .from('ledger_sie4_exports' as never)
           .select('*')
@@ -438,6 +478,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // GET /ledger/sie4
       if (req.method === 'GET' && !exportId && seg2 !== 'generate') {
         if (!hasPerm(ctx, 'finance:ledger:export')) return err(ctx, 'Forbidden', 403, 'FORBIDDEN');
+        const subGuard = requireFeature(ctx, 'finance:sie4:export');
+        if (subGuard) return subGuard;
         const limit = Math.min(50, parseInt(url.searchParams.get('limit') ?? '10', 10));
         const { data, error } = await supabase
           .from('ledger_sie4_exports' as never)

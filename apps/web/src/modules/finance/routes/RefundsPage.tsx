@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, AlertCircle, RotateCcw, CheckCircle2, Clock, XCircle, Filter } from 'lucide-react';
+import { Loader2, AlertCircle, RotateCcw, CheckCircle2, Clock, XCircle, Filter, BookOpen } from 'lucide-react';
 import {
   Button,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Badge,
+  toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { formatCurrency, formatDate, formatDateTime } from '../lib/financeUtils.js';
 import { useRefunds, type Refund, type RefundStatus, type RefundType, type RefundReasonCode } from '../hooks/useRefunds.js';
+import { usePostRefundJournalEntry } from '../hooks/useLedger.js';
 
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
@@ -57,6 +59,20 @@ function RefundStatusBadge({ status }: { status: RefundStatus }) {
 function RefundRow({ refund }: { refund: Refund }) {
   const hasMonetary = refund.refund_amount > 0;
   const hasCredits  = refund.credit_quantity > 0;
+  const canPost     = refund.refund_status === 'completed' && hasMonetary;
+
+  const [posted, setPosted] = useState(false);
+  const postEntry = usePostRefundJournalEntry();
+
+  async function handlePost() {
+    try {
+      await postEntry.mutateAsync(refund.id);
+      setPosted(true);
+      toast({ title: 'Bokfört i huvudboken', description: 'Verifikat skapat för återbetalningen.' });
+    } catch (e) {
+      toast({ title: 'Kunde inte bokföra', description: String(e), variant: 'destructive' });
+    }
+  }
 
   return (
     <div className="flex items-start gap-4 px-5 py-4 border-b last:border-0 hover:bg-muted/20 transition-colors">
@@ -99,7 +115,7 @@ function RefundRow({ refund }: { refund: Refund }) {
         </div>
       </div>
 
-      <div className="text-right shrink-0">
+      <div className="text-right shrink-0 space-y-1.5">
         <p className="text-xs text-muted-foreground">
           {formatDate(refund.processed_at ?? refund.created_at)}
         </p>
@@ -107,6 +123,28 @@ function RefundRow({ refund }: { refund: Refund }) {
           <p className="text-[10px] text-green-600 dark:text-green-400 mt-0.5">
             {formatDateTime(refund.processed_at)}
           </p>
+        )}
+        {canPost && (
+          <PermissionGate permission={Permissions.FINANCE_LEDGER_MANAGE}>
+            {posted ? (
+              <Badge variant="outline" className="text-[10px] text-green-700 border-green-300">
+                Bokförd
+              </Badge>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                disabled={postEntry.isPending}
+                onClick={() => void handlePost()}
+              >
+                {postEntry.isPending
+                  ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  : <BookOpen className="w-3 h-3 mr-1" />}
+                Bokför
+              </Button>
+            )}
+          </PermissionGate>
         )}
       </div>
     </div>

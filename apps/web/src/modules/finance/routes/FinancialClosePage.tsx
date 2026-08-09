@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import {
   Loader2, AlertCircle, CheckCircle2, XCircle, Lock, LockOpen,
-  ChevronRight, X, RefreshCw, Camera, ClipboardList, Plus,
+  ChevronRight, RefreshCw, Camera, ClipboardList, Plus,
   ShieldCheck, Archive,
 } from 'lucide-react';
 import {
   Button, Input, Label, Textarea,
-  Sheet, SheetContent,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Badge, Tabs, TabsContent, TabsList, TabsTrigger,
   toast,
@@ -216,8 +215,8 @@ function PeriodDetailSheet({ period, onClose }: { period: PeriodReadiness | null
 
   return (
     <>
-      <Sheet open={Boolean(period)} onOpenChange={v => { if (!v) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto p-0">
+      <Dialog open={Boolean(period)} onOpenChange={v => { if (!v) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto p-0">
           {/* Header */}
           <div className="sticky top-0 z-10 bg-background border-b px-5 py-4">
             <div className="flex items-start justify-between gap-3">
@@ -232,9 +231,6 @@ function PeriodDetailSheet({ period, onClose }: { period: PeriodReadiness | null
                   {period.amendment_count > 0 && ` · ${period.amendment_count} tillägg`}
                 </p>
               </div>
-              <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors shrink-0">
-                <X className="w-4 h-4 text-muted-foreground" />
-              </button>
             </div>
           </div>
 
@@ -430,8 +426,8 @@ function PeriodDetailSheet({ period, onClose }: { period: PeriodReadiness | null
               {period.locked_at          && <p>Låst: {formatDateTime(period.locked_at)}</p>}
             </div>
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* Reopen dialog */}
       <Dialog open={reopenOpen} onOpenChange={v => { if (!v) { setReopenReason(''); setReopenOpen(false); } }}>

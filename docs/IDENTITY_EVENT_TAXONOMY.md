@@ -38,6 +38,12 @@ Every event name is `domain.verb`. The `provider` column — never the event nam
 - `mfa.disabled`
 - `mfa.challenge`
 
+### Person Lookup
+- `person_lookup.performed` — a real (cache-miss) provider call was made, `provider=person_lookup`, `metadata.provider` names the actual lookup provider (`mock`/`roaring`/etc.)
+- `person_lookup.cache_hit` — a cached result was served without calling the provider
+
+**Why this is its own domain, not folded into Identity.** Person Lookup reads a third party's record of *someone else's* civic-registry data on behalf of a staff member filling in a form — it never authenticates or establishes the calling user's own identity, which is what the Identity domain (`identity.linked`/`identity.unlinked`/`identity.verified`) means. Confusing the two would misuse `identity.verified` (an outcome of *this platform's own* identity assurance for the *calling* user) to describe *reading a third party's data about someone else*, which are different assurance questions entirely.
+
 ### Provider-specific
 
 Only permitted when the event describes behavior genuinely unique to that provider — a process state or mechanism no other provider has an equivalent of. Currently:

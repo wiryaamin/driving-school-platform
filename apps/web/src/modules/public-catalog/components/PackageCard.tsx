@@ -3,6 +3,7 @@ import { Star, ChevronRight } from 'lucide-react';
 import type { PublicPackage } from '../hooks/usePublicCatalog.js';
 import { formatCatalogPrice, LESSON_CATEGORY_LABELS } from '../hooks/usePublicCatalog.js';
 import { CountdownTimer } from './CountdownTimer.js';
+import { MarketingBadgeList } from './MarketingBadgeList.js';
 
 interface PackageCardProps {
   pkg:   PublicPackage;
@@ -11,7 +12,7 @@ interface PackageCardProps {
 
 export function PackageCard({ pkg, orgId }: PackageCardProps) {
   const displayPrice    = pkg.discounted_price_incl_vat ?? pkg.price_incl_vat;
-  const originalPrice   = pkg.price_incl_vat;
+  const originalPrice   = pkg.original_price_incl_vat ?? pkg.price_incl_vat;
   const hasDiscount     = pkg.discounted_price_incl_vat != null;
   const categoryLabel   = LESSON_CATEGORY_LABELS[pkg.lesson_category] ?? pkg.lesson_category;
 
@@ -23,7 +24,9 @@ export function PackageCard({ pkg, orgId }: PackageCardProps) {
       {/* header row */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
-          {pkg.featured && (
+          {pkg.marketing_badges.length > 0 ? (
+            <MarketingBadgeList badges={pkg.marketing_badges} className="mb-1.5" />
+          ) : pkg.featured && (
             <div className="flex items-center gap-1 text-amber-600 text-xs font-semibold mb-1">
               <Star className="w-3 h-3 fill-current" />
               Populärt val

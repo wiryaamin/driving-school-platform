@@ -114,7 +114,7 @@ function NotifyWaitlistBtn({ entry, slotDateLabel }: { entry: WaitlistEntryRich;
           markNotified.mutate(entry.id, {
             onSuccess: () => toast({ title: 'SMS-erbjudande skickat' }),
           }),
-        onError: () => toast({ title: 'Kunde inte skicka SMS', variant: 'destructive' }),
+        onError: (err) => toast({ title: 'Kunde inte skicka SMS', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }),
       },
     );
   }

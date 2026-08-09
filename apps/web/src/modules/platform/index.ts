@@ -10,6 +10,7 @@ export { PlatformDashboardPage }            from './routes/PlatformDashboardPage
 export { PlatformOrganizationDetailPage }   from './routes/PlatformOrganizationDetailPage.js';
 export { PlatformOrganizationsPage } from './routes/PlatformOrganizationsPage.js';
 export { PlatformDemoRequestsPage }  from './routes/PlatformDemoRequestsPage.js';
+export { PlatformAnnouncementsPage } from './routes/PlatformAnnouncementsPage.js';
 export { PlatformSubscriptionsPage }       from './routes/PlatformSubscriptionsPage.js';
 export { PlatformSubscriptionDetailPage }  from './routes/PlatformSubscriptionDetailPage.js';
 export { PlatformAuditPage }         from './routes/PlatformAuditPage.js';
@@ -18,3 +19,10 @@ export { PlatformRolesPage }         from './routes/PlatformRolesPage.js';
 export { PlatformSupportPage }       from './routes/PlatformSupportPage.js';
 export { PlatformSecurityPage }      from './routes/PlatformSecurityPage.js';
 export { PlatformTenantOnboardingPage } from './routes/PlatformTenantOnboardingPage.js';
+export { PlatformOperationsPage }     from './routes/PlatformOperationsPage.js';
+export { PlatformCommunicationsPage } from './routes/PlatformCommunicationsPage.js';
+export { PlatformCompliancePage }     from './routes/PlatformCompliancePage.js';
+export { PlatformRecoveryPage }       from './routes/PlatformRecoveryPage.js';
+export { PlatformOnboardingJourneyPage } from './routes/PlatformOnboardingJourneyPage.js';
+export { OnboardingCommandCenterPage } from './routes/OnboardingCommandCenterPage.js';
+export { TrialRequestsPage } from './routes/TrialRequestsPage.js';

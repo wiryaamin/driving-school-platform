@@ -97,7 +97,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             .select('id, due_date', { count: 'exact' })
             .eq('organization_id', orgId)
             .eq('status', 'issued')
-            .is('deleted_at', null)
+            .is('void_at', null)
             .limit(50)
         : Promise.resolve({ data: null, count: null, error: null }),
 
@@ -106,8 +106,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             .from('invoices')
             .select('paid_amount', { count: 'exact' })
             .eq('organization_id', orgId)
-            .eq('status', 'paid')
-            .is('deleted_at', null)
+            .in('status', ['paid', 'partially_paid'])
+            .is('void_at', null)
             .gte('created_at', monthFrom)
             .limit(5000)
         : Promise.resolve({ data: null, count: null, error: null }),

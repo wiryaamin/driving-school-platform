@@ -4,9 +4,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  ChevronLeft, FileText, CreditCard, Receipt, Info, Plus, Tag, RotateCcw,
+  ChevronLeft, FileText, CreditCard, Receipt, Info, Plus, Tag, RotateCcw, BookOpen, Loader2, Building2,
 } from 'lucide-react';
 import { useStudent } from '@modules/students/hooks/useStudents.js';
+import { useCorporateCustomer } from '@modules/corporate/hooks/useCorporateCustomers.js';
 import {
   Button, Badge, Skeleton,
   Card, CardContent, CardHeader, CardTitle,
@@ -23,7 +24,9 @@ import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import {
   useInvoice, useIssueInvoice, useVoidInvoice, usePaymentList, useAddInvoiceLine,
+  type Payment,
 } from '../hooks/useFinance.js';
+import { usePostInvoiceJournalEntry, usePostPaymentJournalEntry } from '../hooks/useLedger.js';
 import {
   useDiscounts, useApplyDiscount, useRedeemCoupon, type DiscountDefinition,
 } from '../hooks/useDiscounts.js';
@@ -460,6 +463,68 @@ function ApplyDiscountDialog({ open, onClose, invoiceId, studentId }: ApplyDisco
   );
 }
 
+// ─── Payment row (with ledger-posting action) ─────────────────────────────────
+
+const POSTABLE_PAYMENT_STATUSES = new Set(['confirmed', 'refunded', 'partially_refunded']);
+
+function PaymentRow({ payment }: { payment: Payment }) {
+  const [posted, setPosted] = useState(false);
+  const postEntry = usePostPaymentJournalEntry();
+  const canPost = POSTABLE_PAYMENT_STATUSES.has(payment.status);
+
+  async function handlePost() {
+    try {
+      await postEntry.mutateAsync(payment.id);
+      setPosted(true);
+      toast({ title: 'Bokfört i huvudboken', description: 'Verifikat skapat för betalningen.' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Försök igen';
+      toast({ title: 'Kunde inte bokföra', description: msg, variant: 'destructive' });
+    }
+  }
+
+  return (
+    <TableRow>
+      <TableCell>
+        <PaymentMethodBadge method={payment.payment_method} />
+      </TableCell>
+      <TableCell>
+        <PaymentStatusBadge status={payment.status} />
+      </TableCell>
+      <TableCell className="text-right text-sm font-mono font-medium">
+        {formatCurrency(payment.amount, payment.currency)}
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground">
+        {formatDateTime(payment.paid_at ?? payment.created_at)}
+      </TableCell>
+      <TableCell className="text-right">
+        {canPost && (
+          <PermissionGate permission={Permissions.FINANCE_LEDGER_MANAGE}>
+            {posted ? (
+              <Badge variant="outline" className="text-[10px] text-green-700 border-green-300">
+                Bokförd
+              </Badge>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                disabled={postEntry.isPending}
+                onClick={() => void handlePost()}
+              >
+                {postEntry.isPending
+                  ? <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  : <BookOpen className="w-3 h-3 mr-1" />}
+                Bokför
+              </Button>
+            )}
+          </PermissionGate>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
 // ─── Student name with link ───────────────────────────────────────────────────
 
 function StudentLink({ id }: { id: string }) {
@@ -470,6 +535,46 @@ function StudentLink({ id }: { id: string }) {
     <Link to={`/students/${id}`} className="text-primary hover:underline">
       {student.first_name} {student.last_name}
     </Link>
+  );
+}
+
+// ─── Corporate billing recipient ───────────────────────────────────────────────
+// When corporate_customer_id is set, the company — not the student — is who
+// this invoice must actually be sent to. Shown as its own prominent card,
+// not buried as a line inside "Kopplad till", since a school reading this
+// page needs to know who to address the invoice to before anything else.
+
+function CorporateBillingCard({ corporateCustomerId }: { corporateCustomerId: string }) {
+  const { data: company, isLoading } = useCorporateCustomer(corporateCustomerId);
+
+  if (isLoading) return <Skeleton className="h-24 w-full rounded-lg" />;
+  if (!company)  return null;
+
+  const addressLine = [company.address_line1, [company.postal_code, company.city].filter(Boolean).join(' ')]
+    .filter(Boolean).join(', ');
+
+  return (
+    <Card className="border-blue-200 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2 text-blue-800 dark:text-blue-300">
+          <Building2 className="w-4 h-4" />
+          Faktureras företag
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-0">
+        <DetailRow
+          label="Företag"
+          value={<Link to={`/corporate/${company.id}`} className="text-primary hover:underline font-medium">{company.company_name}</Link>}
+        />
+        {company.org_number && <DetailRow label="Org.nr" value={company.org_number} />}
+        {addressLine && <DetailRow label="Adress" value={addressLine} />}
+        {company.invoice_text && (
+          <div className="pt-2 mt-2 border-t border-border/60 text-xs text-muted-foreground whitespace-pre-wrap">
+            {company.invoice_text}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -484,6 +589,7 @@ export function InvoiceDetailPage() {
   const [paymentOpen,    setPaymentOpen]    = useState(false);
   const [discountOpen,   setDiscountOpen]   = useState(false);
   const [refundOpen,     setRefundOpen]     = useState(false);
+  const [invoicePosted,  setInvoicePosted]  = useState(false);
 
   const { data, isLoading, error } = useInvoice(id ?? null);
   const { data: paymentData }      = usePaymentList(
@@ -493,6 +599,7 @@ export function InvoiceDetailPage() {
 
   const issueMutation = useIssueInvoice();
   const voidMutation  = useVoidInvoice();
+  const postInvoiceEntry = usePostInvoiceJournalEntry();
 
   if (isLoading) {
     return (
@@ -532,6 +639,19 @@ export function InvoiceDetailPage() {
   const canVoid       = invoice.status !== 'void' && invoice.status !== 'paid';
   const isPayable     = invoice.status === 'issued' || invoice.status === 'partially_paid' || invoice.status === 'overdue';
   const isRefundable  = invoice.status === 'paid' || invoice.status === 'partially_paid';
+  const isPostable    = ['issued', 'paid', 'partially_paid', 'overdue'].includes(invoice.status);
+
+  async function handlePostInvoice() {
+    if (!id) return;
+    try {
+      await postInvoiceEntry.mutateAsync(id);
+      setInvoicePosted(true);
+      toast({ title: 'Bokfört i huvudboken', description: 'Verifikat skapat för fakturan.' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Försök igen';
+      toast({ title: 'Kunde inte bokföra', description: msg, variant: 'destructive' });
+    }
+  }
 
   function handleIssue() {
     if (!id) return;
@@ -629,6 +749,27 @@ export function InvoiceDetailPage() {
                 >
                   Makulera
                 </Button>
+              </PermissionGate>
+            )}
+            {isPostable && (
+              <PermissionGate permission={Permissions.FINANCE_LEDGER_MANAGE}>
+                {invoicePosted ? (
+                  <Badge variant="outline" className="text-xs text-green-700 border-green-300">
+                    Bokförd
+                  </Badge>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={postInvoiceEntry.isPending}
+                    onClick={() => void handlePostInvoice()}
+                  >
+                    {postInvoiceEntry.isPending
+                      ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      : <BookOpen className="w-3.5 h-3.5 mr-1.5" />}
+                    Bokför faktura
+                  </Button>
+                )}
               </PermissionGate>
             )}
           </div>
@@ -772,24 +913,12 @@ export function InvoiceDetailPage() {
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Belopp</TableHead>
                         <TableHead>Datum</TableHead>
+                        <TableHead className="text-right">Bokföring</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {payments.map((payment) => (
-                        <TableRow key={payment.id}>
-                          <TableCell>
-                            <PaymentMethodBadge method={payment.payment_method} />
-                          </TableCell>
-                          <TableCell>
-                            <PaymentStatusBadge status={payment.status} />
-                          </TableCell>
-                          <TableCell className="text-right text-sm font-mono font-medium">
-                            {formatCurrency(payment.amount, payment.currency)}
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {formatDateTime(payment.paid_at ?? payment.created_at)}
-                          </TableCell>
-                        </TableRow>
+                        <PaymentRow key={payment.id} payment={payment} />
                       ))}
                     </TableBody>
                   </Table>
@@ -887,6 +1016,10 @@ export function InvoiceDetailPage() {
               </CardContent>
             </Card>
 
+            {invoice.corporate_customer_id && (
+              <CorporateBillingCard corporateCustomerId={invoice.corporate_customer_id} />
+            )}
+
             {/* Student link */}
             <Card>
               <CardHeader className="pb-3">
@@ -897,7 +1030,7 @@ export function InvoiceDetailPage() {
               </CardHeader>
               <CardContent className="space-y-0">
                 <DetailRow
-                  label="Elev"
+                  label={invoice.corporate_customer_id ? 'Elev (lektionen avser)' : 'Elev'}
                   value={<StudentLink id={invoice.student_id} />}
                 />
                 <DetailRow label="Skapad"     value={formatDateTime(invoice.created_at)} />

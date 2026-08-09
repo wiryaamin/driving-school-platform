@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
-import type { DemoRequestStatus } from './useDemoRequests.js';
+import { useSessionStore } from '@core/store/session.store.js';
+import type { DemoRequestStatus, DemoRequestRejectionReason } from './useDemoRequests.js';
 import { extractFunctionErrorMessage, type ProvisioningResult } from '../lib/provisioningSchema.js';
 
 // ─── DB access helper ─────────────────────────────────────────────────────────
@@ -128,5 +129,98 @@ export function useConvertDemoRequestToCustomer() {
       void queryClient.invalidateQueries({ queryKey: ['platform', 'organizations'] });
       void queryClient.invalidateQueries({ queryKey: ['platform', 'org-stats'] });
     },
+  });
+}
+
+// ─── Mandatory onboarding workflow: Step 1 (Review) / Step 2 (Approve) ────────
+// Same direct-table-update pattern as useUpdateDemoRequestStatus above —
+// two small, additive columns (20260730000003), no new backend endpoint.
+
+export function useMarkDemoRequestReviewed() {
+  const invalidate = useInvalidate();
+  const actorId = useSessionStore((s) => s.user?.id ?? null);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await demoRequests().update({
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: actorId,
+      }).eq('id', id);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['platform'] });
+    },
+  });
+}
+
+export function useApproveDemoRequestOnboarding() {
+  const invalidate = useInvalidate();
+  const actorId = useSessionStore((s) => s.user?.id ?? null);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await demoRequests().update({
+        approved_at: new Date().toISOString(),
+        approved_by: actorId,
+      }).eq('id', id);
+      if (error) throw new Error((error as { message: string }).message);
+    },
+    onSuccess: () => {
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['platform'] });
+    },
+  });
+}
+
+// ─── Reject ───────────────────────────────────────────────────────────────────
+//
+// Unlike the plain client-side updates above, rejection goes through
+// platform-admin (not a direct RLS write) because it also sends a real
+// rejection email — that needs the service-role Resend credential, which
+// only an Edge Function has access to. See platform-admin/index.ts's
+// handleRejectDemoRequest.
+
+export interface RejectDemoRequestInput {
+  id:          string;
+  reason:      DemoRequestRejectionReason;
+  description: string;
+}
+
+export function useRejectDemoRequest() {
+  const invalidate = useInvalidate();
+
+  return useMutation({
+    mutationFn: async (input: RejectDemoRequestInput): Promise<{ email_sent: boolean }> => {
+      const { data, error } = await supabase.functions.invoke<{ data: { id: string; status: string; email_sent: boolean } }>(
+        `platform-admin/demo-requests/${input.id}/reject`,
+        { method: 'POST', body: { reason: input.reason, description: input.description } },
+      );
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte avvisa förfrågan'));
+      if (!data?.data) throw new Error('Inget svar från servern');
+      return { email_sent: data.data.email_sent };
+    },
+    onSuccess: invalidate,
+  });
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+//
+// Hard delete via platform-admin — demo_requests has no client-side DELETE
+// RLS policy (service-role only), matching the rest of this table's access
+// model (see useDemoRequests.ts's own comment on RLS).
+
+export function useDeleteDemoRequest() {
+  const invalidate = useInvalidate();
+
+  return useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      const { error } = await supabase.functions.invoke(`platform-admin/demo-requests/${id}`, { method: 'DELETE' });
+      if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte ta bort förfrågan'));
+    },
+    onSuccess: invalidate,
   });
 }

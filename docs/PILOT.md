@@ -197,3 +197,7 @@ The following features are scaffolded but not yet fully built. These are expecte
 | Student portal (`localhost:5174`) | Separate app not yet built | N/A |
 
 Routes not yet implemented redirect to "Kommer snart" (Coming soon) — this is the expected behavior for the `path: '*'` wildcard route.
+
+## Transportstyrelsen/Trafikverket Integration Domain (2026-07-27)
+
+No pilot impact — none of this is a gap that stops a school from operating. Vehicle registration/insurance/inspection tracking already works today via manual entry (Epic 3.5); Vehicle Registry Lookup (`/resources`, "Hämta uppgifter" button) is an optional automation on top of it, live on Mock by default. The Manual Government Workflow Tracker (`/regulatory`) is a net-new internal tool with no external dependency, ready for pilot use as-is. See `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.11–§4.12 for full detail, and `docs/ENTERPRISE_ARCHITECTURE_HANDBOOK_V1.0.md`'s Version History for the two pre-existing platform bugs (a `notifications` enum gap and an RLS permission-code mismatch that had silently broken the Notification Bell platform-wide since Phase 3D) found and fixed while commissioning this work.

@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, ChevronsUpDown } from 'lucide-react';
-import { Button, Skeleton } from '@platform/ui';
+import { ChevronRight } from 'lucide-react';
+import { Skeleton } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -61,13 +61,12 @@ export function KontoplanPage() {
           <ChevronRight className="w-3 h-3" />
           <span className="text-foreground">Kontoplan</span>
         </nav>
-        <div className="flex items-center gap-2">
-          <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white">
-            Skapa kontoplan
-          </Button>
-        </div>
+        <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
       </div>
+
+      <p className="text-xs text-muted-foreground -mt-2">
+        BAS 2020-kontoplanen är en gemensam, plattformsförvaltad referens — inga konton läggs till här per skola.
+      </p>
 
       {/* Search */}
       <input
@@ -89,23 +88,14 @@ export function KontoplanPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    Kontonummer <ChevronsUpDown className="w-3.5 h-3.5" />
-                  </span>
-                </th>
-                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    Namn <ChevronsUpDown className="w-3.5 h-3.5" />
-                  </span>
-                </th>
-                <th className="w-10 px-4 py-2.5" />
+                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Kontonummer</th>
+                <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Namn</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {slice.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={2} className="px-4 py-8 text-center text-muted-foreground">
                     Inga konton hittades.
                   </td>
                 </tr>
@@ -114,9 +104,6 @@ export function KontoplanPage() {
                   <tr key={a.account_code} className="hover:bg-accent/20 transition-colors">
                     <td className="px-4 py-2.5 font-mono text-sm">{a.account_code}</td>
                     <td className="px-4 py-2.5 text-foreground">{a.account_name}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <ChevronRight className="w-4 h-4 text-muted-foreground/40 inline-block" />
-                    </td>
                   </tr>
                 ))
               )}

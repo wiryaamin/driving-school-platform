@@ -335,9 +335,14 @@ export function BokforingRapportPage() {
   }, `omomsat_forskott_datum_${omfd_date}`);
 
   const exportSumVerifikat = () => void runExport(async () => {
-    const { data } = await supabase.from('journal_entries')
-      .select('account_code, debit_amount, credit_amount')
-      .gte('entry_date', sum_from).lte('entry_date', sum_to).limit(10000);
+    // account_code/debit_amount/credit_amount live on journal_lines, one level
+    // below journal_entries (which only carries entry-level totals) — see
+    // supabase/migrations/20260602000001_phase4d_ledger_core.sql Section on
+    // journal_lines. entry_date lives on the parent journal_entries.
+    const { data, error } = await supabase.from('journal_lines')
+      .select('account_code, debit_amount, credit_amount, journal_entries(entry_date)')
+      .gte('journal_entries.entry_date', sum_from).lte('journal_entries.entry_date', sum_to).limit(10000);
+    if (error) throw error;
     const m: Record<string, { d: number; c: number }> = {};
     for (const r of (data ?? []) as Array<{ account_code: string; debit_amount: number; credit_amount: number }>) {
       const k = r.account_code ?? 'Okänt'; if (!m[k]) m[k] = { d: 0, c: 0 };
@@ -349,8 +354,10 @@ export function BokforingRapportPage() {
   const exportSumVerifikatPdf = () => void (async () => {
     toast({ title: 'Förbereder PDF…' });
     try {
-      const { data } = await supabase.from('journal_entries')
-        .select('account_code, debit_amount, credit_amount').gte('entry_date', sum_from).lte('entry_date', sum_to).limit(5000);
+      const { data, error } = await supabase.from('journal_lines')
+        .select('account_code, debit_amount, credit_amount, journal_entries(entry_date)')
+        .gte('journal_entries.entry_date', sum_from).lte('journal_entries.entry_date', sum_to).limit(5000);
+      if (error) throw error;
       const m: Record<string, { d: number; c: number }> = {};
       for (const r of (data ?? []) as Array<{ account_code: string; debit_amount: number; credit_amount: number }>) {
         const k = r.account_code ?? 'Okänt'; if (!m[k]) m[k] = { d: 0, c: 0 };
@@ -362,13 +369,18 @@ export function BokforingRapportPage() {
   })();
 
   const exportVerifikCsv = () => void runExport(async () => {
-    const { data } = await supabase.from('journal_entries')
-      .select('account_code, debit_amount, credit_amount, description, entry_date')
-      .gte('entry_date', csv_from).lte('entry_date', csv_to).order('entry_date').limit(10000);
-    return (data ?? []).map((r: Record<string, unknown>) => ({
-      'Datum': r['entry_date'] ?? '', 'Konto': r['account_code'] ?? '',
-      'Beskrivning': r['description'] ?? '', 'Debet (kr)': cur(r['debit_amount']), 'Kredit (kr)': cur(r['credit_amount']),
-    })) as Record<string, unknown>[];
+    const { data, error } = await supabase.from('journal_lines')
+      .select('account_code, debit_amount, credit_amount, description, journal_entries(entry_date)')
+      .gte('journal_entries.entry_date', csv_from).lte('journal_entries.entry_date', csv_to)
+      .order('entry_date', { referencedTable: 'journal_entries' }).limit(10000);
+    if (error) throw error;
+    return (data ?? []).map((r: Record<string, unknown>) => {
+      const entry = r['journal_entries'] as Record<string, unknown> | null;
+      return {
+        'Datum': entry?.['entry_date'] ?? '', 'Konto': r['account_code'] ?? '',
+        'Beskrivning': r['description'] ?? '', 'Debet (kr)': cur(r['debit_amount']), 'Kredit (kr)': cur(r['credit_amount']),
+      };
+    }) as Record<string, unknown>[];
   }, `verifikationer_${csv_from}_${csv_to}`);
 
   return (

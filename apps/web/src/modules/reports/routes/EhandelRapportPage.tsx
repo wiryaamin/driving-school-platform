@@ -35,29 +35,31 @@ export function EhandelRapportPage() {
   const [ordStatus, setOrdStatus] = useState('all');
 
   const exportBetalda = () => void runExport(async () => {
-    const { data } = await supabase.from('payment_requests')
-      .select('id, amount, currency, status, provider, created_at, student_id, students(first_name, last_name)')
+    const { data, error } = await supabase.from('payment_requests')
+      .select('id, amount_sek, status, provider, created_at, student_id, students(first_name, last_name)')
       .eq('status', 'completed')
       .gte('created_at', b1from).lte('created_at', b1to + 'T23:59:59')
       .order('created_at', { ascending: false }).limit(2000);
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
       const std = r['students'] as Record<string, unknown> | null;
       return { 'Elev': std ? `${std['first_name'] ?? ''} ${std['last_name'] ?? ''}`.trim() : 'Gäst',
-        'Belopp (kr)': cur(r['amount']), 'Valuta': r['currency'] ?? 'SEK',
+        'Belopp (kr)': cur(r['amount_sek']), 'Valuta': 'SEK',
         'Leverantör': r['provider'] ?? '', 'Datum': dateFmt(r['created_at']) };
     }) as Record<string, unknown>[];
   }, `betalda_ordrar_${b1from}_${b1to}`);
 
   const exportAvbrutna = () => void runExport(async () => {
-    const { data } = await supabase.from('payment_requests')
-      .select('id, amount, currency, status, provider, created_at, students(first_name, last_name)')
+    const { data, error } = await supabase.from('payment_requests')
+      .select('id, amount_sek, status, provider, created_at, students(first_name, last_name)')
       .in('status', ['expired', 'cancelled'])
       .gte('created_at', b3from).lte('created_at', b3to + 'T23:59:59')
       .order('created_at', { ascending: false }).limit(2000);
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
       const std = r['students'] as Record<string, unknown> | null;
       return { 'Elev': std ? `${std['first_name'] ?? ''} ${std['last_name'] ?? ''}`.trim() : 'Gäst',
-        'Belopp (kr)': cur(r['amount']), 'Status': r['status'] ?? '', 'Datum': dateFmt(r['created_at']) };
+        'Belopp (kr)': cur(r['amount_sek']), 'Status': r['status'] ?? '', 'Datum': dateFmt(r['created_at']) };
     }) as Record<string, unknown>[];
   }, `avbrutna_ordrar_${b3from}_${b3to}`);
 
@@ -75,15 +77,16 @@ export function EhandelRapportPage() {
 
   const exportOrderhistorik = () => void runExport(async () => {
     let q = supabase.from('payment_requests')
-      .select('id, amount, currency, status, provider, created_at, students(first_name, last_name)')
+      .select('id, amount_sek, status, provider, created_at, students(first_name, last_name)')
       .gte('created_at', b5from).lte('created_at', b5to + 'T23:59:59')
       .order('created_at', { ascending: false }).limit(2000);
     if (ordStatus !== 'all') q = q.eq('status', ordStatus === 'paid' ? 'completed' : ordStatus);
-    const { data } = await q;
+    const { data, error } = await q;
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
       const std = r['students'] as Record<string, unknown> | null;
       return { 'Elev': std ? `${std['first_name'] ?? ''} ${std['last_name'] ?? ''}`.trim() : 'Gäst',
-        'Belopp (kr)': cur(r['amount']), 'Valuta': r['currency'] ?? 'SEK',
+        'Belopp (kr)': cur(r['amount_sek']), 'Valuta': 'SEK',
         'Status': r['status'] ?? '', 'Leverantör': r['provider'] ?? '', 'Datum': dateFmt(r['created_at']) };
     }) as Record<string, unknown>[];
   }, `orderhistorik_${b5from}_${b5to}`);

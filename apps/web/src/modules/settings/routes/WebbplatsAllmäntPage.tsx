@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronRight, Globe } from 'lucide-react';
-import { Button } from '@platform/ui';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button, toast } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 interface Usp {
   text: string;
@@ -15,12 +18,67 @@ const DEFAULT_USPS: Usp[] = [
 ];
 
 export function WebbplatsAllmäntPage() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+
   const [usps, setUsps] = useState<Usp[]>(DEFAULT_USPS);
   const [gtm, setGtm] = useState('');
   const [cookies, setCookies] = useState(true);
 
+  const { data: orgSettings } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['org-settings-website-general', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      return ((data as unknown as { settings: Record<string, unknown> } | null)?.settings) ?? null;
+    },
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!orgSettings) return;
+    const s = (orgSettings['website'] as Record<string, unknown> | undefined) ?? {};
+    if (Array.isArray(s['usps']) && s['usps'].length === 3) setUsps(s['usps'] as Usp[]);
+    if (typeof s['gtm_container_id'] === 'string') setGtm(s['gtm_container_id']);
+    if (typeof s['cookie_consent_enabled'] === 'boolean') setCookies(s['cookie_consent_enabled']);
+  }, [orgSettings]);
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      if (!orgId) return;
+      await supabase.from('organizations').update({
+        settings: {
+          ...(orgSettings ?? {}),
+          website: { usps, gtm_container_id: gtm, cookie_consent_enabled: cookies },
+        },
+      } as never).eq('id', orgId);
+    },
+    onSuccess: () => {
+      toast({ title: 'Sparat', description: 'Webbplatsinställningarna har sparats.' });
+      void qc.invalidateQueries({ queryKey: ['org-settings-website-general', orgId] });
+    },
+    onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
+  });
+
+  const save = () => saveMut.mutate();
+  const isPending = saveMut.isPending;
+
   function updateUsp(idx: number, field: keyof Usp, value: string) {
     setUsps(prev => prev.map((u, i) => i === idx ? { ...u, [field]: value } : u));
+  }
+
+  function toggleCookies() {
+    const next = !cookies;
+    setCookies(next);
+    if (!orgId) return;
+    void supabase.from('organizations').update({
+      settings: { ...(orgSettings ?? {}), website: { usps, gtm_container_id: gtm, cookie_consent_enabled: next } },
+    } as never).eq('id', orgId).then(({ error }) => {
+      if (error) { toast({ title: 'Fel vid sparning', variant: 'destructive' }); setCookies(!next); }
+      else { toast({ title: 'Sparat' }); void qc.invalidateQueries({ queryKey: ['org-settings-website-general', orgId] }); }
+    });
   }
 
   return (
@@ -46,6 +104,11 @@ export function WebbplatsAllmäntPage() {
           <p className="text-sm text-muted-foreground mt-1">Hantera inställningar för er webbplats och elevportal.</p>
         </div>
       </div>
+
+      <p className="text-xs text-muted-foreground -mt-2">
+        USP:ar, Google Tag Manager-ID och cookie-bannern sparas men det finns ingen publik marknadsföringswebbplats i
+        plattformen ännu som visar dem.
+      </p>
 
       {/* Webbplatsinställningar */}
       <div className="rounded-xl border border-border bg-card divide-y divide-border">
@@ -127,7 +190,7 @@ export function WebbplatsAllmäntPage() {
               </div>
             </div>
           ))}
-          <Button size="sm">Spara</Button>
+          <Button size="sm" onClick={save} disabled={isPending}>{isPending ? 'Sparar…' : 'Spara'}</Button>
         </div>
       </div>
 
@@ -147,7 +210,7 @@ export function WebbplatsAllmäntPage() {
             placeholder="GTM-XXXXXXX"
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground"
           />
-          <Button size="sm">Spara</Button>
+          <Button size="sm" onClick={save} disabled={isPending}>{isPending ? 'Sparar…' : 'Spara'}</Button>
         </div>
       </div>
 
@@ -164,7 +227,7 @@ export function WebbplatsAllmäntPage() {
           type="button"
           role="switch"
           aria-checked={cookies}
-          onClick={() => setCookies(v => !v)}
+          onClick={toggleCookies}
           className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors mt-0.5 ${cookies ? 'bg-primary' : 'bg-input'}`}
         >
           <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${cookies ? 'translate-x-5' : 'translate-x-0'}`} />

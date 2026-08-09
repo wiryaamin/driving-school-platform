@@ -3,6 +3,10 @@ import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, AlertCircle, CheckCircle2, Clock, Tag } from 'lucide-react';
 import { usePublicPackageDetail, formatCatalogPrice, LESSON_CATEGORY_LABELS } from '../hooks/usePublicCatalog.js';
 import { CountdownTimer } from '../components/CountdownTimer.js';
+import { TenantIdentity } from '@shared/components/public/TenantIdentity.js';
+import { TenantContactFooter } from '@shared/components/public/TenantContactFooter.js';
+import { parseDescriptionBullets } from '../lib/parseDescription.js';
+import { MarketingBadgeList } from '../components/MarketingBadgeList.js';
 
 function Skeleton() {
   return (
@@ -63,7 +67,7 @@ export function PublicPackageDetailPage() {
     document.head.appendChild(script);
 
     return () => {
-      document.title = 'Körskoleplattformen';
+      document.title = 'Trafikcloud';
       if (robots) robots.content = 'noindex, nofollow';
       script.remove();
     };
@@ -93,10 +97,10 @@ export function PublicPackageDetailPage() {
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-3.5">
           <Link
             to={orgId ? `/catalog/${orgId}` : '#'}
-            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors"
+            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-blue-700 transition-colors min-w-0"
           >
-            <ArrowLeft className="w-4 h-4" />
-            {org?.name ?? 'Tillbaka'}
+            <ArrowLeft className="w-4 h-4 shrink-0" />
+            <TenantIdentity name={org?.name} branding={org?.branding} fallback="Tillbaka" textClassName="text-sm font-medium" logoClassName="h-5 w-auto" />
           </Link>
         </div>
       </header>
@@ -108,6 +112,9 @@ export function PublicPackageDetailPage() {
           <div className="space-y-6">
             {/* Package header */}
             <div>
+              {pkg.marketing_badges.length > 0 && (
+                <MarketingBadgeList badges={pkg.marketing_badges} className="mb-2" />
+              )}
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <span className="text-xs font-medium text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full">
                   {categoryLabel}
@@ -117,9 +124,24 @@ export function PublicPackageDetailPage() {
                 )}
               </div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">{pkg.name}</h1>
-              {pkg.description && (
-                <p className="text-gray-600 leading-relaxed">{pkg.description}</p>
-              )}
+              {pkg.description && (() => {
+                const { intro, bullets } = parseDescriptionBullets(pkg.description);
+                return (
+                  <>
+                    {intro && <p className="text-gray-600 leading-relaxed">{intro}</p>}
+                    {bullets.length > 0 && (
+                      <ul className="mt-3 space-y-1.5">
+                        {bullets.map((b, i) => (
+                          <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                            <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                            <span>{b}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                );
+              })()}
             </div>
 
             {/* Price card */}
@@ -133,28 +155,49 @@ export function PublicPackageDetailPage() {
                     </span>
                     {hasDiscount && (
                       <span className="text-lg text-gray-400 line-through">
-                        {formatCatalogPrice(pkg.price_incl_vat, pkg.currency)}
+                        {formatCatalogPrice(pkg.original_price_incl_vat ?? pkg.price_incl_vat, pkg.currency)}
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">inkl. moms</p>
                 </div>
 
-                {pkg.savings_label && (
-                  <span className="self-start sm:self-auto text-sm font-semibold text-green-700 bg-green-50 border border-green-100 px-3 py-1.5 rounded-lg">
-                    {pkg.savings_label}
-                  </span>
+                {(pkg.savings_label || pkg.discount_percentage) && (
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    {pkg.discount_percentage != null && pkg.discount_percentage > 0 && (
+                      <span className="text-sm font-bold text-white bg-red-500 px-2 py-1.5 rounded-lg">
+                        -{pkg.discount_percentage}%
+                      </span>
+                    )}
+                    {pkg.savings_label && (
+                      <span className="text-sm font-semibold text-green-700 bg-green-50 border border-green-100 px-3 py-1.5 rounded-lg">
+                        {pkg.savings_label}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
 
-              {/* Package contents */}
+              {/* Package contents / highlights */}
               <div className="mt-4 pt-4 border-t border-gray-100 space-y-2">
                 {pkg.quantity > 0 && (
                   <div className="flex items-center gap-2 text-sm text-gray-700">
                     <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
-                    <span>{pkg.quantity} lektion{pkg.quantity !== 1 ? 'er' : ''}</span>
+                    <span>{pkg.quantity} × {categoryLabel}</span>
                   </div>
                 )}
+                {pkg.bundle_credits?.map((bc, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
+                    <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                    <span>{bc.quantity} × {LESSON_CATEGORY_LABELS[bc.lesson_category] ?? bc.lesson_category}</span>
+                  </div>
+                ))}
+                {pkg.included_items?.map((item) => (
+                  <div key={item} className="flex items-center gap-2 text-sm text-gray-700">
+                    <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                    <span>{item}</span>
+                  </div>
+                ))}
                 {pkg.validity_days && (
                   <div className="flex items-center gap-2 text-sm text-gray-700">
                     <Clock className="w-4 h-4 text-gray-400 shrink-0" />
@@ -226,6 +269,7 @@ export function PublicPackageDetailPage() {
               <Link
                 to={orgId && packageId ? `/catalog/${orgId}/${packageId}/checkout` : '#'}
                 className="inline-flex items-center justify-center gap-2 w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                style={org?.branding.primary_color ? { backgroundColor: org.branding.primary_color } : undefined}
               >
                 Boka paket
               </Link>
@@ -239,6 +283,8 @@ export function PublicPackageDetailPage() {
                 </Link>
               </div>
             </div>
+
+            <TenantContactFooter branding={org?.branding} />
           </div>
         ) : null}
       </main>

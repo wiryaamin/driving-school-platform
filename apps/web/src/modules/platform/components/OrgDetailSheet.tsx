@@ -1,5 +1,5 @@
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
   Badge, Skeleton,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
@@ -88,14 +88,14 @@ export function OrgDetailSheet({ open, org, onClose }: OrgDetailSheetProps) {
   const statusClass = org ? (STATUS_BADGE[org.status] ?? 'bg-muted text-muted-foreground') : '';
 
   return (
-    <Sheet open={open} onOpenChange={open => { if (!open) onClose(); }}>
-      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+    <Dialog open={open} onOpenChange={open => { if (!open) onClose(); }}>
+      <DialogContent className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto">
         {org && (
           <>
-            <SheetHeader className="pb-4">
-              <SheetTitle className="text-lg">{org.name}</SheetTitle>
-              <SheetDescription className="text-xs font-mono text-muted-foreground">{org.slug}</SheetDescription>
-            </SheetHeader>
+            <DialogHeader className="pb-4">
+              <DialogTitle className="text-lg">{org.name}</DialogTitle>
+              <DialogDescription className="text-xs font-mono text-muted-foreground">{org.slug}</DialogDescription>
+            </DialogHeader>
 
             {/* Status chip row */}
             <div className="flex items-center gap-2 flex-wrap mb-5">
@@ -182,7 +182,7 @@ export function OrgDetailSheet({ open, org, onClose }: OrgDetailSheetProps) {
             </div>
           </>
         )}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

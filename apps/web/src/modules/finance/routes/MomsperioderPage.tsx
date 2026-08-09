@@ -24,10 +24,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   toast,
 } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
@@ -102,14 +98,21 @@ function CreatePeriodDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // Formats a Date using its LOCAL year/month/day — never .toISOString(),
+  // which converts to UTC first and silently shifts the date backward by
+  // one day for any positive UTC offset (all of Sweden's own timezone,
+  // CET/CEST). That exact bug previously made "Denna månad" create a
+  // period ending one day short of the real last day of the month.
+  const toLocalDateString = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
   const monthStart = () => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    return toLocalDateString(new Date(d.getFullYear(), d.getMonth(), 1));
   };
   const monthEnd = () => {
     const d = new Date();
-    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    return last.toISOString().slice(0, 10);
+    return toLocalDateString(new Date(d.getFullYear(), d.getMonth() + 1, 0));
   };
 
   function prefillMonth() {
@@ -121,8 +124,8 @@ function CreatePeriodDialog({ onClose }: { onClose: () => void }) {
   function prefillQuarter() {
     const d = new Date();
     const q  = Math.floor(d.getMonth() / 3);
-    const qs = new Date(d.getFullYear(), q * 3, 1).toISOString().slice(0, 10);
-    const qe = new Date(d.getFullYear(), q * 3 + 3, 0).toISOString().slice(0, 10);
+    const qs = toLocalDateString(new Date(d.getFullYear(), q * 3, 1));
+    const qe = toLocalDateString(new Date(d.getFullYear(), q * 3 + 3, 0));
     setStart(qs);
     setEnd(qe);
     setFrequency('quarterly');
@@ -353,13 +356,13 @@ function PeriodDetailSheet({ period: initialPeriod, onClose }: { period: VatPeri
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[600px] sm:w-[680px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
               Momsperiod: {formatDate(initialPeriod.period_start)} – {formatDate(initialPeriod.period_end)}
-            </SheetTitle>
-          </SheetHeader>
+            </DialogTitle>
+          </DialogHeader>
 
           {/* Status + actions */}
           <div className="mt-4 flex items-center gap-2 flex-wrap">
@@ -448,8 +451,8 @@ function PeriodDetailSheet({ period: initialPeriod, onClose }: { period: VatPeri
             <h3 className="text-sm font-semibold">Momstransaktioner</h3>
             <EntriesTable periodId={initialPeriod.id} />
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {locking && <LockPeriodDialog period={initialPeriod} onClose={() => setLocking(false)} />}
     </>

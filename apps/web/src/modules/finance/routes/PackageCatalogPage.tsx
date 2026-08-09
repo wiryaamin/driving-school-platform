@@ -699,7 +699,7 @@ function StudentPurchasesTab() {
   const total    = data?.meta.total ?? 0;
 
   const activeCount    = packages.filter((p) => p.status === 'active').length;
-  const exhaustedCount = packages.filter((p) => p.status === 'exhausted').length;
+  const exhaustedCount = packages.filter((p) => p.quantity_remaining <= 0).length;
 
   return (
     <div className="space-y-4">

@@ -1,12 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   GraduationCap, Calendar, Receipt, TrendingUp, Users, AlertTriangle,
   Clock, UserPlus, CalendarPlus, UserCheck, RefreshCcw, ChevronRight, Search, CalendarCheck,
   MessageSquare, CalendarDays, LayoutGrid, ListFilter, Bell, SlidersHorizontal,
 } from 'lucide-react';
 import { useNavigate, Link, NavLink } from 'react-router-dom';
-import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { formatTime, formatSekRounded } from '@platform/utils';
 import { usePermissions } from '@core/rbac/hooks.js';
@@ -162,28 +160,13 @@ export function DashboardPage() {
   const { data: instructorsData, isLoading: instructorsLoading } = useInstructorList({ per_page: 50 }, { enabled: orgReady });
   const { data: inactiveStudentsData, isLoading: inactiveStudentsLoading } = useStudentList({ status: 'paused', per_page: 5 }, { enabled: orgReady });
   const { data: archivedStudentsData } = useStudentList({ status: 'archived', per_page: 1 }, { enabled: orgReady });
+  const { data: leadStudentsData } = useStudentList({ status: 'lead', per_page: 1 }, { enabled: orgReady });
 
   const pendingFrom = useMemo(() => new Date(Date.now() - 30 * 86_400_000).toISOString(), []);
   const pendingTo   = useMemo(() => new Date(Date.now() +  7 * 86_400_000).toISOString(), []);
   const { data: pendingBookingsData, isLoading: bookingsLoading } = useBookingList({ from: pendingFrom, to: pendingTo, per_page: 100 }, { enabled: orgReady });
   const { data: queueHealthData }    = useQueueHealth({ enabled: orgReady });
   const { data: recentActivityData, isLoading: activityLoading } = useRecentActivity(5);
-
-  const { data: newStudentsCount = 0 } = useQuery({
-    queryKey: ['students', 'new-this-month', organization?.id ?? ''],
-    queryFn: async () => {
-      const monthStart = new Date();
-      monthStart.setDate(1);
-      monthStart.setHours(0, 0, 0, 0);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await (supabase as unknown as any)
-        .from('students')
-        .select('id', { count: 'exact', head: true });
-      return (res.count as number) ?? 0;
-    },
-    enabled: orgReady,
-    staleTime: 5 * 60_000,
-  });
 
   const reservedCount = useMemo(
     () => (pendingBookingsData?.data ?? []).filter((b) => b.status === 'reserved').length,
@@ -199,6 +182,7 @@ export function DashboardPage() {
   const instructors   = instructorsData?.data ?? [];
   const inactiveCount = inactiveStudentsData?.meta.total ?? 0;
   const archivedCount    = archivedStudentsData?.meta.total ?? 0;
+  const newStudentsCount = leadStudentsData?.meta.total ?? 0;
   const overdueCount     = displayMetrics?.pending_invoices?.overdueCount ?? 0;
   const activeCount      = displayMetrics?.active_student_count ?? 0;
 

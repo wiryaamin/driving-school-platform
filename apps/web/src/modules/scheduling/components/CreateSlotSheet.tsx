@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronUp, RefreshCw, Car, AlertTriangle } from 'lucide-react';
+import { ChevronDown, ChevronUp, RefreshCw, Car, AlertTriangle, Check, CalendarX2, Users2, Minus, Plus } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   Button, Input, Textarea, Label, ScrollArea, Skeleton,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   cn, toast,
 } from '@platform/ui';
 import type { LessonCategory } from '@platform/types';
+import { stockholmToUtcIso } from '@platform/utils';
 import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { useInstructorList } from '@modules/instructors/index.js';
 import { useVehicles } from '@modules/resources/index.js';
@@ -75,9 +77,14 @@ function addMinutesToTime(time: string, minutes: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
-function toIsoString(date: string, time: string): string {
-  return new Date(`${date}T${time}:00`).toISOString();
-}
+// Anchored to Europe/Stockholm (the org's operating timezone), not the
+// viewer's device timezone — see @platform/utils's stockholmToUtcIso for why:
+// every downstream display (calendar, booking details, etc.) already
+// formats stored UTC instants back out as Stockholm time, so the picked
+// wall-clock time must be converted in on that same, single, authoritative
+// timezone to stay consistent regardless of what timezone the browser itself
+// happens to be running in.
+const toIsoString = stockholmToUtcIso;
 
 function generateRecurringDates(from: string, to: string, weekdays: readonly number[]): string[] {
   const dates: string[] = [];
@@ -126,9 +133,28 @@ function getInitials(firstName: string, lastName: string): string {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function SectionHeader({ children }: { children: ReactNode }) {
+function SectionHeader({ children, required }: { children: ReactNode; required?: boolean }) {
   return (
-    <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 mb-2.5">
+    <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 mb-2.5">
+      {children}
+      {required && <span className="text-destructive normal-case" aria-hidden="true">*</span>}
+    </div>
+  );
+}
+
+function FieldError({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center gap-1 text-[11px] font-medium text-destructive mt-1">
+      <AlertTriangle className="w-3 h-3 shrink-0" />
+      {children}
+    </p>
+  );
+}
+
+function EmptyState({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-dashed border-border bg-muted/20 px-3.5 py-3 text-xs text-muted-foreground">
+      <span className="shrink-0 text-muted-foreground/60">{icon}</span>
       {children}
     </div>
   );
@@ -148,11 +174,12 @@ function TimePills({
           key={t}
           type="button"
           onClick={() => onSelect(t)}
+          aria-pressed={startTime === t}
           className={cn(
-            'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
+            'px-2.5 py-1.5 text-xs font-medium rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             startTime === t
-              ? 'bg-primary text-primary-foreground border-primary'
-              : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
+              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+              : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent hover:border-primary/30',
           )}
         >
           {t}
@@ -162,13 +189,62 @@ function TimePills({
   );
 }
 
+const HOURS   = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+const MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
+
+// Native <input type="time"> renders per browser/OS locale (12h AM/PM on some
+// systems) and only accepts input via small per-segment clicks/arrow keys —
+// confirmed live as genuinely hard to operate for some users. Two plain
+// dropdowns are unambiguous, always 24h, and always directly clickable —
+// same underlying "HH:MM" string value/state either way.
+function TimeSelect({
+  id,
+  value,
+  onChange,
+  invalid,
+}: {
+  id?:      string;
+  value:    string;
+  onChange: (t: string) => void;
+  invalid?: boolean;
+}) {
+  const [h, m] = value ? value.split(':') : ['', ''];
+  const hourProps   = h ? { value: h } : {};
+  const minuteProps = m ? { value: m } : {};
+
+  return (
+    <div id={id} className="flex items-center gap-1">
+      <Select {...hourProps} onValueChange={(nh) => onChange(`${nh}:${m || '00'}`)}>
+        <SelectTrigger className={cn('w-[70px]', invalid && 'border-destructive focus:ring-destructive')}>
+          <SelectValue placeholder="Tim" />
+        </SelectTrigger>
+        <SelectContent>
+          {HOURS.map(hh => <SelectItem key={hh} value={hh}>{hh}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <span className="text-muted-foreground">:</span>
+      <Select {...minuteProps} onValueChange={(nm) => onChange(`${h || '00'}:${nm}`)}>
+        <SelectTrigger className={cn('w-[70px]', invalid && 'border-destructive focus:ring-destructive')}>
+          <SelectValue placeholder="Min" />
+        </SelectTrigger>
+        <SelectContent>
+          {MINUTES.map(mm => <SelectItem key={mm} value={mm}>{mm}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface CreateSlotSheetProps {
-  open:                 boolean;
-  onOpenChange:         (open: boolean) => void;
-  initialDate?:         Date | null;
-  initialInstructorId?: string | null;
+  open:                  boolean;
+  onOpenChange:          (open: boolean) => void;
+  initialDate?:          Date | null;
+  initialInstructorId?:  string | null;
+  initialLessonTypeId?:  string | null;
+  initialVehicleId?:     string | null;
+  initialStartTime?:     string | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -178,6 +254,9 @@ export function CreateSlotSheet({
   onOpenChange,
   initialDate,
   initialInstructorId,
+  initialLessonTypeId,
+  initialVehicleId,
+  initialStartTime,
 }: CreateSlotSheetProps) {
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -264,6 +343,24 @@ export function CreateSlotSheet({
     (mode === 'single' ? !!date : recurringDates.length > 0)
   );
 
+  // All unmet requirements at once — shown as a checklist so the user never has
+  // to fix one thing, resubmit, and discover another blocker one at a time.
+  const missingRequirements = useMemo(() => {
+    const missing: string[] = [];
+    if (!lessonTypeId) missing.push('Välj en lektionsmall');
+    if (!instructorId) missing.push('Välj en lärare');
+    if (!startTime || !endTime) missing.push('Ange start- och sluttid');
+    else if (endTime <= startTime) missing.push('Sluttid måste vara efter starttid');
+    if (mode === 'single') {
+      if (!date) missing.push('Välj ett datum');
+    } else {
+      if (recurringDays.length === 0) missing.push('Välj minst en veckodag');
+      if (!recurringFrom || !recurringTo) missing.push('Ange start- och slutdatum för perioden');
+      else if (recurringTo < recurringFrom) missing.push('Slutdatum måste vara efter startdatum');
+    }
+    return missing;
+  }, [lessonTypeId, instructorId, startTime, endTime, mode, date, recurringDays, recurringFrom, recurringTo]);
+
   // Init/reset on open toggle
   useEffect(() => {
     if (open) {
@@ -271,6 +368,9 @@ export function CreateSlotSheet({
       setDate(d);
       setRecurringFrom(d);
       if (initialInstructorId) setInstructorId(initialInstructorId);
+      if (initialLessonTypeId) setLessonTypeId(initialLessonTypeId);
+      if (initialVehicleId) setVehicleId(initialVehicleId);
+      if (initialStartTime) setStartTime(initialStartTime);
     } else {
       setMode('single');
       setLessonTypeId('');
@@ -457,23 +557,23 @@ export function CreateSlotSheet({
 
             {/* ── Lektionsmall ─────────────────────────────────────────────── */}
             <div>
-              <SectionHeader>Lektionsmall</SectionHeader>
+              <SectionHeader required>Lektionsmall</SectionHeader>
               {ltLoading ? (
                 <div className="flex gap-2">
                   {[1, 2, 3].map(n => (
-                    <Skeleton key={n} className="h-[72px] w-[106px] rounded-lg flex-shrink-0" />
+                    <Skeleton key={n} className="h-[76px] w-[112px] rounded-lg flex-shrink-0" />
                   ))}
                 </div>
               ) : ltError ? (
-                <p className="text-sm text-destructive">
+                <EmptyState icon={<AlertTriangle className="w-4 h-4" />}>
                   Kunde inte ladda lektionstyper. Kontrollera behörigheter och försök igen.
-                </p>
+                </EmptyState>
               ) : lessonTypes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
+                <EmptyState icon={<CalendarX2 className="w-4 h-4" />}>
                   Inga aktiva lektionstyper konfigurerade. Kontakta systemadministratören.
-                </p>
+                </EmptyState>
               ) : (
-                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
                   {lessonTypes.map(lt => {
                     const isSelected = lessonTypeId === lt.id;
                     return (
@@ -481,25 +581,31 @@ export function CreateSlotSheet({
                         key={lt.id}
                         type="button"
                         onClick={() => setLessonTypeId(lt.id)}
+                        aria-pressed={isSelected}
                         className={cn(
-                          'flex-shrink-0 w-[106px] rounded-lg border-2 overflow-hidden text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          'relative flex-shrink-0 w-[112px] rounded-lg border overflow-hidden text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                           isSelected
-                            ? 'border-primary ring-1 ring-primary/20'
-                            : 'border-border hover:border-primary/40',
+                            ? 'border-primary ring-1 ring-primary/30 shadow-sm'
+                            : 'border-border hover:border-primary/40 hover:shadow-sm',
                         )}
                       >
                         <div className={cn('h-[3px]', CATEGORY_BAR[lt.category])} />
                         <div className={cn('p-2.5 transition-colors', isSelected ? CATEGORY_SELECTED_BG[lt.category] : '')}>
-                          <div className="text-xs font-semibold text-foreground leading-tight line-clamp-2">
+                          <div className="text-xs font-semibold text-foreground leading-tight line-clamp-2 pr-3">
                             {lt.name}
                           </div>
-                          <div className="text-[11px] text-muted-foreground mt-1">
+                          <div className="text-[11px] text-muted-foreground mt-1.5">
                             {lt.default_duration_minutes} min
                           </div>
                           <div className="text-[11px] text-muted-foreground">
                             {CATEGORY_LABELS[lt.category]}
                           </div>
                         </div>
+                        {isSelected && (
+                          <span className="absolute top-1.5 right-1.5 flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground">
+                            <Check className="w-2.5 h-2.5" strokeWidth={3} />
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -509,7 +615,7 @@ export function CreateSlotSheet({
 
             {/* ── Lärare ──────────────────────────────────────────────────── */}
             <div>
-              <SectionHeader>Lärare</SectionHeader>
+              <SectionHeader required>Lärare</SectionHeader>
               {instrLoading ? (
                 <div className="flex gap-1.5">
                   {[1, 2, 3, 4].map(n => (
@@ -517,7 +623,9 @@ export function CreateSlotSheet({
                   ))}
                 </div>
               ) : instructors.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Inga aktiva lärare tillgängliga.</p>
+                <EmptyState icon={<Users2 className="w-4 h-4" />}>
+                  Inga aktiva lärare tillgängliga.
+                </EmptyState>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {instructors.map(i => {
@@ -529,11 +637,12 @@ export function CreateSlotSheet({
                         type="button"
                         onClick={() => setInstructorId(isSelected ? '' : i.id)}
                         title={`${i.first_name} ${i.last_name}`}
+                        aria-pressed={isSelected}
                         className={cn(
                           'flex-shrink-0 flex items-center justify-center gap-1.5 h-9 rounded-full border font-medium text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                           isSelected
-                            ? 'bg-primary text-primary-foreground border-primary px-3'
-                            : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent w-9',
+                            ? 'bg-primary text-primary-foreground border-primary px-3 shadow-sm'
+                            : 'border-input bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-accent hover:border-primary/30 w-9',
                         )}
                       >
                         <span>{initials}</span>
@@ -561,11 +670,12 @@ export function CreateSlotSheet({
                         type="button"
                         onClick={() => setVehicleId(isSelected ? '' : v.id)}
                         title={label}
+                        aria-pressed={isSelected}
                         className={cn(
-                          'flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-all',
+                          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                           isSelected
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
+                            ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                            : 'border-input bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-accent hover:border-primary/30',
                         )}
                       >
                         <Car className="w-3 h-3 shrink-0" />
@@ -601,7 +711,7 @@ export function CreateSlotSheet({
             {/* ── Tid (single) ─────────────────────────────────────────────── */}
             {mode === 'single' && (
               <div>
-                <SectionHeader>Tid</SectionHeader>
+                <SectionHeader required>Tid</SectionHeader>
                 <div className="space-y-4">
 
                   <div className="space-y-1.5">
@@ -610,24 +720,21 @@ export function CreateSlotSheet({
                       type="date"
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
-                      className="w-44"
+                      className="w-full max-w-[200px]"
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">Starttid</Label>
-                    <TimePills startTime={startTime} onSelect={setStartTime} />
-                    {!(STANDARD_TIMES as readonly string[]).includes(startTime) && (
-                      <Input
-                        type="time"
-                        value={startTime}
-                        onChange={(e) => setStartTime(e.target.value)}
-                        className="w-28 mt-1"
-                      />
-                    )}
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="slot-start-time" className="text-xs text-muted-foreground">Starttid</Label>
+                      <TimePills startTime={startTime} onSelect={setStartTime} />
+                      <div className="mt-1.5">
+                        <TimeSelect id="slot-start-time" value={startTime} onChange={setStartTime} />
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="flex items-end gap-3">
+                  <div className="flex flex-wrap items-end gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor="slot-end-time" className="text-xs text-muted-foreground">
                         Sluttid
@@ -635,18 +742,22 @@ export function CreateSlotSheet({
                           <span className="ml-1 opacity-50">· auto</span>
                         )}
                       </Label>
-                      <Input
+                      <TimeSelect
                         id="slot-end-time"
-                        type="time"
                         value={endTime}
-                        onChange={(e) => setEndTime(e.target.value)}
-                        className="w-28"
+                        onChange={setEndTime}
+                        invalid={!!endTime && endTime <= startTime}
                       />
                     </div>
                     {durationLabel && (
-                      <span className="pb-2 text-xs text-muted-foreground">{durationLabel}</span>
+                      <span className="mb-1.5 px-2 py-1 text-xs font-medium text-muted-foreground bg-muted/50 rounded-full">
+                        {durationLabel}
+                      </span>
                     )}
                   </div>
+                  {endTime && endTime <= startTime && (
+                    <FieldError>Sluttid måste vara efter starttid.</FieldError>
+                  )}
 
                 </div>
               </div>
@@ -655,7 +766,7 @@ export function CreateSlotSheet({
             {/* ── Schema (recurring) ──────────────────────────────────────── */}
             {mode === 'recurring' && (
               <div>
-                <SectionHeader>Schema</SectionHeader>
+                <SectionHeader required>Schema</SectionHeader>
                 <div className="space-y-4">
 
                   <div className="space-y-2">
@@ -666,49 +777,54 @@ export function CreateSlotSheet({
                           key={wd.value}
                           type="button"
                           onClick={() => toggleRecurringDay(wd.value)}
+                          aria-pressed={recurringDays.includes(wd.value)}
                           className={cn(
-                            'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
+                            'px-2.5 py-1.5 text-xs font-medium rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                             recurringDays.includes(wd.value)
-                              ? 'bg-primary text-primary-foreground border-primary'
-                              : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
+                              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                              : 'border-input bg-muted/30 text-muted-foreground hover:text-foreground hover:bg-accent hover:border-primary/30',
                           )}
                         >
                           {wd.label}
                         </button>
                       ))}
                     </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">Starttid</Label>
-                    <TimePills startTime={startTime} onSelect={setStartTime} />
-                    {!(STANDARD_TIMES as readonly string[]).includes(startTime) && (
-                      <Input
-                        type="time"
-                        value={startTime}
-                        onChange={(e) => setStartTime(e.target.value)}
-                        className="w-28 mt-1"
-                      />
+                    {recurringDays.length === 0 && (
+                      <FieldError>Välj minst en veckodag.</FieldError>
                     )}
                   </div>
 
-                  <div className="flex items-end gap-3">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="slot-recurring-start-time" className="text-xs text-muted-foreground">Starttid</Label>
+                      <TimePills startTime={startTime} onSelect={setStartTime} />
+                      <div className="mt-1.5">
+                        <TimeSelect id="slot-recurring-start-time" value={startTime} onChange={setStartTime} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-3">
                     <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">
                         Sluttid
                         {lessonTypeId && <span className="ml-1 opacity-50">· auto</span>}
                       </Label>
-                      <Input
-                        type="time"
+                      <TimeSelect
                         value={endTime}
-                        onChange={(e) => setEndTime(e.target.value)}
-                        className="w-28"
+                        onChange={setEndTime}
+                        invalid={!!endTime && endTime <= startTime}
                       />
                     </div>
                     {durationLabel && (
-                      <span className="pb-2 text-xs text-muted-foreground">{durationLabel}</span>
+                      <span className="mb-1.5 px-2 py-1 text-xs font-medium text-muted-foreground bg-muted/50 rounded-full">
+                        {durationLabel}
+                      </span>
                     )}
                   </div>
+                  {endTime && endTime <= startTime && (
+                    <FieldError>Sluttid måste vara efter starttid.</FieldError>
+                  )}
 
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
@@ -727,9 +843,13 @@ export function CreateSlotSheet({
                         value={recurringTo}
                         min={recurringFrom || todayStr}
                         onChange={(e) => setRecurringTo(e.target.value)}
+                        className={cn(recurringTo && recurringTo < recurringFrom && 'border-destructive focus-visible:ring-destructive')}
                       />
                     </div>
                   </div>
+                  {recurringTo && recurringTo < recurringFrom && (
+                    <FieldError>Slutdatum måste vara efter startdatum.</FieldError>
+                  )}
 
                 </div>
               </div>
@@ -783,14 +903,18 @@ export function CreateSlotSheet({
                   </div>
                 </div>
               ) : (
-                <div className="px-3.5 py-3 text-xs text-muted-foreground/70">
-                  {!lessonTypeId
-                    ? 'Välj lektionsmall för att komponera passet'
-                    : !instructorId
-                    ? 'Välj lärare'
-                    : mode === 'recurring' && recurringDates.length === 0
-                    ? 'Välj veckodagar och datumintervall'
-                    : 'Kontrollera tid — sluttid måste vara efter starttid'}
+                <div className="px-3.5 py-3">
+                  <p className="text-xs font-medium text-muted-foreground/80 mb-1.5">
+                    Fyll i markerade (*) fält ovan innan passet kan schemaläggas:
+                  </p>
+                  <ul className="space-y-1">
+                    {missingRequirements.map(item => (
+                      <li key={item} className="flex items-center gap-1.5 text-xs text-muted-foreground/70">
+                        <span className="w-1 h-1 rounded-full bg-muted-foreground/40 shrink-0" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
@@ -809,29 +933,35 @@ export function CreateSlotSheet({
               </button>
 
               {showCapacity && (
-                <div className="mt-3 pl-5 space-y-4">
+                <div className="mt-3 pl-5 space-y-4 border-l-2 border-border/60">
                   <div className="space-y-1.5">
                     <Label className="text-xs text-muted-foreground">Antal platser</Label>
-                    <div className="flex items-center gap-1.5">
-                      <button
+                    <div className="flex items-center gap-2">
+                      <Button
                         type="button"
+                        variant="outline"
+                        size="icon"
                         onClick={() => setMaxBookings(v => Math.max(1, v - 1))}
-                        className="h-8 w-8 rounded border border-input flex items-center justify-center text-sm hover:bg-accent transition-colors"
-                        aria-label="Minska"
+                        disabled={maxBookings <= 1}
+                        className="h-8 w-8"
+                        aria-label="Minska antal platser"
                       >
-                        −
-                      </button>
-                      <span className="w-8 text-center text-sm font-medium tabular-nums">
+                        <Minus className="w-3.5 h-3.5" />
+                      </Button>
+                      <span className="w-8 text-center text-sm font-semibold tabular-nums">
                         {maxBookings}
                       </span>
-                      <button
+                      <Button
                         type="button"
+                        variant="outline"
+                        size="icon"
                         onClick={() => setMaxBookings(v => Math.min(12, v + 1))}
-                        className="h-8 w-8 rounded border border-input flex items-center justify-center text-sm hover:bg-accent transition-colors"
-                        aria-label="Öka"
+                        disabled={maxBookings >= 12}
+                        className="h-8 w-8"
+                        aria-label="Öka antal platser"
                       >
-                        +
-                      </button>
+                        <Plus className="w-3.5 h-3.5" />
+                      </Button>
                     </div>
                   </div>
 
@@ -846,6 +976,7 @@ export function CreateSlotSheet({
                       onChange={(e) => setNotes(e.target.value)}
                       placeholder="Intern anteckning om passet..."
                       rows={2}
+                      className="resize-none"
                     />
                   </div>
                 </div>

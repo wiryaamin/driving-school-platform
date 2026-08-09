@@ -2,12 +2,14 @@ import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import type FullCalendar from '@fullcalendar/react';
 import { ChevronLeft, ChevronRight, Settings, Search } from 'lucide-react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { toast } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { SchedulingCalendar } from '../components/SchedulingCalendar.js';
 import { SlotDetailSheet } from '../components/SlotDetailSheet.js';
-import { BookingDialog } from '../components/BookingDialog.js';
 import { CreateSlotSheet } from '../components/CreateSlotSheet.js';
 import { MultiInstructorGrid } from '../components/MultiInstructorGrid.js';
 import { MultiVehicleGrid } from '../components/MultiVehicleGrid.js';
@@ -287,11 +289,38 @@ function GridNavBar({
 
 // ─── SchedulingCalendarPage ───────────────────────────────────────────────────
 
+// Schemainställningar (Settings → Schema → Schemainställningar) — organizations.settings.schema.
+// {start_time,end_time} become the calendar's visible time range; show_weekends seeds the
+// existing weekend-visibility toggle's initial value (applied once, so it never clobbers a
+// manual toggle made later in the session).
+function useSchemaDisplaySettings() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  return useQuery<{ start_time: string; end_time: string; show_weekends: boolean } | null>({
+    queryKey: ['org-settings-schema-display', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      const settings = (data as unknown as { settings: Record<string, unknown> } | null)?.settings ?? {};
+      const s = (settings['schema'] as Record<string, unknown> | undefined) ?? {};
+      return {
+        start_time:    typeof s['start_time']      === 'string'  ? s['start_time']      : '06:00:00',
+        end_time:      typeof s['end_time']        === 'string'  ? s['end_time']        : '22:00:00',
+        show_weekends: typeof s['show_weekends']   === 'boolean' ? s['show_weekends']   : true,
+      };
+    },
+    enabled:   !!orgId,
+    staleTime: 60_000,
+  });
+}
+
 export function SchedulingCalendarPage() {
   const navigate      = useNavigate();
   const location      = useLocation();
   const [searchParams] = useSearchParams();
   const calendarRef = useRef<FullCalendar>(null);
+  const { data: schemaDisplay } = useSchemaDisplaySettings();
+  const appliedSchemaDefault = useRef(false);
 
   // ── Tab & view state ─────────────────────────────────────────────────────
   const [activeTab,    setActiveTab]    = useState<SchemaTab>('bokningsschema');
@@ -312,11 +341,15 @@ export function SchedulingCalendarPage() {
   const [groupByDay,               setGroupByDay]               = useState(false);
   const [customerSearchValue,      setCustomerSearchValue]      = useState('');
 
+  useEffect(() => {
+    if (!schemaDisplay || appliedSchemaDefault.current) return;
+    appliedSchemaDefault.current = true;
+    setShowWeekends(schemaDisplay.show_weekends);
+  }, [schemaDisplay]);
+
   // ── Sheet / dialog state ─────────────────────────────────────────────────
   const [selectedSlot,    setSelectedSlot]    = useState<LessonSlot | null>(null);
   const [sheetOpen,       setSheetOpen]       = useState(false);
-  const [quickBookSlot,   setQuickBookSlot]   = useState<LessonSlot | null>(null);
-  const [quickBookOpen,   setQuickBookOpen]   = useState(false);
   const [createSlotOpen,  setCreateSlotOpen]  = useState(false);
   const [substituteOpen,      setSubstituteOpen]      = useState(false);
   const [hittaLedigTidOpen,   setHittaLedigTidOpen]   = useState(false);
@@ -454,13 +487,12 @@ export function SchedulingCalendarPage() {
 
   // ── Slot interaction ──────────────────────────────────────────────────────
   function handleSlotClick(slot: LessonSlot) {
+    // Every slot click opens the full operational command card (SlotDetailSheet) —
+    // it already surfaces "Boka lektion" as its primary action for empty slots,
+    // plus the matching-students/block/duplicate/delete actions a receptionist
+    // needs, which the old direct-to-BookingDialog shortcut never exposed.
     setSelectedSlot(slot);
-    if (slot.status === 'open' && slot.current_bookings === 0) {
-      setQuickBookSlot(slot);
-      setQuickBookOpen(true);
-    } else {
-      setSheetOpen(true);
-    }
+    setSheetOpen(true);
   }
 
   function handleSlotDrop({ slot, newStart, newEnd, revert }: SlotDropInfo) {
@@ -762,6 +794,9 @@ export function SchedulingCalendarPage() {
                       onSlotDrop={handleSlotDrop}
                       isLoading={fcLoading}
                       instructorMap={instructorMap}
+                      slotMinTime={schemaDisplay?.start_time ?? '06:00:00'}
+                      slotMaxTime={schemaDisplay?.end_time ?? '22:00:00'}
+                      weekends={showWeekends}
                     />
                   </div>
                 </div>
@@ -788,16 +823,6 @@ export function SchedulingCalendarPage() {
 
       {/* Sheets / Dialogs */}
       <SlotDetailSheet slot={selectedSlot} open={sheetOpen} onOpenChange={setSheetOpen} />
-
-      <BookingDialog
-        open={quickBookOpen}
-        onOpenChange={(open) => {
-          setQuickBookOpen(open);
-          if (!open) setQuickBookSlot(null);
-        }}
-        slot={quickBookSlot}
-        onSuccess={() => { setQuickBookOpen(false); setQuickBookSlot(null); }}
-      />
 
       <CreateSlotSheet
         open={createSlotOpen}

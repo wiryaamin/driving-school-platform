@@ -313,7 +313,7 @@ function SellPackageDialog({
   const selected: PackageOffering | undefined = offerings.find((o) => o.id === selectedId);
 
   function totalInclVat(o: PackageOffering): string {
-    const total = Math.round(o.price * (1 + o.vat_rate / 100));
+    const total = Math.round(o.price * (1 + o.vat_rate));
     return `${total.toLocaleString('sv-SE')} kr`;
   }
 
@@ -378,9 +378,9 @@ function SellPackageDialog({
                 <span className="font-medium">{selected.price.toLocaleString('sv-SE')} kr</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Moms ({selected.vat_rate}%)</span>
+                <span className="text-muted-foreground">Moms ({Math.round(selected.vat_rate * 100)}%)</span>
                 <span className="font-medium">
-                  {Math.round(selected.price * selected.vat_rate / 100).toLocaleString('sv-SE')} kr
+                  {Math.round(selected.price * selected.vat_rate).toLocaleString('sv-SE')} kr
                 </span>
               </div>
               <div className="flex justify-between font-semibold text-foreground border-t border-border pt-1.5">

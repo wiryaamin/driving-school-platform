@@ -1,10 +1,56 @@
 import { useState } from 'react';
-import { User, CheckCircle2 } from 'lucide-react';
+import { User, CheckCircle2, Bell, BellOff } from 'lucide-react';
 import { useInstructorPortalSession } from './InstructorPortalLayout.js';
-import { useInstructorPortalMe } from '../hooks/useInstructorPortal.js';
+import { useInstructorPortalMe, useRegisterInstructorPushToken } from '../hooks/useInstructorPortal.js';
+import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#1055C9';
+
+const PUSH_STATUS_LABEL: Record<string, string> = {
+  not_configured: 'Push-notiser är inte tillgängliga just nu',
+  unsupported:    'Din webbläsare stöder inte push-notiser',
+  denied:         'Du har blockerat notiser för denna webbläsare',
+  registering:    'Aktiverar...',
+  error:          'Något gick fel — försök igen',
+};
+
+function InstructorNotificationsCard() {
+  const registerMutation = useRegisterInstructorPushToken();
+  const { status, error, subscribe } = usePushSubscription({
+    storageNamespace: 'instructor-portal',
+    register: (input) => registerMutation.mutateAsync(input),
+  });
+
+  const isGranted = status === 'granted';
+  const canEnable = status === 'default' || status === 'error';
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+      <div className="flex items-center gap-4">
+        <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0', isGranted ? 'bg-green-100' : 'bg-gray-100')}>
+          {isGranted ? <Bell className="w-5 h-5 text-green-600" /> : <BellOff className="w-5 h-5 text-gray-400" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-800">Push-notiser</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {isGranted ? 'Aktiverade för denna enhet.' : (PUSH_STATUS_LABEL[status] ?? 'Få notiser om bokningar och schema.')}
+          </p>
+        </div>
+        {canEnable && (
+          <button
+            onClick={() => void subscribe()}
+            className="text-xs font-semibold px-3 py-1.5 rounded-full border hover:bg-blue-50 transition-colors shrink-0"
+            style={{ color: BRAND, borderColor: `${BRAND}40` }}
+          >
+            Aktivera
+          </button>
+        )}
+      </div>
+      {error && <p className="text-xs text-red-600 mt-3">{error}</p>}
+    </div>
+  );
+}
 
 type Tab    = 'allmant' | 'utseende';
 type ThemeMode = 'system' | 'dark' | 'light';
@@ -150,6 +196,9 @@ export function InstructorPortalInstallningarPage() {
             <InfoRow label="Talade språk"  value={(me?.languages_spoken ?? []).join(', ')} />
             <InfoRow label="Trafikskola"   value={session.organization_name} />
           </div>
+
+          {/* Notifications */}
+          <InstructorNotificationsCard />
 
           {/* Security note */}
           <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">

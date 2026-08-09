@@ -36,6 +36,33 @@ supabase secrets set \
   --project-ref ulgsndzfksphquqakelq
 ```
 
+**`WORKER_SECRET` has a second copy — both must be updated together.** The
+`event-worker-tick` and `communication-worker-tick` pg_cron jobs authenticate
+to their Edge Functions via `WORKER_SECRET` read from **Supabase Vault**
+(`invoke_event_worker()`/`invoke_communication_worker()`,
+`SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'WORKER_SECRET'`),
+which is a *separate* store from the Edge Function secret set above. Rotating
+only the Edge Function secret (`supabase secrets set WORKER_SECRET=...`)
+without also updating the vault copy leaves the two out of sync — every cron
+tick then fails with a silent 401 (visible only in `net._http_response`, not
+in `cron.job_run_details`, which reports "succeeded" regardless since it only
+confirms the async HTTP call was queued). This happened in production for
+~2 days (2026-08-02 → 2026-08-04) undetected, during which no automated
+notification of any kind (booking confirmations, reminders, waitlist
+promotion, etc.) was actually delivered — `event_outbox` silently accumulated
+unprocessed rows the whole time.
+
+When rotating `WORKER_SECRET`, always update both:
+```bash
+supabase secrets set WORKER_SECRET="<new-value>" --project-ref ulgsndzfksphquqakelq
+```
+```sql
+-- Get the vault secret's id first:
+select id from vault.secrets where name = 'WORKER_SECRET';
+select vault.update_secret('<id-from-above>', '<same-new-value>');
+```
+Then verify: `select status_code from net._http_response order by created desc limit 3;` should show `200`, not `401`.
+
 ### First Org Bootstrap
 Run `supabase/seed/bootstrap_org_admin.sql` in the SQL Editor (edit `v_user_id` and `v_user_email` first).
 
@@ -68,6 +95,20 @@ The `health` Edge Function provides three endpoints for monitoring:
 ```
 
 When `status` is `degraded`, the endpoint returns HTTP 503.
+
+**Gap, discovered 2026-08-04 (see `WORKER_SECRET` note above):** none of these
+three endpoints detect a stalled `event_outbox`/`communication-worker` cron
+pipeline — that failure mode is invisible to `health`/`health/live`/`health/ready`
+entirely, since it's a pg_cron → pg_net → Edge Function auth failure, not an
+Edge Function or database liveness issue. Until a dedicated check exists,
+periodically verify manually:
+```sql
+select count(*) from event_outbox where status = 'pending' and created_at < now() - interval '10 minutes';
+select status_code, count(*) from net._http_response where created > now() - interval '15 minutes' group by status_code;
+```
+A non-zero pending backlog older than a few minutes, or any `401`/non-`200`
+status codes, means the automation pipeline is not actually running even
+though `cron.job_run_details` will still report every tick as "succeeded."
 
 ---
 
@@ -312,8 +353,10 @@ Functions: `orders`, `enrollments`, `communications`, `data-migration`, `fortnox
 ### Background Workers
 | Function | Trigger |
 |---|---|
-| `event-worker` | pg_cron every 1 minute |
-| `communication-worker` | event-worker → dispatch |
+| `event-worker` | pg_cron every 1 minute (`event-worker-tick`) — configured and live as of 2026-07-21 |
+| `communication-worker` | pg_cron every 2 minutes (`communication-worker-tick`), plus dispatched directly by `event-worker` for `Communication.Requested` events — configured and live as of 2026-07-21 |
+
+Full architecture, wrapper functions, Vault secret handling, monitoring guidance, and operational runbook (manual invocation, health checks, troubleshooting, secret rotation): `docs/SCHEDULED_JOBS_ARCHITECTURE.md`. In particular, do not use `net._http_response` as a health signal for these workers — see that document §10/§12 for why, and use `worker_run_log` instead.
 
 ---
 
@@ -390,7 +433,36 @@ No code change is required — this is an operational configuration gap only.
 
 ---
 
-## 13. GDPR — Data Subject Requests (Manual Procedure)
+## 13. Supabase Auth SMTP Configuration
+
+*(Operational state and fix steps only — for the long-term email architecture behind this decision, see `docs/EMAIL_ARCHITECTURE.md`.)*
+
+**Current live state (confirmed, not assumed — re-verified Sprint 4B):** Supabase Auth on `ulgsndzfksphquqakelq` is still using Supabase's own default, rate-limited email sender. No custom SMTP provider is configured. **Refinement from Sprint 4B:** the quota is not a hard zero — it's a very small trickle. A same-day re-verification saw one probe return `200` (the default sender's window happened to have quota available) immediately followed by a second probe returning the original `429 {"error_code":"over_email_send_rate_limit"}`. The conclusion is unchanged (this sender cannot be relied on for real invitation/recovery volume and custom SMTP is still required before pilot go-live) but "always 429" was an overstatement of the original Sprint 2B finding — "rate-limited to an operationally-unusable trickle" is the precise, now twice-confirmed characterization. **Caution for future re-verification:** unlike a guaranteed-429 probe, a probe that lands inside the trickle's window creates a real `auth.users` row — Sprint 4B's first re-check did exactly this and required a manual cleanup (`DELETE /auth/v1/admin/users/{id}` via service_role) that earlier sprints never needed. Prefer a single probe per verification pass, not a loop, and check for a stray row afterward if a `200` comes back unexpectedly.
+
+**Impact:** any flow requiring Supabase Auth to send an email — new signup confirmation, password reset, admin invitation — is currently blocked. This is upstream of application code; nothing in this repository can work around it.
+
+**Required fix (Dashboard + DNS + Resend account — none of it executable via this repository's tooling):** configure a custom SMTP provider under Dashboard → Authentication → Email → SMTP Settings. Full step-by-step runbook, including exact DNS record types and Resend's SMTP connection details: `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.2, "Supabase Auth SMTP Runbook."
+
+**Verification after fixing:**
+```bash
+curl -s -w "\nHTTP_STATUS:%{http_code}\n" "https://ulgsndzfksphquqakelq.supabase.co/auth/v1/signup" \
+  -H "apikey: <VITE_SUPABASE_ANON_KEY>" -H "Content-Type: application/json" \
+  -d '{"email":"<a-real-checkable-inbox>@<verified-domain>","password":"<throwaway-test-password>"}'
+```
+Expect `200`/`201`, not `429`. This is the same command used to find the blocker — reusing it to confirm the fix avoids any ambiguity about whether the underlying cause actually changed.
+
+**Frontend readiness (Sprint 4, Authentication Recovery Module — resolved, no longer a blocker):** a second, independent gap was found and closed alongside SMTP provisioning — the frontend previously had no route or session logic to consume a Supabase Auth recovery/invite email link at all (`detectSessionInUrl: false`, no `/auth/reset-password` or `/auth/accept-invite` route, and the "Glömt lösenordet?" button on the login page had no handler). This meant password reset and invitation acceptance would still have failed even with SMTP working. The full recovery/invitation lifecycle is now implemented:
+
+- `/auth/forgot-password` — request a reset link (`ForgotPasswordPage.tsx`)
+- `/auth/reset-password` — consumes the recovery link, sets a new password, returns to login (`ResetPasswordPage.tsx`)
+- `/auth/accept-invite` — consumes the invitation link, sets an initial password, routes into the dashboard (`AcceptInvitePage.tsx`)
+- `invite-user` Edge Function — backs the "Bjud in" dialog in Settings → Users (`UsersSettingsPage.tsx`), which already called this function name before it existed; issues a real Supabase Auth invite for new emails, or adds a direct membership for emails that already have an account. **Sprint 4B fix:** an email with a *pending, unaccepted* invitation to a different org (a `profiles` row exists, but `auth.users.last_sign_in_at` is still null) now returns `409 PENDING_INVITATION_ELSEWHERE` instead of silently creating a membership the person has no way to ever discover or reach — the earlier behavior sent no email on the existing-user path, so a second invite before the first was accepted was a true dead end.
+
+Both callback routes handle either link format Supabase Auth's email templates can produce (`?token_hash=&type=` via `verifyOtp()`, or the default template's `#access_token=&refresh_token=` via `setSession()`), so no Dashboard email-template customization is required for this to work — see `apps/web/src/modules/auth/lib/authCallback.ts` for the exact detection logic. Full architecture, the session model, and the complete authentication state diagram: `docs/AUTHENTICATION_ARCHITECTURE.md` (Sprint 4A). **These two paths (`/auth/reset-password`, `/auth/accept-invite`) must be added to the Supabase Dashboard's Redirect URL allowlist** (Authentication → URL Configuration) for both the production origin and `http://localhost:5173`, or GoTrue will reject the `redirectTo` and fall back to the Dashboard's default Site URL — this is a Dashboard-only step, listed in the Environment Provisioning Checklist below.
+
+---
+
+## 14. GDPR — Data Subject Requests (Manual Procedure)
 
 No automated data-subject-request workflow exists in Version 1.0 (by design — see Handbook Technical Debt Register). This section is the actual, current, staff-executed procedure. It intentionally requires direct Supabase Dashboard / SQL Editor access — do not build a self-service flow against this section without an Architecture Review.
 
@@ -416,3 +488,70 @@ Execute the NULL-out via the Supabase Dashboard SQL Editor, scoped precisely to 
 
 ### Escalation
 Legal review is mandatory before any instructor erasure. For ambiguous cases (a request spanning both erasable and retention-locked data), default to retaining and consult legal rather than erasing prematurely.
+
+## 15. Person Lookup Framework Operations
+
+See `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.10 for the full architecture. This section covers day-to-day operation only.
+
+### Monitoring provider health
+`person_lookup_provider_health` records one row per lookup/status-check attempt (`organization_id`, `provider`, `is_healthy`, `latency_ms`, `error_message`, `created_at`). A sustained run of `is_healthy = false` for one org's configured provider indicates a credential, network, or upstream-outage problem — check the `error_message` column first, it carries the standardized `errorType` (`timeout`/`rate_limited`/`authentication_failed`/`misconfigured`/`provider_unavailable`/`invalid_request`) rather than a raw stack trace.
+
+```sql
+select provider, is_healthy, error_message, latency_ms, created_at
+from person_lookup_provider_health
+where organization_id = '<org_id>'
+order by created_at desc
+limit 20;
+```
+
+### Monitoring cache behavior
+`person_lookup_cache` holds one row per (org, provider, hashed personnummer). A cache-hit-rate that never rises after the first day for an active tenant suggests `cache_ttl_seconds` is misconfigured (e.g. accidentally set to `0`, which disables caching entirely) — check `person_lookup_provider_configs.cache_ttl_seconds` for that org.
+
+### Rotating a tenant's Roaring credentials
+Roaring uses OAuth2 client-credentials (a Client ID + Client Secret pair, not a single API key — corrected during commissioning, 2026-07-27).
+1. Obtain the new Client ID + Client Secret from the org's Roaring account (Admin → Account information → Permissions).
+2. `POST` to `person-lookup-config` with **both** `client_id` and `client_secret` in the request body (same auth/permission as any other tenant settings call — `administration:organization:update`) — the two must be supplied together, the Edge Function rejects one without the other. They are JSON-encoded as a pair and encrypted via the existing `credential-crypto.ts` primitive before storing; the old encrypted value is overwritten, never retained.
+3. Confirm via `GET person-lookup-config` that `credentials_configured: true`, or trigger one lookup with `force_refresh: true` and check `person_lookup_provider_health` for a fresh healthy row.
+
+### Troubleshooting a stuck "misconfigured" result
+`errorType: 'misconfigured'` means either: the org's `active_provider` is a registered-but-unimplemented name (SPAR/Navet/Creditsafe/Ratsit/Custom — expected, not a bug), or Roaring is selected with no `api_key` stored. Fix by setting `active_provider` back to `'mock'` or supplying a real credential via `person-lookup-config`.
+
+### Rate limiting
+Person Lookup uses the same per-isolate, in-memory rate limiter as every other route (`_shared/rate-limit.ts`, `person_lookup` tier: 20 requests/min/user) — this bounds a single warm isolate's burst rate, not a hard global cap across Supabase's distributed edge network. If a genuine global cap is ever required, configure it at the Supabase Dashboard function level rather than modifying this shared module (a platform-wide characteristic, not specific to this integration).
+
+## 16. Vehicle Registry Lookup Operations
+
+See `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.11 for the full architecture. Operationally identical to Person Lookup (§15 above) — same `vehicle_registry_provider_health`/`vehicle_registry_cache` table shapes, same troubleshooting patterns. Two differences worth calling out:
+
+- **Rotating a tenant's Biluppgifter API key**: `POST` to `vehicle-registry-config` with `api_key` (a single key, not a client ID/secret pair like Roaring) — obtained by contacting Biluppgifter's sales team, not a self-service dashboard.
+- **Cache TTL default is 90 days, not 30** — vehicle registration/inspection data changes far less often than a person's address. If a tenant reports stale inspection data after a real besiktning, check whether `force_refresh: true` was used, or manually invalidate via `vehicle_registry_cache` if needed.
+
+Both this and Person Lookup now have a real settings dialog at **Settings → Externa tjänster** (`/settings/external-services`) — provider selection and credential entry no longer require a direct API call. If a config change made through the dialog doesn't seem to take effect, check the response of `GET vehicle-registry-config` directly to rule out a stale frontend cache versus a real save failure.
+
+## 17. Manual Government Workflow Tracker Operations
+
+See `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.12 for the full architecture. No external provider — this is an internal tracking tool, so operations are limited to monitoring the reminder mechanism:
+
+### Monitoring reminders
+`event-worker`'s maintenance tick runs `checkDueRegulatoryWorkflows()` on its normal cron cadence (the same tick that already drains lesson reminders). If a workflow's `due_date` has passed and `reminder_sent_at` is still null, check event-worker's logs for `maintenance.regulatory_reminders_failed` or `maintenance.regulatory_due_query_failed`.
+
+```sql
+select id, organization_id, title, due_date, status, reminder_sent_at
+from regulatory_workflows
+where due_date <= now() + interval '7 days'
+  and reminder_sent_at is null
+  and status not in ('confirmed', 'rejected', 'expired')
+  and deleted_at is null;
+```
+
+### Known dependency: notifications visibility
+Reminders are delivered as rows in `notifications` (`category: 'compliance'`, `reference_type: 'regulatory_workflow'`). This depends on migration `20260727000007` (a fix to the `notifications_select` RLS policy, which previously checked a permission code — `notifications:read` — that was never granted to any role, silently hiding every notification for every organization since Phase 3D). If a fresh environment is ever provisioned from an old snapshot predating this migration, the Notification Bell will appear to work with zero results platform-wide — not specific to this feature. Confirm all migrations through `20260727000008` are applied (see next note — a second, unrelated storage bug was fixed in that same later migration).
+
+### Escalating reminders
+An item that's still overdue and unresolved re-reminds every 3 days (not just once) — a higher-priority, differently-worded notification. Clicking any reminder deep-links to the specific item (`/regulatory?open=<id>`), not just the list.
+
+### Audit history
+The workflow detail dialog shows a change history sourced from `audit_logs` (`entity_type = 'regulatory_workflows'`) — no separate logging mechanism, this is the platform's standard `audit_trigger_fn()` output. Only visible to roles holding `administration:audit:read`; its absence for other roles is by design, not a bug.
+
+### Known dependency: document upload (storage RLS)
+Uploading a supporting document depends on migration `20260727000008`, which removed an `auth.role() = 'authenticated'` check from this bucket's storage policies — a check that is **permanently false** on this platform (the auth-hook overwrites the JWT `role` claim with the tenant's business role). This exact bug has now recurred three times platform-wide (`student-documents`, `org-branding`, and this bucket) — if a future storage bucket's uploads mysteriously fail with "new row violates row-level security policy" despite the user clearly holding the required permission, check for this exact anti-pattern first before assuming anything else.

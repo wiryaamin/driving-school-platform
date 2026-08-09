@@ -49,3 +49,6 @@ coverage
 
 # Database backups (contain real customer data — never commit)
 /backups/
+
+# Ad-hoc deploy artifacts (built and uploaded directly, never a source input)
+apps/web/*.zip

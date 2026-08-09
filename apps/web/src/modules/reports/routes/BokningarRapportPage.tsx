@@ -205,14 +205,19 @@ export function BokningarRapportPage() {
   }, `produktionsuppgifter_${prod_u_from}_${prod_u_to}`);
 
   const exportVantelista = () => void runExport(async () => {
-    let q = supabase.from('booking_waitlist')
-      .select('created_at, priority, status, lesson_types(name), students(first_name, last_name, email, phone)')
+    // waitlist_entries has no lesson_type_id of its own — a waitlist entry is
+    // for a specific slot (slot_id), and the slot carries the lesson type.
+    // See apps/web/src/modules/scheduling/hooks/useWaitlist.ts for the same join shape.
+    let q = supabase.from('waitlist_entries')
+      .select('created_at, priority, status, lesson_slots(lesson_type_id, lesson_types(name)), students(first_name, last_name, email, phone)')
       .order('priority', { ascending: true }).limit(1000);
-    if (vl_lt !== 'all') q = q.eq('lesson_type_id', vl_lt);
-    const { data } = await q;
+    if (vl_lt !== 'all') q = q.eq('lesson_slots.lesson_type_id', vl_lt);
+    const { data, error } = await q;
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
-      const lt  = r['lesson_types'] as Record<string, unknown> | null;
-      const std = r['students']     as Record<string, unknown> | null;
+      const slot = r['lesson_slots'] as Record<string, unknown> | null;
+      const lt   = slot?.['lesson_types'] as Record<string, unknown> | null;
+      const std  = r['students']         as Record<string, unknown> | null;
       return { 'Elev': std ? `${std['first_name'] ?? ''} ${std['last_name'] ?? ''}`.trim() : '',
         'E-post': std?.['email'] ?? '', 'Telefon': std?.['phone'] ?? '',
         'Tidmall': lt?.['name'] ?? '', 'Prioritet': r['priority'] ?? '', 'Status': r['status'] ?? '',

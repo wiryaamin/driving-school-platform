@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   CalendarDays, CalendarCheck, Users,
   ChevronRight, Clock, Car,
-  TrendingUp, Star, Bell,
+  CheckCircle2, Bell,
 } from 'lucide-react';
 import { useInstructorPortalSession } from './InstructorPortalLayout.js';
 import {
@@ -12,6 +12,7 @@ import {
   useInstructorPortalStudents,
   useInstructorPortalUpcomingBookings,
   type InstructorPortalBooking,
+  type InstructorPortalStudent,
 } from '../hooks/useInstructorPortal.js';
 import { cn } from '@/lib/utils.js';
 
@@ -59,6 +60,28 @@ function getBookingBadge(b: InstructorPortalBooking): { text: string; className:
   return { text: 'Kommer', className: 'bg-emerald-100 text-emerald-700' };
 }
 
+// ─── Follow-up derivation (real data) ──────────────────────────────────────────
+// Replaces the previous "Dina uppgifter" widget, which was entirely
+// hardcoded fake tasks with no data source. Students not driven with
+// recently are a genuine, actionable signal derivable from data this page
+// already fetches — no new backend query needed.
+const FOLLOWUP_DAYS = 14;
+
+function daysSince(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
+
+function getFollowUpStudents(students: InstructorPortalStudent[] | undefined, limit: number) {
+  return (students ?? [])
+    .filter(s => {
+      const d = daysSince(s.last_lesson_at);
+      return d === null || d >= FOLLOWUP_DAYS;
+    })
+    .sort((a, b) => (daysSince(b.last_lesson_at) ?? Infinity) - (daysSince(a.last_lesson_at) ?? Infinity))
+    .slice(0, limit);
+}
+
 // ─── Static desktop data ──────────────────────────────────────────────────────
 
 const STAGE_MAP = [
@@ -71,29 +94,6 @@ const STAGE_MAP = [
 ] as const;
 
 interface DonutSegment { label: string; color: string; value: number }
-
-const DEMO_MSGS = [
-  { name: 'Sara Andersson',   inits: 'SA', time: '10:24', text: 'Hej! Kan vi boka om lektionen imorgon?', unread: true,  isSystem: false },
-  { name: 'Lucas Martinsson', inits: 'LM', time: '09:15', text: 'Tack för en bra lektion idag!',          unread: true,  isSystem: false },
-  { name: 'System',           inits: null,  time: '08:45', text: 'Ny betalning mottagen från Emma J.',     unread: false, isSystem: true  },
-] as const;
-
-const TASKS = [
-  { label: 'Rätta teoriprov',      detail: '5 att rätta',   badge: 5, highlight: true  },
-  { label: 'Uppföljning körprov',  detail: '3 elever',      badge: 3, highlight: true  },
-  { label: 'Lektionsplanering',    detail: '2 att planera', badge: 2, highlight: false },
-  { label: 'Dokument att signera', detail: '1 nytt',        badge: 1, highlight: false },
-] as const;
-
-const POPULAR_TOPICS = [
-  { name: 'Trafikregler',   pct: 89 },
-  { name: 'Vägmärken',     pct: 76 },
-  { name: 'Riskhantering',  pct: 72 },
-  { name: 'Fordon & miljö', pct: 65 },
-  { name: 'Första hjälpen', pct: 58 },
-] as const;
-
-
 
 // ─── NEW MOBILE components (smartphone reference design) ─────────────────────
 
@@ -200,8 +200,12 @@ function MobileStatsGrid() {
     (b.lesson_type_name ?? '').toLowerCase().includes('teori') ||
     (b.lesson_type_name ?? '').toLowerCase().includes('risk'),
   ).length;
-  const revenueHours = stats?.total_hours_this_month ?? 0;
-  const revenueStr   = revenueHours > 0 ? `${Math.round(revenueHours * 625).toLocaleString('sv-SE')}` : '28 450';
+
+  // Attendance rate — same real computation as InstructorPortalStatistikPage,
+  // reused here in place of a fabricated rating that had no data source.
+  const marked  = (todayBookings ?? []).filter(b => b.attendance_status !== null);
+  const present = marked.filter(b => b.attendance_status === 'present');
+  const attendanceRate = marked.length > 0 ? Math.round(present.length / marked.length * 100) : null;
 
   return (
     <div className="bg-white rounded-2xl p-4 shadow-sm">
@@ -214,9 +218,8 @@ function MobileStatsGrid() {
           </div>
           {isLoading
             ? <div className="h-5 w-8 bg-gray-100 rounded animate-pulse" />
-            : <p className="text-gray-900 font-bold text-[16px] leading-none">{stats?.unique_students ?? 28}</p>}
+            : <p className="text-gray-900 font-bold text-[16px] leading-none">{stats?.unique_students ?? 0}</p>}
           <p className="text-gray-500 text-[10px] leading-tight">Aktiva elever</p>
-          <p className="text-emerald-500 text-[10px] font-semibold leading-tight">+3 sedan<br />förra veckan</p>
         </div>
 
         {/* Lektioner Idag */}
@@ -226,47 +229,34 @@ function MobileStatsGrid() {
           </div>
           {isLoading
             ? <div className="h-5 w-6 bg-gray-100 rounded animate-pulse" />
-            : <p className="text-gray-900 font-bold text-[16px] leading-none">{stats?.lessons_today ?? 6}</p>}
+            : <p className="text-gray-900 font-bold text-[16px] leading-none">{stats?.lessons_today ?? 0}</p>}
           <p className="text-gray-500 text-[10px] leading-tight">Lektioner idag</p>
           <p className="text-gray-400 text-[10px] leading-tight">{drivingCount} körlektioner,<br />{theoryCount} teori</p>
         </div>
 
-        {/* Snittbetyg */}
+        {/* Närvaro idag — real, derived from today's marked attendance */}
         <div className="flex flex-col items-center text-center gap-1">
-          <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: '#FFF8E0' }}>
-            <Star className="w-4 h-4" style={{ color: '#F59E0B' }} strokeWidth={1.75} />
+          <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: '#E0FFE8' }}>
+            <CheckCircle2 className="w-4 h-4" style={{ color: '#22C55E' }} strokeWidth={1.75} />
           </div>
-          <p className="text-gray-900 font-bold text-[16px] leading-none">4.8</p>
-          <p className="text-gray-500 text-[10px] leading-tight">Snittbetyg</p>
-          <div className="flex items-center gap-0.5 flex-wrap justify-center">
-            {[1,2,3,4].map(n => (
-              <svg key={n} className="w-2.5 h-2.5" viewBox="0 0 24 24">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="#F59E0B" />
-              </svg>
-            ))}
-            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24">
-              <defs>
-                <linearGradient id="mhalf-star" x1="0" x2="1" y1="0" y2="0">
-                  <stop offset="75%" stopColor="#F59E0B" />
-                  <stop offset="75%" stopColor="#E5E7EB" />
-                </linearGradient>
-              </defs>
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="url(#mhalf-star)" />
-            </svg>
-          </div>
-          <p className="text-amber-500 text-[10px]">(128)</p>
+          <p className="text-gray-900 font-bold text-[16px] leading-none">
+            {attendanceRate !== null ? `${attendanceRate}%` : '—'}
+          </p>
+          <p className="text-gray-500 text-[10px] leading-tight">Närvaro idag</p>
+          <p className="text-gray-400 text-[10px] leading-tight">
+            {marked.length > 0 ? `${present.length} av ${marked.length} markerade` : 'Inga markerade än'}
+          </p>
         </div>
 
-        {/* Intäkter */}
+        {/* Timmar denna månad — real, no fabricated SEK conversion */}
         <div className="flex flex-col items-center text-center gap-1">
           <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: '#E8F1FF' }}>
-            <TrendingUp className="w-4 h-4" style={{ color: '#3B82F6' }} strokeWidth={1.75} />
+            <Clock className="w-4 h-4" style={{ color: '#3B82F6' }} strokeWidth={1.75} />
           </div>
           {isLoading
-            ? <div className="h-5 w-12 bg-gray-100 rounded animate-pulse" />
-            : <p className="text-gray-900 font-bold text-[13px] leading-none">{revenueStr} kr</p>}
-          <p className="text-gray-500 text-[10px] leading-tight">Intäkter (månad)</p>
-          <p className="text-emerald-500 text-[10px] font-semibold leading-tight">+12% sedan<br />förra månaden</p>
+            ? <div className="h-5 w-8 bg-gray-100 rounded animate-pulse" />
+            : <p className="text-gray-900 font-bold text-[16px] leading-none">{stats?.total_hours_this_month ?? 0}</p>}
+          <p className="text-gray-500 text-[10px] leading-tight">Timmar (månad)</p>
         </div>
 
       </div>
@@ -362,75 +352,40 @@ function MobileDagensOchFramsteg() {
   );
 }
 
-function MobileSenasteMeddelanden() {
-  const msgs = DEMO_MSGS.slice(1);
+function MobileUppfoljning() {
+  const { data: students } = useInstructorPortalStudents();
+  const followUp = getFollowUpStudents(students, 3);
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: PRIMARY }}>Senaste meddelanden</p>
-        <Link to="/instructor-portal/bokningar" className="flex items-center gap-0.5 text-[10px] font-semibold" style={{ color: PRIMARY }}>
+        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: PRIMARY }}>Uppföljning</p>
+        <Link to="/instructor-portal/elever" className="flex items-center gap-0.5 text-[10px] font-semibold" style={{ color: PRIMARY }}>
           Visa alla <ChevronRight className="w-3 h-3" />
         </Link>
       </div>
-      <div className="divide-y divide-gray-50">
-        {msgs.map((msg, i) => (
-          <div key={i} className="flex items-start gap-3 px-4 py-3">
-            {msg.isSystem ? (
-              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                <Bell className="w-4 h-4 text-gray-400" strokeWidth={1.75} />
+      {followUp.length === 0 ? (
+        <div className="flex flex-col items-center gap-1.5 px-4 py-6 text-center">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          <p className="text-gray-400 text-xs">Alla elever är uppdaterade — ingen behöver uppföljning just nu.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-50">
+          {followUp.map((s) => {
+            const d = daysSince(s.last_lesson_at);
+            return (
+              <div key={s.id} className="flex items-center gap-3 px-4 py-3">
+                <div className="w-5 h-5 rounded-full border-2 border-amber-300 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-gray-800 text-sm font-medium truncate">{s.first_name} {s.last_name}</p>
+                </div>
+                <span className="text-gray-400 text-xs shrink-0">
+                  {d === null ? 'Ingen lektion än' : `${d} dagar sedan`}
+                </span>
               </div>
-            ) : (
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
-                style={{ background: '#E8E6FF', color: PRIMARY }}
-              >
-                {msg.inits}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-gray-900 text-sm font-semibold truncate">{msg.name}</p>
-              <p className="text-gray-400 text-xs mt-0.5 line-clamp-1">{msg.text}</p>
-            </div>
-            <div className="flex flex-col items-end gap-1 shrink-0">
-              <span className="text-gray-400 text-xs">{msg.time}</span>
-              {msg.unread && <div className="w-2 h-2 rounded-full bg-blue-500" />}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MobileDinaUppgifter() {
-  const tasks = TASKS.slice(0, 3);
-  return (
-    <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: PRIMARY }}>Dina uppgifter</p>
-        <Link to="/instructor-portal/utbildningskort" className="flex items-center gap-0.5 text-[10px] font-semibold" style={{ color: PRIMARY }}>
-          Visa alla <ChevronRight className="w-3 h-3" />
-        </Link>
-      </div>
-      <div className="divide-y divide-gray-50">
-        {tasks.map(({ label, detail, badge, highlight }) => (
-          <div key={label} className="flex items-center gap-3 px-4 py-3">
-            <div className="w-5 h-5 rounded-full border-2 border-gray-300 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-gray-800 text-sm font-medium truncate">{label}</p>
-            </div>
-            <span className="text-gray-400 text-xs shrink-0">{detail}</span>
-            <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-              style={highlight
-                ? { background: PRIMARY, color: 'white' }
-                : { background: '#F3F4F6', color: '#6B7280' }}
-            >
-              {badge}
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -493,17 +448,18 @@ function DesktopKPIRow() {
     (b.lesson_type_name ?? '').toLowerCase().includes('risk'),
   ).length;
 
-  const revenueHours = stats?.total_hours_this_month ?? 0;
-  const revenueStr   = revenueHours > 0
-    ? `${Math.round(revenueHours * 625).toLocaleString('sv-SE')} kr`
-    : '— kr';
+  // Attendance rate — same real computation as InstructorPortalStatistikPage,
+  // reused here in place of a fabricated rating that had no data source.
+  const marked  = (todayBookings ?? []).filter(b => b.attendance_status !== null);
+  const present = marked.filter(b => b.attendance_status === 'present');
+  const attendanceRate = marked.length > 0 ? Math.round(present.length / marked.length * 100) : null;
 
   const cards = [
     {
       Icon: Users, iconBg: `${PRIMARY}15`, iconColor: PRIMARY,
       label: 'AKTIVA ELEVER',
       value: isLoading ? null : (stats?.unique_students ?? 0).toString(),
-      sub: <span className="text-emerald-600 text-sm font-medium">+3 sedan förra veckan</span>,
+      sub: null,
     },
     {
       Icon: CalendarCheck, iconBg: '#14B8A615', iconColor: '#14B8A6',
@@ -512,34 +468,20 @@ function DesktopKPIRow() {
       sub: <span className="text-gray-400 text-sm">{drivingCount} körlektioner, {theoryCount} teori</span>,
     },
     {
-      Icon: Star, iconBg: '#F59E0B15', iconColor: '#F59E0B',
-      label: 'GENOMSNITTLIGT BETYG',
-      value: '4.8',
+      Icon: CheckCircle2, iconBg: '#22C55E15', iconColor: '#22C55E',
+      label: 'NÄRVARO IDAG',
+      value: attendanceRate !== null ? `${attendanceRate}%` : '—',
       sub: (
-        <div className="flex items-center gap-0.5 mt-0.5">
-          {[1, 2, 3, 4].map(i => (
-            <svg key={i} className="w-3.5 h-3.5" viewBox="0 0 24 24">
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="#F59E0B" />
-            </svg>
-          ))}
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-            <defs>
-              <linearGradient id="half-star" x1="0" x2="1" y1="0" y2="0">
-                <stop offset="80%" stopColor="#F59E0B" />
-                <stop offset="80%" stopColor="#E5E7EB" />
-              </linearGradient>
-            </defs>
-            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="url(#half-star)" />
-          </svg>
-          <span className="text-gray-400 text-sm ml-1">(128)</span>
-        </div>
+        <span className="text-gray-400 text-sm">
+          {marked.length > 0 ? `${present.length} av ${marked.length} markerade` : 'Inga markerade än'}
+        </span>
       ),
     },
     {
-      Icon: TrendingUp, iconBg: '#3B82F615', iconColor: '#3B82F6',
-      label: 'INTÄKTER (DENNA MÅNAD)',
-      value: isLoading ? null : revenueStr,
-      sub: <span className="text-emerald-600 text-sm font-medium">+12% sedan förra månaden</span>,
+      Icon: Clock, iconBg: '#3B82F615', iconColor: '#3B82F6',
+      label: 'TIMMAR (DENNA MÅNAD)',
+      value: isLoading ? null : (stats?.total_hours_this_month ?? 0).toString(),
+      sub: null,
     },
   ] as const;
 
@@ -693,53 +635,6 @@ function ElevFramstegCard() {
   );
 }
 
-// Senaste Meddelanden ──────────────────────────────────────────────────────────
-
-function SenasteMeddelandenCard() {
-  return (
-    <div className="bg-white rounded-2xl p-5 flex flex-col" style={{ boxShadow: CARD_SHADOW }}>
-      <p className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: PRIMARY }}>
-        Senaste meddelanden
-      </p>
-      <div className="space-y-3.5 flex-1">
-        {DEMO_MSGS.map((msg, i) => (
-          <div key={i} className="flex items-start gap-3">
-            {msg.isSystem ? (
-              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                <Bell className="w-4 h-4 text-gray-400" strokeWidth={1.75} />
-              </div>
-            ) : (
-              <div
-                className="w-10 h-10 rounded-full text-white text-xs font-bold flex items-center justify-center shrink-0"
-                style={{ background: PRIMARY }}
-              >
-                {msg.inits}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-gray-900 text-sm font-semibold truncate">{msg.name}</p>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <span className="text-gray-400 text-xs">{msg.time}</span>
-                  {msg.unread && <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}
-                </div>
-              </div>
-              <p className="text-gray-400 text-xs mt-0.5 line-clamp-1">{msg.text}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-      <Link
-        to="/instructor-portal/bokningar"
-        className="mt-4 inline-flex items-center gap-1 text-sm font-semibold"
-        style={{ color: PRIMARY }}
-      >
-        Visa alla meddelanden <ChevronRight className="w-4 h-4" />
-      </Link>
-    </div>
-  );
-}
-
 // Kommande Vecka ───────────────────────────────────────────────────────────────
 
 function KommandeVeckaCard() {
@@ -807,74 +702,46 @@ function KommandeVeckaCard() {
   );
 }
 
-// Dina Uppgifter ───────────────────────────────────────────────────────────────
+// Uppföljning (real: students not seen recently) ───────────────────────────────
 
-function DinaUppgifterCard() {
+function UppfoljningCard() {
+  const { data: students } = useInstructorPortalStudents();
+  const followUp = getFollowUpStudents(students, 5);
+
   return (
     <div className="bg-white rounded-2xl p-5" style={{ boxShadow: CARD_SHADOW }}>
       <p className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: PRIMARY }}>
-        Dina uppgifter
+        Uppföljning
       </p>
-      <div className="space-y-3.5">
-        {TASKS.map(({ label, detail, badge, highlight }) => (
-          <div key={label} className="flex items-center gap-3">
-            <div className="w-4 h-4 rounded border-2 border-gray-300 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-gray-900 text-sm font-medium truncate">{label}</p>
-              <p className="text-gray-400 text-xs">{detail}</p>
-            </div>
-            <div
-              className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
-              style={highlight
-                ? { background: PRIMARY, color: 'white' }
-                : { background: '#F3F4F6', color: '#6B7280' }}
-            >
-              {badge}
-            </div>
-          </div>
-        ))}
-      </div>
+      {followUp.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+          <p className="text-gray-400 text-sm">Alla elever är uppdaterade — ingen behöver uppföljning just nu.</p>
+        </div>
+      ) : (
+        <div className="space-y-3.5">
+          {followUp.map((s) => {
+            const d = daysSince(s.last_lesson_at);
+            return (
+              <div key={s.id} className="flex items-center gap-3">
+                <div className="w-4 h-4 rounded-full border-2 border-amber-300 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-gray-900 text-sm font-medium truncate">{s.first_name} {s.last_name}</p>
+                  <p className="text-gray-400 text-xs">
+                    {d === null ? 'Ingen lektion registrerad' : `Senast för ${d} dagar sedan`}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <Link
-        to="/instructor-portal/utbildningskort"
+        to="/instructor-portal/elever"
         className="mt-5 inline-flex items-center gap-1 text-sm font-semibold"
         style={{ color: PRIMARY }}
       >
-        Visa alla uppgifter <ChevronRight className="w-4 h-4" />
-      </Link>
-    </div>
-  );
-}
-
-// Populära Ämnen ───────────────────────────────────────────────────────────────
-
-function PopularaAmnenCard() {
-  return (
-    <div className="bg-white rounded-2xl p-5" style={{ boxShadow: CARD_SHADOW }}>
-      <p className="text-[11px] font-bold uppercase tracking-wider mb-4" style={{ color: PRIMARY }}>
-        Populära ämnen (teori)
-      </p>
-      <div className="space-y-3.5">
-        {POPULAR_TOPICS.map(({ name, pct }) => (
-          <div key={name}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-gray-700 text-sm">{name}</span>
-              <span className="text-gray-500 text-sm font-semibold">{pct}%</span>
-            </div>
-            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${pct}%`, background: PRIMARY }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-      <Link
-        to="/instructor-portal/statistik"
-        className="mt-5 inline-flex items-center gap-1 text-sm font-semibold"
-        style={{ color: PRIMARY }}
-      >
-        Visa all statistik <ChevronRight className="w-4 h-4" />
+        Visa alla elever <ChevronRight className="w-4 h-4" />
       </Link>
     </div>
   );
@@ -910,20 +777,18 @@ function DesktopMotivationalBanner() {
 
 function DesktopMainRow() {
   return (
-    <div className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr 1fr' }}>
+    <div className="grid gap-5" style={{ gridTemplateColumns: '2fr 1fr' }}>
       <DagensLektionerCard />
       <ElevFramstegCard />
-      <SenasteMeddelandenCard />
     </div>
   );
 }
 
 function DesktopSecondRow() {
   return (
-    <div className="grid grid-cols-3 gap-5">
+    <div className="grid grid-cols-2 gap-5">
       <KommandeVeckaCard />
-      <DinaUppgifterCard />
-      <PopularaAmnenCard />
+      <UppfoljningCard />
     </div>
   );
 }
@@ -943,18 +808,14 @@ export function InstructorPortalDashboard() {
           <h1 className="text-[26px] font-bold text-gray-900 leading-tight">
             Hej {firstName}! 👋
           </h1>
-          <button
+          <Link
+            to="/instructor-portal/installningar"
             className="relative p-2 rounded-full mt-1"
             style={{ background: '#EEEEFF' }}
+            aria-label="Aviseringsinställningar"
           >
             <Bell className="w-5 h-5" style={{ color: PRIMARY }} strokeWidth={1.75} />
-            <span
-              className="absolute -top-0.5 -right-0.5 w-5 h-5 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
-              style={{ background: '#EF4444' }}
-            >
-              2
-            </span>
-          </button>
+          </Link>
         </div>
 
         <div className="space-y-4">
@@ -964,8 +825,7 @@ export function InstructorPortalDashboard() {
             <MobileStatsGrid />
           </div>
           <MobileDagensOchFramsteg />
-          <MobileSenasteMeddelanden />
-          <MobileDinaUppgifter />
+          <MobileUppfoljning />
         </div>
       </div>
 

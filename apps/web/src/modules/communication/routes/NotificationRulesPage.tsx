@@ -31,20 +31,26 @@ const TRIGGER_EVENTS = [
   { value: 'booking_reminder_same_day',  label: 'Lektionspåminnelse (samma dag)' },
   { value: 'instructor_schedule_daily',  label: 'Instruktörens dagsprogram' },
   { value: 'waitlist_promoted',          label: 'Väntelistepromovering' },
+  { value: 'reservation_expired',        label: 'Reservation utgången' },
   { value: 'invoice_issued',             label: 'Faktura skapad' },
   { value: 'invoice_due',                label: 'Faktura förfaller' },
   { value: 'invoice_overdue',            label: 'Faktura försenad' },
+  { value: 'refund_processed',           label: 'Återbetalning behandlad' },
   { value: 'student_created',            label: 'Ny elev registrerad' },
   { value: 'permit_expiring',            label: 'Tillstånd utgår snart' },
   { value: 'exam_scheduled',             label: 'Prov bokat' },
+  { value: 'booking_reconciliation_reminder', label: 'Påminnelse: obekräftade lektioner (instruktör)' },
+  { value: 'lead_created',               label: 'Ny lead mottagen' },
+  { value: 'enrollment_request_created', label: 'Ny anmälan mottagen' },
 ] as const;
 
 type TriggerEvent = (typeof TRIGGER_EVENTS)[number]['value'];
 
 const CHANNEL_OPTS: CommChannel[] = ['sms', 'email', 'whatsapp', 'push', 'voice'];
-const RECIPIENT_OPTS: Array<{ value: 'student' | 'instructor'; label: string }> = [
+const RECIPIENT_OPTS: Array<{ value: 'student' | 'instructor' | 'admin'; label: string }> = [
   { value: 'student',    label: 'Elev' },
   { value: 'instructor', label: 'Instruktör' },
+  { value: 'admin',      label: 'Kontoägare' },
 ];
 
 // ─── Rule form ────────────────────────────────────────────────────────────────
@@ -63,7 +69,7 @@ function RuleForm({
   const [trigger,       setTrigger]       = useState<TriggerEvent>((initial?.trigger_event as TriggerEvent) ?? 'booking_confirmed');
   const [channel,       setChannel]       = useState<CommChannel>((initial?.channel as CommChannel) ?? 'sms');
   const [templateId,    setTemplateId]    = useState(initial?.template_id ?? '');
-  const [recipientType, setRecipientType] = useState<'student' | 'instructor'>(initial?.recipient_type ?? 'student');
+  const [recipientType, setRecipientType] = useState<'student' | 'instructor' | 'admin'>(initial?.recipient_type ?? 'student');
   const [enabled,       setEnabled]       = useState(initial?.enabled ?? false);
 
   const { data: templates = [] } = useCommTemplates(channel);
@@ -130,7 +136,7 @@ function RuleForm({
           <label className="text-xs font-medium text-foreground">Mottagartyp</label>
           <select
             value={recipientType}
-            onChange={(e) => setRecipientType(e.target.value as 'student' | 'instructor')}
+            onChange={(e) => setRecipientType(e.target.value as 'student' | 'instructor' | 'admin')}
             className="w-full h-9 px-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none"
           >
             {RECIPIENT_OPTS.map((r) => (

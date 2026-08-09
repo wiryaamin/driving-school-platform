@@ -11,7 +11,7 @@ export interface Vehicle {
   model:                  string;
   model_year:             number;
   color:                  string | null;
-  transmission:           'manual' | 'automatic';
+  transmission:           'manual' | 'automatic' | 'both' | 'semi_automatic';
   has_dual_controls:      boolean;
   fuel_type:              string;
   seats:                  number;
@@ -57,7 +57,7 @@ export interface CreateVehicleInput {
   model:                  string;
   model_year:             number;
   color?:                 string | undefined;
-  transmission:           'manual' | 'automatic';
+  transmission:           'manual' | 'automatic' | 'both' | 'semi_automatic';
   has_dual_controls:      boolean;
   fuel_type:              string;
   seats:                  number;

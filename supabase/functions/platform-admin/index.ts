@@ -8,17 +8,35 @@
  *   GET /dashboard               — aggregate platform statistics
  *   GET /admins                  — list of active platform administrators (legacy)
  *   GET /platform-admins         — enhanced admin list with auth details + MFA
+ *   GET /operations-summary      — Operations Center: platform-wide queue/dead-letter snapshot
+ *   GET /communications-summary  — Communications: platform-wide message deliverability
+ *   GET /compliance-summary      — Compliance: platform-wide GDPR/consent + regulatory snapshot
+ *   GET /recovery-queue          — Recovery Center: orgs with something to retry
  *   GET /orgs/counts             — per-org member/student/instructor counts
  *   GET /orgs/:id                — full organization profile
  *   GET /orgs/:id/stats          — aggregate stats for one organization
  *   GET /orgs/:id/admins         — administrators for one organization
+ *   GET /orgs/:id/users          — every tenant user (any role), Users tab
  *   GET /orgs/:id/timeline       — audit-based timeline for one organization
+ *   GET /orgs/:id/security       — org-scoped identity/security events
+ *   GET /orgs/:id/compliance     — GDPR consent + regulatory workflow summary
+ *   GET /orgs/:id/operations     — queue/dead-letter operational snapshot
+ *   GET /orgs/:id/onboarding-journey — Onboarding Command Center: business-
+ *                                   language stage, timeline, and recommended action
+ *   PATCH /orgs/:id/notes        — set internal support notes
+ *   POST /orgs/:id/operations/retry — retry dead-lettered events + failed messages
+ *   POST /orgs/:id/delete-tenant-data — safely remove tenant-owned resources
+ *                                   (vehicles/instructors/branches/users) and
+ *                                   soft-delete the organization; requires the
+ *                                   org to already be suspended or terminated
  *   GET /subscriptions           — all orgs with subscription data + usage counts
  *   GET /subscriptions/:id       — full subscription profile for one organization
  *   GET /subscriptions/:id/history — subscription-relevant audit events
  *   GET /audit                   — paginated platform audit log (filterable)
  *   GET /audit/security          — security-relevant events across all tenants
- *   GET /support/orgs/:id/health — org health snapshot for support workspace
+ *   GET /support/orgs/:id/health — org health snapshot; the one canonical org
+ *                                   health endpoint, reused by both the Support
+ *                                   workspace and Organization Detail's Overview
  *   GET /worker-runs             — paginated worker execution history (Epic 7.4)
  *   GET /worker-runs/summary     — latest run + rolling 24h health per worker
  *   POST /provision              — Automated Customer Provisioning: creates an
@@ -34,17 +52,31 @@
  *   POST /orgs/:id/admins/:userId/transfer-ownership — Transfer Organization Ownership
  *   POST /orgs/:id/admins/:userId/resend-invitation  — Resend Invitation
  *   POST /orgs/:id/admins/:userId/cancel-invitation  — Cancel Invitation
+ *   POST /orgs/:id/admins/:userId/send-password-reset  — Send Password Reset
+ *   POST /orgs/:id/admins/:userId/force-password-reset  — Force Password Reset
+ *   POST /orgs/:id/admins/:userId/force-logout          — Force Logout (revoke sessions)
  */
 
 import { serveCors }          from '../_shared/cors.ts';
 import { buildEdgeContext }   from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
-import { createServiceClient } from '../_shared/supabase.ts';
+import { createServiceClient, createAnonClient } from '../_shared/supabase.ts';
 import { computeOnboardingProgress } from '../_shared/tenant-onboarding-progress.ts';
 import { getSeatEntitlement } from '../_shared/entitlements.ts';
 import { getSubscriptionSnapshot } from '../_shared/platformSubscription.ts';
+import { recordIdentityEvent } from '../_shared/identity-events.ts';
+import { dispatchMessage }    from '../_shared/comm-providers.ts';
+import { verifyEmailHtml, questionnaireEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
+import { provisionTrialOrganization } from '../_shared/trial-provisioning.ts';
 import { logger }             from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
+
+// Mirrors invite-user/index.ts's getAppOrigin() — the redirect target for
+// every Supabase Auth email link (invite or recovery) this function issues.
+function getAppOrigin(): string {
+  const configured = Deno.env.get('APP_URL');
+  return configured && configured.length > 0 ? configured : 'http://localhost:5173';
+}
 
 // UUID v4 pattern used to distinguish org-id segments from named segments like "counts"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -90,6 +122,12 @@ Deno.serve((req: Request) =>
     if (req.method === 'GET' && path === '/admins')           return handleAdmins(ctx);
     if (req.method === 'GET' && path === '/platform-admins')  return handlePlatformAdminsDetail(ctx);
 
+    // ── SaaS Operations Console — platform-wide workspace summaries ──────────
+    if (req.method === 'GET' && path === '/operations-summary')     return handleOperationsSummary(ctx);
+    if (req.method === 'GET' && path === '/communications-summary') return handleCommunicationsSummary(ctx);
+    if (req.method === 'GET' && path === '/compliance-summary')     return handleComplianceSummary(ctx);
+    if (req.method === 'GET' && path === '/recovery-queue')         return handleRecoveryQueue(ctx);
+
     // ── Audit routes (check /audit/security before generic /audit) ───────────
     if (req.method === 'GET' && path === '/audit/security') return handleSecurityEvents(ctx, url);
     if (req.method === 'GET' && path === '/audit')          return handleAuditLog(ctx, url);
@@ -110,7 +148,7 @@ Deno.serve((req: Request) =>
 
     // ── Per-org detail sub-routes ─────────────────────────────────────────────
     // Matches /orgs/<uuid> and /orgs/<uuid>/<sub>
-    const orgMatch = /^\/orgs\/([^/]+)(\/[a-z]+)?$/.exec(path);
+    const orgMatch = /^\/orgs\/([^/]+)(\/[a-z-]+)?$/.exec(path);
     if (orgMatch && req.method === 'GET') {
       const segment = orgMatch[1] ?? '';
       const sub     = orgMatch[2] ?? '';
@@ -118,11 +156,41 @@ Deno.serve((req: Request) =>
       // Guard: only route if segment is a UUID (not "counts" or other named paths)
       if (UUID_RE.test(segment)) {
         const orgId = segment;
-        if (sub === '')          return handleOrgDetail(ctx, orgId);
-        if (sub === '/stats')    return handleOrgStats(ctx, orgId);
-        if (sub === '/admins')   return handleOrgAdmins(ctx, orgId);
-        if (sub === '/timeline') return handleOrgTimeline(ctx, orgId);
+        if (sub === '')            return handleOrgDetail(ctx, orgId);
+        if (sub === '/stats')      return handleOrgStats(ctx, orgId);
+        if (sub === '/admins')     return handleOrgAdmins(ctx, orgId);
+        if (sub === '/users')      return handleOrgUsers(ctx, orgId);
+        if (sub === '/timeline')   return handleOrgTimeline(ctx, orgId);
+        if (sub === '/security')   return handleOrgSecurity(ctx, orgId);
+        if (sub === '/compliance') return handleOrgCompliance(ctx, orgId);
+        if (sub === '/operations') return handleOrgOperations(ctx, orgId);
+        if (sub === '/onboarding-journey') return handleOnboardingJourney(ctx, orgId);
       }
+    }
+
+    // ── Internal support notes ────────────────────────────────────────────────
+    const notesMatch = /^\/orgs\/([^/]+)\/notes$/.exec(path);
+    if (notesMatch && req.method === 'PATCH') {
+      const orgId = notesMatch[1] ?? '';
+      if (UUID_RE.test(orgId)) {
+        let body: unknown;
+        try { body = await req.json(); } catch { return badRequest(ctx, 'Request body must be valid JSON'); }
+        return handleUpdateOrgNotes(ctx, orgId, body);
+      }
+    }
+
+    // ── Operational recovery — retry dead-lettered events + failed messages ──
+    const retryMatch = /^\/orgs\/([^/]+)\/operations\/retry$/.exec(path);
+    if (retryMatch && req.method === 'POST') {
+      const orgId = retryMatch[1] ?? '';
+      if (UUID_RE.test(orgId)) return handleRetryOrgOperations(ctx, orgId);
+    }
+
+    // ── Tenant lifecycle — safe resource + access removal ────────────────────
+    const deleteTenantDataMatch = /^\/orgs\/([^/]+)\/delete-tenant-data$/.exec(path);
+    if (deleteTenantDataMatch && req.method === 'POST') {
+      const orgId = deleteTenantDataMatch[1] ?? '';
+      if (UUID_RE.test(orgId)) return handleDeleteTenantData(ctx, orgId);
     }
 
     // ── Provisioning (Automated Customer Provisioning) ───────────────────────
@@ -134,6 +202,79 @@ Deno.serve((req: Request) =>
         return badRequest(ctx, 'Request body must be valid JSON');
       }
       return handleProvision(ctx, body);
+    }
+
+    // ── Demo request rejection + deletion ─────────────────────────────────────
+    const rejectDemoMatch = /^\/demo-requests\/([^/]+)\/reject$/.exec(path);
+    if (rejectDemoMatch && req.method === 'POST') {
+      const demoId = rejectDemoMatch[1] ?? '';
+      if (UUID_RE.test(demoId)) {
+        let body: unknown;
+        try { body = await req.json(); } catch { return badRequest(ctx, 'Request body must be valid JSON'); }
+        return handleRejectDemoRequest(ctx, demoId, body);
+      }
+    }
+    const deleteDemoMatch = /^\/demo-requests\/([^/]+)$/.exec(path);
+    if (deleteDemoMatch && req.method === 'DELETE') {
+      const demoId = deleteDemoMatch[1] ?? '';
+      if (UUID_RE.test(demoId)) return handleDeleteDemoRequest(ctx, demoId);
+    }
+
+    // ── Trial Requests — pre/post-provisioning lifecycle control ─────────────
+    if (req.method === 'GET' && path === '/trial-requests') return handleListTrialRequests(ctx, url);
+
+    const trialDetailMatch = /^\/trial-requests\/([^/]+)$/.exec(path);
+    if (trialDetailMatch && req.method === 'GET') {
+      const id = trialDetailMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleTrialRequestDetail(ctx, id);
+    }
+    if (trialDetailMatch && req.method === 'DELETE') {
+      const id = trialDetailMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleDeleteTrialRequest(ctx, id);
+    }
+
+    const trialApproveMatch = /^\/trial-requests\/([^/]+)\/approve$/.exec(path);
+    if (trialApproveMatch && req.method === 'POST') {
+      const id = trialApproveMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleApproveTrialRequest(ctx, id);
+    }
+
+    const trialRejectMatch = /^\/trial-requests\/([^/]+)\/reject$/.exec(path);
+    if (trialRejectMatch && req.method === 'POST') {
+      const id = trialRejectMatch[1] ?? '';
+      if (UUID_RE.test(id)) {
+        let body: unknown;
+        try { body = await req.json(); } catch { return badRequest(ctx, 'Request body must be valid JSON'); }
+        return handleRejectTrialRequest(ctx, id, body);
+      }
+    }
+
+    const trialCancelMatch = /^\/trial-requests\/([^/]+)\/cancel$/.exec(path);
+    if (trialCancelMatch && req.method === 'POST') {
+      const id = trialCancelMatch[1] ?? '';
+      if (UUID_RE.test(id)) {
+        let body: unknown;
+        try { body = await req.json(); } catch { body = {}; }
+        return handleCancelTrialRequest(ctx, id, body);
+      }
+    }
+
+    const trialExpireMatch = /^\/trial-requests\/([^/]+)\/expire$/.exec(path);
+    if (trialExpireMatch && req.method === 'POST') {
+      const id = trialExpireMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleExpireTrialRequest(ctx, id);
+    }
+
+    const trialResendVerifyMatch = /^\/trial-requests\/([^/]+)\/resend-verification$/.exec(path);
+    if (trialResendVerifyMatch && req.method === 'POST') {
+      const id = trialResendVerifyMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleResendTrialVerification(ctx, id);
+    }
+
+    const trialResendQuestMatch = /^\/trial-requests\/([^/]+)\/resend-questionnaire$/.exec(path);
+    if (trialResendQuestMatch && req.method === 'POST') {
+      const id = trialResendQuestMatch[1] ?? '';
+      if (UUID_RE.test(id)) return handleResendTrialQuestionnaire(ctx, id);
     }
 
     // ── Organization Administrator Management ─────────────────────────────────
@@ -187,6 +328,24 @@ Deno.serve((req: Request) =>
       if (UUID_RE.test(orgId) && UUID_RE.test(userId)) return handleCancelInvitation(ctx, orgId, userId);
     }
 
+    const sendPasswordResetMatch = /^\/orgs\/([^/]+)\/admins\/([^/]+)\/send-password-reset$/.exec(path);
+    if (sendPasswordResetMatch && req.method === 'POST') {
+      const [orgId, userId] = [sendPasswordResetMatch[1] ?? '', sendPasswordResetMatch[2] ?? ''];
+      if (UUID_RE.test(orgId) && UUID_RE.test(userId)) return handleSendPasswordReset(ctx, orgId, userId);
+    }
+
+    const forcePasswordResetMatch = /^\/orgs\/([^/]+)\/admins\/([^/]+)\/force-password-reset$/.exec(path);
+    if (forcePasswordResetMatch && req.method === 'POST') {
+      const [orgId, userId] = [forcePasswordResetMatch[1] ?? '', forcePasswordResetMatch[2] ?? ''];
+      if (UUID_RE.test(orgId) && UUID_RE.test(userId)) return handleForcePasswordReset(ctx, orgId, userId);
+    }
+
+    const forceLogoutMatch = /^\/orgs\/([^/]+)\/admins\/([^/]+)\/force-logout$/.exec(path);
+    if (forceLogoutMatch && req.method === 'POST') {
+      const [orgId, userId] = [forceLogoutMatch[1] ?? '', forceLogoutMatch[2] ?? ''];
+      if (UUID_RE.test(orgId) && UUID_RE.test(userId)) return handleForceLogout(ctx, orgId, userId);
+    }
+
     // ── Tenant Onboarding Monitoring + Go Live Approval ───────────────────────
     if (req.method === 'GET' && path === '/tenant-onboarding') return handleTenantOnboardingList(ctx, url);
 
@@ -209,6 +368,25 @@ Deno.serve((req: Request) =>
         const orgId = segment;
         if (sub === '')         return handleSubscriptionDetail(ctx, orgId);
         if (sub === '/history') return handleSubscriptionHistory(ctx, orgId);
+      }
+    }
+
+    // ── Announcements (Nyheter / TABSnytt) ────────────────────────────────────
+    if (req.method === 'GET' && path === '/announcements') return handleAnnouncementList(ctx);
+
+    if (req.method === 'POST' && path === '/announcements') {
+      let body: unknown;
+      try { body = await req.json(); } catch { return badRequest(ctx, 'Request body must be valid JSON'); }
+      return handleCreateAnnouncement(ctx, body);
+    }
+
+    const announcementMatch = /^\/announcements\/([^/]+)$/.exec(path);
+    if (announcementMatch && req.method === 'PATCH') {
+      const id = announcementMatch[1] ?? '';
+      if (UUID_RE.test(id)) {
+        let body: unknown;
+        try { body = await req.json(); } catch { return badRequest(ctx, 'Request body must be valid JSON'); }
+        return handleUpdateAnnouncement(ctx, id, body);
       }
     }
 
@@ -289,6 +467,17 @@ async function handleOrgAdmins(ctx: EdgeRequestContext, orgId: string): Promise<
   return ok(ctx, data as unknown[]);
 }
 
+async function handleOrgUsers(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_org_users', { p_org_id: orgId });
+  if (error) {
+    logger.error('platform-admin.org-users.rpc_error', { correlation_id: ctx.correlationId, org_id: orgId, error: error.message });
+    return internalError(ctx, 'Failed to load organization users');
+  }
+  logger.info('platform-admin.org-users.ok', { correlation_id: ctx.correlationId, org_id: orgId });
+  return ok(ctx, data as unknown[]);
+}
+
 async function handleOrgTimeline(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
   const db = createServiceClient();
   const { data, error } = await db.rpc('get_platform_org_timeline', { p_org_id: orgId });
@@ -298,6 +487,677 @@ async function handleOrgTimeline(ctx: EdgeRequestContext, orgId: string): Promis
   }
   logger.info('platform-admin.org-timeline.ok', { correlation_id: ctx.correlationId, org_id: orgId });
   return ok(ctx, data as unknown[]);
+}
+
+// ─── SaaS Operations Console — Security / Compliance / Operations / Notes ───
+
+async function handleOrgSecurity(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_org_security_events', { p_org_id: orgId, p_limit: 100 });
+  if (error) {
+    logger.error('platform-admin.org-security.rpc_error', { correlation_id: ctx.correlationId, org_id: orgId, error: error.message });
+    return internalError(ctx, 'Failed to load security events');
+  }
+  logger.info('platform-admin.org-security.ok', { correlation_id: ctx.correlationId, org_id: orgId });
+  return ok(ctx, data as unknown[]);
+}
+
+async function handleOrgCompliance(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_org_compliance', { p_org_id: orgId });
+  if (error) {
+    logger.error('platform-admin.org-compliance.rpc_error', { correlation_id: ctx.correlationId, org_id: orgId, error: error.message });
+    return internalError(ctx, 'Failed to load compliance summary');
+  }
+  logger.info('platform-admin.org-compliance.ok', { correlation_id: ctx.correlationId, org_id: orgId });
+  return ok(ctx, data as Record<string, unknown>);
+}
+
+async function handleOrgOperations(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_org_operations', { p_org_id: orgId });
+  if (error) {
+    logger.error('platform-admin.org-operations.rpc_error', { correlation_id: ctx.correlationId, org_id: orgId, error: error.message });
+    return internalError(ctx, 'Failed to load operational snapshot');
+  }
+  logger.info('platform-admin.org-operations.ok', { correlation_id: ctx.correlationId, org_id: orgId });
+  return ok(ctx, data as Record<string, unknown>);
+}
+
+// ─── Onboarding Command Center ────────────────────────────────────────────
+//
+// Translates existing signals — demo_requests, organizations, memberships,
+// auth.users, identity_security_events, computeOnboardingProgress (already
+// built), and the platform's own historical go-live timing — into one
+// business-language journey. No new write actions are introduced here;
+// every recovery action this returns maps to a mutation that already
+// exists (resend-invitation, send-password-reset, force-password-reset,
+// force-logout, go-live, operations/retry).
+//
+// A note on honesty, not just labeling: "Invitation Delivered" does not
+// appear anywhere below. No delivery receipt exists for the account-
+// activation email today (Supabase Auth sends it directly; there is no
+// bounce/delivery webhook wired to this platform) — showing a fabricated
+// "delivered" checkmark would be worse than omitting it. The same applies
+// to "Commercial Approval" as a distinct stage: today, approving a lead
+// and triggering provisioning happen in the same single action (Convert
+// to Customer), so there is no separately-observable "approved but not
+// yet provisioning" moment to report — both are folded into one Provisioning
+// timeline entry rather than inventing a timestamp that was never recorded.
+
+const DAY_MS = 86_400_000;
+
+function daysSince(iso: string | null): number | null {
+  if (!iso) return null;
+  return (Date.now() - new Date(iso).getTime()) / DAY_MS;
+}
+
+// ─── Invitation delivery status (Resend) ───────────────────────────────────
+//
+// Answers the exact support question this was built for: "the customer says
+// they never received the email" — did it actually deliver, bounce, or get
+// suppressed? Supabase Auth's invite/recovery emails route through Resend's
+// SMTP relay (same account as the app's own notification emails), so
+// Resend's own send log is the only place this is genuinely observable —
+// there is no local delivery-receipt table, and building one (a Resend
+// webhook receiver + schema) is more infrastructure than a real pilot's
+// current volume justifies. Best-effort, client-side filtered: Resend's
+// public list endpoint doesn't support filtering by recipient server-side
+// (confirmed live), so this scans the most recent sends and picks the
+// newest one addressed to this email. At current pilot volume this reliably
+// finds the relevant send; if send volume grows enough that the relevant
+// invite falls off the first page, a webhook-based approach would be the
+// correct next step — not needed today.
+async function getInvitationDeliveryStatus(email: string): Promise<string | null> {
+  const apiKey = Deno.env.get('RESEND_API_KEY');
+  if (!apiKey) return null;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return null;
+    const body = await res.json() as { data?: Array<{ to: string[]; last_event: string; created_at: string }> };
+    const target = email.toLowerCase();
+    const match = (body.data ?? [])
+      .filter((e) => e.to.some((t) => t.toLowerCase() === target))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    return match?.last_event ?? null;
+  } catch {
+    return null; // Best-effort — never blocks the onboarding journey view over an external API hiccup.
+  }
+}
+
+// GoTrue's own configured OTP/link expiry for this project (Dashboard →
+// Authentication → Rate Limits — confirmed live via the Management API,
+// mailer_otp_exp: 3600). No CLI/API path exposes "is this specific token
+// still valid" without consuming it, so expiry is estimated from elapsed
+// time since the invite was (re)sent — the same approach GoTrue itself uses
+// internally to reject an expired token.
+const INVITE_LINK_EXPIRY_SECONDS = 3600;
+
+interface JourneyTimelineEntry {
+  label: string;
+  occurred_at: string;
+  /** Who performed it, where known from data already fetched for this
+   *  request (identity_security_events.actor_email, or the admin's own
+   *  email for self-service events like first login). Omitted rather than
+   *  guessed when no actor is recorded for that kind of event. */
+  actor?: string | null;
+}
+
+async function handleOnboardingJourney(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const [factsResult, progress, securityResult, operationsResult, avgResult] = await Promise.all([
+    db.rpc('get_onboarding_journey_facts', { p_org_id: orgId }),
+    computeOnboardingProgress(db, orgId),
+    db.rpc('get_platform_org_security_events', { p_org_id: orgId, p_limit: 100 }),
+    db.rpc('get_platform_org_operations', { p_org_id: orgId }),
+    db.rpc('get_average_go_live_duration_days'),
+  ]);
+
+  if (factsResult.error || !factsResult.data) {
+    logger.error('platform-admin.onboarding-journey.facts_failed', { correlation_id: ctx.correlationId, org_id: orgId, error: factsResult.error?.message });
+    return internalError(ctx, 'Failed to load onboarding journey');
+  }
+  if (!progress) return notFound(ctx);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const facts = factsResult.data as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const securityEvents = (securityResult.data ?? []) as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const operations = (operationsResult.data ?? {}) as any;
+  const avgGoLiveDays = typeof avgResult.data === 'number' ? avgResult.data : null;
+
+  const admin = facts.admin_user ?? null;
+  const activated = Boolean(admin?.last_sign_in_at);
+
+  const inviteEvents = securityEvents.filter((e) => e.event_type === 'invite.created' || e.event_type === 'invite.resent');
+  const lastInviteAt: string | null =
+    inviteEvents.length > 0
+      ? inviteEvents.map((e) => e.occurred_at).sort().slice(-1)[0]
+      : (admin?.invited_at ?? facts.organization?.created_at ?? null);
+
+  // ── Invitation delivery + expiry — only meaningful before activation;
+  // once the customer has actually logged in, whether the original email
+  // delivered or expired is no longer operationally relevant.
+  const invitationDeliveryStatus = (!activated && admin?.email)
+    ? await getInvitationDeliveryStatus(admin.email as string)
+    : null;
+  const invitationExpired = Boolean(
+    !activated && lastInviteAt && (Date.now() - new Date(lastInviteAt).getTime()) / 1000 > INVITE_LINK_EXPIRY_SECONDS
+  );
+
+  // ── The mandatory 10-step business workflow (Product Owner's exact order —
+  // not to be merged, removed, or reordered). Steps 3/4/5 are genuinely one
+  // atomic backend transaction (handleProvision creates org+admin+invite in
+  // a single call) — shown here as three honest, separately-labeled rows
+  // that happen to complete at the same instant, not collapsed into one.
+  const demoRequest = facts.demo_request ?? null;
+  const hasDemoRequest = Boolean(demoRequest);
+
+  interface WorkflowStep {
+    key: string; label: string; completed: boolean; owner: string;
+    blocking_reason: string | null;
+    primary_action: { label: string; action: string | null } | null;
+  }
+
+  const steps: WorkflowStep[] = [];
+
+  const reviewed = !hasDemoRequest || Boolean(demoRequest?.reviewed_at);
+  steps.push({
+    key: 'review_customer', label: 'Registration Reviewed', completed: reviewed, owner: 'Platform',
+    blocking_reason: null,
+    primary_action: reviewed ? null : { label: 'Markera som granskad', action: 'mark-reviewed' },
+  });
+
+  const approved = !hasDemoRequest || Boolean(demoRequest?.approved_at);
+  steps.push({
+    key: 'approve_onboarding', label: 'Registration Approved', completed: approved, owner: 'Customer Success',
+    blocking_reason: !reviewed ? 'Kunden måste granskas först' : null,
+    primary_action: (!approved && reviewed) ? { label: 'Godkänn onboarding', action: 'approve-onboarding' } : null,
+  });
+
+  // "Choose Subscription" and "Create Administrator" remain their own rows
+  // (not merged into "Organization Created") per the standing rule that this
+  // 10-step order is the Product Owner's exact approved sequence — not to be
+  // merged, removed, or reordered. Only the labels below were normalized to
+  // business-event language; the structure is unchanged.
+  steps.push({ key: 'choose_subscription', label: 'Subscription Selected', completed: true, owner: 'Platform', blocking_reason: null, primary_action: null });
+  steps.push({ key: 'create_organization', label: 'Organization Created', completed: true, owner: 'Platform', blocking_reason: null, primary_action: null });
+  steps.push({ key: 'create_administrator', label: 'Administrator Account Created', completed: true, owner: 'Platform', blocking_reason: null, primary_action: null });
+
+  const invitationSent = inviteEvents.length > 0 || Boolean(admin?.invited_at);
+  steps.push({
+    key: 'send_invitation', label: 'Administrator Invitation Sent', completed: invitationSent, owner: 'Platform',
+    blocking_reason: null,
+    primary_action: invitationSent ? null : { label: 'Skicka inbjudan', action: 'resend-invitation' },
+  });
+
+  const DELIVERY_LABEL_SV: Record<string, string> = {
+    bounced: 'senaste inbjudan studsade (ogiltig e-postadress)',
+    suppressed: 'senaste inbjudan blockerades av leverantören (tidigare studsning)',
+    delivered: 'senaste inbjudan levererades',
+    delivery_delayed: 'senaste inbjudan är försenad',
+    sent: 'senaste inbjudan skickades men leveransstatus är ännu okänd',
+  };
+  const activationBlockingReason = !invitationSent
+    ? 'Inbjudan har inte skickats än'
+    : invitationExpired
+      ? 'Länken i senaste inbjudan har gått ut — skicka en ny'
+      : (invitationDeliveryStatus && ['bounced', 'suppressed'].includes(invitationDeliveryStatus))
+        ? `Leveransproblem: ${DELIVERY_LABEL_SV[invitationDeliveryStatus]}`
+        : (invitationDeliveryStatus ? DELIVERY_LABEL_SV[invitationDeliveryStatus] ?? null : null);
+  steps.push({
+    key: 'administrator_activated', label: 'Administrator Activated Account', completed: activated, owner: 'Customer',
+    blocking_reason: activationBlockingReason,
+    primary_action: (!activated && invitationSent) ? { label: 'Skicka påminnelse', action: 'resend-invitation' } : null,
+  });
+
+  const schoolConfigured = progress.ready_for_go_live;
+  steps.push({
+    key: 'school_configuration', label: 'School Configuration Completed', completed: schoolConfigured, owner: 'Customer',
+    blocking_reason: !activated ? 'Administratören har inte loggat in än' : null,
+    primary_action: (!schoolConfigured && activated) ? { label: 'Kontakta kund för hjälp', action: 'contact-customer' } : null,
+  });
+
+  const paymentVerified = Boolean(facts.organization?.payment_verified_at);
+  steps.push({
+    key: 'verify_payment', label: 'Verify Payment', completed: paymentVerified, owner: 'Customer Success',
+    blocking_reason: !schoolConfigured ? 'Skolans grundinställning är inte klar än' : null,
+    primary_action: (!paymentVerified && schoolConfigured) ? { label: 'Bekräfta betalning verifierad', action: 'verify-payment' } : null,
+  });
+
+  const goLive = progress.is_live;
+  steps.push({
+    key: 'go_live_approval', label: 'Go Live Approval', completed: goLive, owner: 'Customer Success',
+    blocking_reason: !paymentVerified ? 'Betalning är inte verifierad än' : (!schoolConfigured ? 'Skolans grundinställning är inte klar än' : null),
+    primary_action: (!goLive && paymentVerified && schoolConfigured) ? { label: 'Godkänn driftsättning', action: 'approve-go-live' } : null,
+  });
+
+  const firstIncomplete = steps.find((s) => !s.completed) ?? null;
+  const stage = firstIncomplete ? firstIncomplete.label : 'Pilot Ready';
+  const stageIndex = firstIncomplete ? steps.indexOf(firstIncomplete) : steps.length;
+  const progressLabel = `Step ${Math.min(stageIndex + 1, steps.length)} of ${steps.length}`;
+  const progressPercent = Math.round((steps.filter((s) => s.completed).length / steps.length) * 100);
+
+  // ── Health — derived from how long the current step has been waiting ───
+  let health: 'green' | 'yellow' | 'red' = 'green';
+  if (!firstIncomplete) {
+    health = 'green';
+  } else if (firstIncomplete.key === 'send_invitation') {
+    health = 'red'; // nothing happens until the platform administrator acts
+  } else if (firstIncomplete.key === 'administrator_activated') {
+    const d = daysSince(lastInviteAt) ?? 0;
+    health = d > 7 ? 'red' : d > 3 ? 'yellow' : 'green';
+  } else if (firstIncomplete.key === 'school_configuration') {
+    const d = daysSince(admin?.last_sign_in_at ?? null) ?? 0;
+    health = d > 14 ? 'red' : d > 7 ? 'yellow' : 'green';
+  } else if (firstIncomplete.key === 'verify_payment' || firstIncomplete.key === 'go_live_approval') {
+    health = 'yellow'; // always needs a human decision, by design
+  } else {
+    health = 'yellow';
+  }
+  if ((operations.dead_letter_count ?? 0) > 0) health = 'red';
+
+  const PENDING_OWNER: Record<string, string> = {
+    Platform: 'Waiting for Platform', Customer: 'Waiting for Customer', 'Customer Success': 'Waiting for Customer Success',
+  };
+
+  // ── Next recommended action — exactly the first incomplete step's action ──
+  let nextAction: { label: string; action: string | null } = firstIncomplete?.primary_action
+    ?? { label: firstIncomplete ? 'Waiting for Customer' : 'No Action Required', action: null };
+  if ((operations.dead_letter_count ?? 0) > 0) {
+    nextAction = { label: 'Retry Failed Communication', action: 'retry-communication' };
+  }
+
+  // ── Recovery actions valid right now ───────────────────────────────────
+  const recoveryActions: string[] = [];
+  if (!activated) recoveryActions.push('resend-invitation', 'cancel-invitation');
+  if (activated) recoveryActions.push('send-password-reset', 'force-password-reset');
+  if (schoolConfigured && paymentVerified && !goLive) recoveryActions.push('approve-go-live');
+  if ((operations.dead_letter_count ?? 0) > 0) recoveryActions.push('retry-communication');
+
+  // ── Timeline (business language, real timestamps only) ────────────────
+  // "Who performed it" is included wherever it's already part of data this
+  // request already fetched (identity_security_events.actor_email) — never
+  // guessed or backfilled with an extra query.
+  const timeline: JourneyTimelineEntry[] = [];
+  const push = (label: string, at: string | null | undefined, actor?: string | null) => {
+    if (at) timeline.push({ label, occurred_at: at, ...(actor ? { actor } : {}) });
+  };
+
+  push('Registration Received', facts.demo_request?.created_at);
+  // The welcome email is dispatched synchronously, best-effort, in the same
+  // request that stores the registration (demo-requests/index.ts) — there is
+  // no separate persisted send timestamp to report, so this reuses the
+  // registration timestamp as an honest proxy for "at this same moment,"
+  // not a fabricated distinct time. Only shown when a demo request actually
+  // exists (the welcome email has nothing to attach to otherwise).
+  if (facts.demo_request?.created_at) push('Welcome Email Sent', facts.demo_request.created_at);
+  push('Organization Created', facts.organization?.created_at);
+  for (const e of inviteEvents.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))) {
+    push(e.event_type === 'invite.created' ? 'Administrator Invitation Sent' : 'Administrator Invitation Resent', e.occurred_at, e.actor_email);
+  }
+  // First login (confirmed_at, fixed at the moment of first-ever
+  // activation) is a distinct fact from last/most-recent login
+  // (last_sign_in_at, which updates on every subsequent sign-in) — surfaced
+  // separately per the account-support requirement to view both, not
+  // conflated into one "activated" timestamp.
+  push('Administrator Activated Account (First Login)', admin?.confirmed_at, admin?.email);
+  push('First Branch Created', facts.first_location_at);
+  push('First Vehicle Added', facts.first_vehicle_at);
+  push('First Instructor Added', facts.first_instructor_at);
+  push('Booking Configuration Set Up', facts.first_booking_config_at);
+  push('Staff Member Invited', facts.first_staff_invited_at);
+  push('Go Live Approved', progress.organization.go_live_at);
+
+  // Password-reset activity belongs in the same recent-activity feed as the
+  // invitation events already pushed above — one combined, deduplicated,
+  // chronological feed rather than two overlapping lists (the previous
+  // version repeated "Invitation Sent" in both a timeline and a separate
+  // communication history).
+  const COMM_LABEL: Record<string, string> = {
+    'password_reset.sent': 'Password Reset Sent',
+    'password_reset.forced': 'Password Reset Enforced',
+  };
+  for (const e of securityEvents) {
+    if (COMM_LABEL[e.event_type]) push(COMM_LABEL[e.event_type], e.occurred_at, e.actor_email);
+  }
+  timeline.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+
+  // ── Expected completion — real historical average, or an honest range ──
+  let expectedCompletion: { type: 'date' | 'typical_range'; value: string } | null = null;
+  if (stage !== 'Pilot Ready') {
+    if (avgGoLiveDays !== null && avgGoLiveDays >= 1 && facts.organization?.created_at) {
+      const est = new Date(new Date(facts.organization.created_at).getTime() + avgGoLiveDays * DAY_MS);
+      expectedCompletion = { type: 'date', value: est.toISOString() };
+    } else {
+      expectedCompletion = { type: 'typical_range', value: '5–10 business days' };
+    }
+  }
+
+  logger.info('platform-admin.onboarding-journey.ok', { correlation_id: ctx.correlationId, org_id: orgId, stage });
+
+  return ok(ctx, {
+    organization_id: orgId,
+    organization_name: facts.organization?.name ?? null,
+    subscription_tier: facts.organization?.subscription_tier ?? null,
+    subscription_status: facts.organization?.subscription_status ?? null,
+    stage,
+    progress_label: progressLabel,
+    progress_percent: progressPercent,
+    health,
+    pending_action_owner: firstIncomplete ? (PENDING_OWNER[firstIncomplete.owner] ?? 'No Action Required') : 'No Action Required',
+    next_recommended_action: nextAction,
+    recovery_actions: recoveryActions,
+    expected_completion: expectedCompletion,
+    steps,
+    recent_activity: timeline,
+    admin_contact: admin ? {
+      user_id: admin.user_id,
+      name: [admin.first_name, admin.last_name].filter(Boolean).join(' ') || null,
+      email: admin.email,
+      activated,
+      // Distinct facts: confirmed_at is fixed at first-ever activation;
+      // last_sign_in_at updates on every subsequent login. Conflating them
+      // was a real gap — Platform Administration needs both to answer "when
+      // did they first activate" vs. "are they still actively using it."
+      first_login_at: admin.confirmed_at ?? null,
+      last_login_at: admin.last_sign_in_at ?? null,
+      invitation_delivery_status: invitationDeliveryStatus,
+      invitation_expired: invitationExpired,
+    } : null,
+    customer_contact: facts.demo_request ? { name: facts.demo_request.contact_name, email: facts.demo_request.email, phone: facts.demo_request.phone } : null,
+    demo_request_id: facts.demo_request?.id ?? null,
+    operations_dead_letter_count: operations.dead_letter_count ?? 0,
+  });
+}
+
+// Reuses requeue_dead_letter_events (event_outbox) and bulk_retry_messages
+// (outbound_messages) — both already built and already used elsewhere
+// (Communications' Queue Monitor page) — this just exposes the same
+// recovery action scoped to one org from Platform Administration, so a
+// Platform Administrator never needs direct database access to unstick a
+// customer's stalled onboarding invite or failed notifications.
+async function handleRetryOrgOperations(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: eventsRequeued, error: eventsError } = await db.rpc('requeue_dead_letter_events', { p_org_id: orgId });
+  if (eventsError) {
+    logger.error('platform-admin.retry-operations.events_failed', { correlation_id: ctx.correlationId, org_id: orgId, error: eventsError.message });
+    return internalError(ctx, 'Failed to retry dead-lettered events');
+  }
+
+  const { data: messagesRequeued, error: messagesError } = await db.rpc('bulk_retry_messages', { p_org_id: orgId });
+  if (messagesError) {
+    logger.error('platform-admin.retry-operations.messages_failed', { correlation_id: ctx.correlationId, org_id: orgId, error: messagesError.message });
+    return internalError(ctx, 'Failed to retry failed messages');
+  }
+
+  await recordIdentityEvent({
+    eventType: 'operations.retry_triggered', provider: 'password', organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { events_requeued: eventsRequeued, messages_requeued: messagesRequeued },
+  });
+
+  logger.info('platform-admin.retry-operations.complete', {
+    correlation_id: ctx.correlationId, org_id: orgId, events_requeued: eventsRequeued, messages_requeued: messagesRequeued,
+  });
+  return ok(ctx, { events_requeued: eventsRequeued ?? 0, messages_requeued: messagesRequeued ?? 0 });
+}
+
+async function handleUpdateOrgNotes(ctx: EdgeRequestContext, orgId: string, rawBody: unknown): Promise<Response> {
+  const body = (typeof rawBody === 'object' && rawBody !== null) ? rawBody as Record<string, unknown> : {};
+  const notes = typeof body['notes'] === 'string' ? body['notes'] : '';
+  if (notes.length > 10_000) return badRequest(ctx, 'notes must be 10,000 characters or fewer');
+
+  const db = createServiceClient();
+  const { error } = await db.from('organizations').update({
+    internal_notes: notes || null,
+    internal_notes_updated_at: new Date().toISOString(),
+    internal_notes_updated_by: ctx.actorId,
+  }).eq('id', orgId);
+
+  if (error) {
+    logger.error('platform-admin.update-notes.failed', { correlation_id: ctx.correlationId, org_id: orgId, error: error.message });
+    return internalError(ctx, 'Failed to save notes');
+  }
+  logger.info('platform-admin.update-notes.complete', { correlation_id: ctx.correlationId, org_id: orgId });
+  return ok(ctx, { org_id: orgId, notes_updated: true });
+}
+
+// Revokes every active session for an administrator — Supabase Auth's own
+// mechanism (auth.admin.signOut with scope 'global'), not custom session
+// handling. Distinct from Disable Administrator: this ends their *current*
+// sessions immediately without changing their membership status or
+// password — they can sign in again right away if their credentials still
+// work, which is the point (a lost/stolen device scenario, not a suspected
+// credential compromise — Force Password Reset is the right action for that).
+async function handleForceLogout(ctx: EdgeRequestContext, orgId: string, userId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: membership } = await db
+    .from('memberships').select('id').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
+  if (!membership) return notFound(ctx);
+
+  const { error } = await db.auth.admin.signOut(userId, 'global');
+  if (error) {
+    logger.error('platform-admin.force-logout.failed', { correlation_id: ctx.correlationId, org_id: orgId, user_id: userId, error: error.message });
+    return internalError(ctx, 'Failed to force logout');
+  }
+
+  await recordIdentityEvent({
+    eventType: 'session.force_logout', provider: 'password', severity: 'warning', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { source: 'platform-admin/orgs/admins/force-logout' },
+  });
+
+  logger.info('platform-admin.force-logout.complete', { correlation_id: ctx.correlationId, org_id: orgId, user_id: userId });
+  return ok(ctx, { user_id: userId, logged_out: true });
+}
+
+// ─── Tenant lifecycle — Delete (CRITICAL: Tenant Trial Lifecycle) ─────────────
+//
+// Suspend/Restore/Terminate/Extend/End-Trial already existed as direct
+// client-side RLS-gated `organizations` writes (organizations_update_platform
+// policy) — those already fully revoke access the moment status leaves
+// 'active' (get_user_jwt_claims()'s `o.status = 'active'` join excludes
+// suspended/terminated orgs entirely, confirmed live). What was missing —
+// the actual gap this task audited and found — is that "Delete" only ever
+// flagged the organizations row itself (deleted_at); every vehicle,
+// instructor, branch, and user membership it owned was left behind
+// untouched. This closes that gap with a real, safe resource cascade,
+// while deliberately NEVER touching anything append-only/audit (invoices,
+// ledger entries, lesson_types referenced by historical bookings, or the
+// audit_logs / tenant_trial_events tables themselves — those survive by
+// design, matching "do not delete audit records").
+//
+// Guarded to only run once the organization is already non-active
+// (suspended or terminated) — access must already be cut off before
+// tenant-owned resources are removed, never the other way around.
+async function handleDeleteTenantData(ctx: EdgeRequestContext, orgId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: org, error: orgErr } = await db
+    .from('organizations').select('id, name, status, deleted_at').eq('id', orgId).maybeSingle();
+  if (orgErr || !org) return notFound(ctx);
+
+  if (org.deleted_at) {
+    return ok(ctx, { org_id: orgId, deleted: true, already_deleted: true });
+  }
+  if (org.status === 'active') {
+    return badRequest(ctx, 'Organisationen måste suspenderas eller avslutas innan tenant-data kan tas bort säkert.');
+  }
+
+  const now = new Date().toISOString();
+
+  // ── Operational resources: soft-delete only — never a hard DELETE, per
+  // the platform's standing soft-delete convention. Reversible in principle
+  // (a developer could clear deleted_at), matching how every other domain
+  // delete in this codebase already works.
+  const [vehiclesResult, instructorsResult, locationsResult] = await Promise.all([
+    db.from('vehicles').update({ deleted_at: now, deleted_by: ctx.actorId })
+      .eq('organization_id', orgId).is('deleted_at', null).select('id'),
+    db.from('instructors').update({ deleted_at: now, deleted_by: ctx.actorId })
+      .eq('organization_id', orgId).is('deleted_at', null).select('id'),
+    db.from('organization_locations').update({ deleted_at: now, deleted_by: ctx.actorId })
+      .eq('organization_id', orgId).is('deleted_at', null).select('id'),
+  ]);
+
+  // ── User access: fully removed, not just deactivated — mirrors
+  // rollbackTrialProvisioning()'s established staff-cleanup pattern
+  // (membership_roles → memberships → auth user, reverse dependency order).
+  const { data: memberships } = await db
+    .from('memberships').select('id, user_id').eq('organization_id', orgId);
+  let usersRemoved = 0;
+  for (const m of (memberships ?? []) as Array<{ id: string; user_id: string }>) {
+    await db.from('membership_roles').delete().eq('membership_id', m.id);
+    await db.from('memberships').delete().eq('id', m.id);
+    const { error: deleteUserErr } = await db.auth.admin.deleteUser(m.user_id);
+    if (deleteUserErr) {
+      logger.warn('platform-admin.delete-tenant-data.user_delete_failed', {
+        correlation_id: ctx.correlationId, org_id: orgId, user_id: m.user_id, error: deleteUserErr.message,
+      });
+    } else {
+      usersRemoved++;
+    }
+  }
+
+  const { error: orgUpdateErr } = await db.from('organizations')
+    .update({ deleted_at: now, deleted_by: ctx.actorId, updated_by: ctx.actorId })
+    .eq('id', orgId);
+  if (orgUpdateErr) {
+    logger.error('platform-admin.delete-tenant-data.org_update_failed', { correlation_id: ctx.correlationId, org_id: orgId, error: orgUpdateErr.message });
+    return internalError(ctx, 'Failed to finalize tenant deletion');
+  }
+
+  // ── Close out the originating trial session, if any ───────────────────────
+  // Found live (2026-08-09): deleting an org that came from a trial signup
+  // left its tenant_trial_sessions row behind at status='active', still
+  // pointing at the now-deleted organization_id. trial-signup's own
+  // duplicate-request guard (handleStart) treats any non-terminal status as
+  // "already an ongoing registration" — so that email could never start a
+  // new trial again, the one path this platform is supposed to always allow
+  // (a deleted tenant is a clean slate, exactly like the existing
+  // reject-then-delete path already correctly is). 'cancelled' is reused
+  // rather than a new status — it's already excluded from the duplicate
+  // check and already means "terminal, no further action" everywhere else
+  // in this lifecycle.
+  const { data: originatingSession } = await db
+    .from('tenant_trial_sessions').select('id, email, driving_school_name, status')
+    .eq('organization_id', orgId).maybeSingle();
+  if (originatingSession && !['rejected', 'cancelled', 'expired'].includes(originatingSession.status)) {
+    const { error: sessionUpdateErr } = await db.from('tenant_trial_sessions')
+      .update({ status: 'cancelled', cancelled_at: now, cancelled_by: ctx.actorId, cancellation_reason: 'Tenant deleted by platform admin' })
+      .eq('id', originatingSession.id);
+    if (sessionUpdateErr) {
+      logger.warn('platform-admin.delete-tenant-data.session_update_failed', {
+        correlation_id: ctx.correlationId, org_id: orgId, session_id: originatingSession.id, error: sessionUpdateErr.message,
+      });
+    } else {
+      await logTrialEvent(db, {
+        sessionId: originatingSession.id, email: originatingSession.email, drivingSchoolName: originatingSession.driving_school_name,
+        eventType: 'cancelled', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+        metadata: { source: 'delete-tenant-data', organization_id: orgId },
+      });
+    }
+  }
+
+  logger.info('platform-admin.delete-tenant-data.complete', {
+    correlation_id: ctx.correlationId, org_id: orgId, actor_id: ctx.actorId,
+    vehicles_removed: vehiclesResult.data?.length ?? 0,
+    instructors_removed: instructorsResult.data?.length ?? 0,
+    locations_removed: locationsResult.data?.length ?? 0,
+    users_removed: usersRemoved,
+  });
+
+  return ok(ctx, {
+    org_id: orgId, deleted: true,
+    vehicles_removed: vehiclesResult.data?.length ?? 0,
+    instructors_removed: instructorsResult.data?.length ?? 0,
+    locations_removed: locationsResult.data?.length ?? 0,
+    users_removed: usersRemoved,
+  });
+}
+
+// ─── Handlers — announcements (Nyheter / TABSnytt) ────────────────────────────
+// Platform-wide content, not tenant data — no organization_id, service-role
+// client bypasses the table's read-only RLS policy (which only allows
+// authenticated SELECT of currently-live rows; all writes go through here).
+
+const ANNOUNCEMENT_SEVERITIES = new Set(['info', 'warning', 'critical']);
+
+async function handleAnnouncementList(ctx: EdgeRequestContext): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db
+    .from('announcements')
+    .select('*')
+    .order('published_at', { ascending: false });
+
+  if (error) {
+    logger.error('platform-admin.announcements.list_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to load announcements');
+  }
+  return ok(ctx, data ?? []);
+}
+
+async function handleCreateAnnouncement(ctx: EdgeRequestContext, body: unknown): Promise<Response> {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const title = typeof input['title'] === 'string' ? input['title'].trim() : '';
+  const text  = typeof input['body']  === 'string' ? input['body'].trim()  : '';
+  const severity = typeof input['severity'] === 'string' ? input['severity'] : 'info';
+  const expiresAt = typeof input['expires_at'] === 'string' ? input['expires_at'] : null;
+
+  if (!title) return badRequest(ctx, 'title is required');
+  if (!text) return badRequest(ctx, 'body is required');
+  if (!ANNOUNCEMENT_SEVERITIES.has(severity)) return badRequest(ctx, 'severity must be info, warning, or critical');
+
+  const db = createServiceClient();
+  const { data, error } = await db
+    .from('announcements')
+    .insert({ title, body: text, severity, expires_at: expiresAt, created_by: ctx.actorId })
+    .select('*')
+    .single();
+
+  if (error) {
+    logger.error('platform-admin.announcements.create_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to create announcement');
+  }
+  logger.info('platform-admin.announcements.created', { correlation_id: ctx.correlationId, announcement_id: (data as { id: string }).id });
+  return created(ctx, data);
+}
+
+async function handleUpdateAnnouncement(ctx: EdgeRequestContext, id: string, body: unknown): Promise<Response> {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const patch: Record<string, unknown> = {};
+
+  if (typeof input['title'] === 'string') patch['title'] = input['title'].trim();
+  if (typeof input['body'] === 'string') patch['body'] = input['body'].trim();
+  if (typeof input['severity'] === 'string') {
+    if (!ANNOUNCEMENT_SEVERITIES.has(input['severity'])) return badRequest(ctx, 'severity must be info, warning, or critical');
+    patch['severity'] = input['severity'];
+  }
+  if (typeof input['is_active'] === 'boolean') patch['is_active'] = input['is_active'];
+  if (input['expires_at'] === null || typeof input['expires_at'] === 'string') patch['expires_at'] = input['expires_at'];
+
+  if (Object.keys(patch).length === 0) return badRequest(ctx, 'No updatable fields provided');
+
+  const db = createServiceClient();
+  const { data, error } = await db
+    .from('announcements')
+    .update(patch)
+    .eq('id', id)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    logger.error('platform-admin.announcements.update_failed', { correlation_id: ctx.correlationId, announcement_id: id, error: error.message });
+    return internalError(ctx, 'Failed to update announcement');
+  }
+  if (!data) return notFound(ctx);
+  return ok(ctx, data);
 }
 
 // ─── Handlers — subscriptions ─────────────────────────────────────────────────
@@ -352,6 +1212,56 @@ async function handlePlatformAdminsDetail(ctx: EdgeRequestContext): Promise<Resp
     return internalError(ctx, 'Failed to load platform administrator details');
   }
   logger.info('platform-admin.platform-admins-detail.ok', { correlation_id: ctx.correlationId });
+  return ok(ctx, data as unknown[]);
+}
+
+// ─── SaaS Operations Console — platform-wide workspace summaries ────────────
+// Each wraps one new platform-wide RPC (20260729000003_platform_ops_console_ia.sql),
+// itself built on tables/views that already existed (event_outbox_health,
+// outbound_messages, students' GDPR columns, regulatory_workflows) — these
+// endpoints are read-only aggregation, not new business functionality.
+
+async function handleOperationsSummary(ctx: EdgeRequestContext): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_operations_summary');
+  if (error) {
+    logger.error('platform-admin.operations-summary.rpc_error', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to load operations summary');
+  }
+  logger.info('platform-admin.operations-summary.ok', { correlation_id: ctx.correlationId });
+  return ok(ctx, data as Record<string, unknown>);
+}
+
+async function handleCommunicationsSummary(ctx: EdgeRequestContext): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_communications_summary');
+  if (error) {
+    logger.error('platform-admin.communications-summary.rpc_error', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to load communications summary');
+  }
+  logger.info('platform-admin.communications-summary.ok', { correlation_id: ctx.correlationId });
+  return ok(ctx, data as Record<string, unknown>);
+}
+
+async function handleComplianceSummary(ctx: EdgeRequestContext): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_compliance_summary');
+  if (error) {
+    logger.error('platform-admin.compliance-summary.rpc_error', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to load compliance summary');
+  }
+  logger.info('platform-admin.compliance-summary.ok', { correlation_id: ctx.correlationId });
+  return ok(ctx, data as Record<string, unknown>);
+}
+
+async function handleRecoveryQueue(ctx: EdgeRequestContext): Promise<Response> {
+  const db = createServiceClient();
+  const { data, error } = await db.rpc('get_platform_recovery_queue');
+  if (error) {
+    logger.error('platform-admin.recovery-queue.rpc_error', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to load recovery queue');
+  }
+  logger.info('platform-admin.recovery-queue.ok', { correlation_id: ctx.correlationId });
   return ok(ctx, data as unknown[]);
 }
 
@@ -743,11 +1653,17 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
   }
 
   // ── Step 5: Tenant Administrator creation (Auth Admin API) ───────────────
-  const temporaryPassword = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-  const { data: authData, error: authError } = await db.auth.admin.createUser({
-    email:         input.adminEmail,
-    password:      temporaryPassword,
-    email_confirm: true,
+  // Real Supabase Auth invitation — never a hidden, generated-then-discarded
+  // password nobody knows (the prior behavior). inviteUserByEmail creates the
+  // account in an unconfirmed/pending state and sends Supabase's own Invite
+  // email with a secure link; the administrator chooses their own password
+  // on first visit (AcceptInvitePage.tsx, already built for this exact flow).
+  // Mirrors invite-user/index.ts's inviteNewUser() — the same mechanism
+  // already used for regular staff invitations, applied here to tenant admins.
+  const origin = getAppOrigin();
+  const { data: authData, error: authError } = await db.auth.admin.inviteUserByEmail(input.adminEmail, {
+    data:       { first_name: input.adminFirstName, last_name: input.adminLastName },
+    redirectTo: `${origin}/auth/accept-invite`,
   });
 
   if (authError || !authData.user) {
@@ -782,7 +1698,7 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
   // ── Step 6: Membership + org_owner role ──────────────────────────────────
   const { data: membership, error: membershipError } = await db
     .from('memberships')
-    .insert({ user_id: userId, organization_id: orgId, status: 'active', joined_at: nowIso })
+    .insert({ user_id: userId, organization_id: orgId, status: 'pending', joined_at: nowIso })
     .select('id')
     .single();
 
@@ -809,6 +1725,12 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
 
   logger.info('platform-admin.provision.tenant_created', {
     correlation_id: ctx.correlationId, org_id: orgId, user_id: userId, membership_id: membershipId,
+  });
+
+  await recordIdentityEvent({
+    eventType: 'invite.created', provider: 'password', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { invited_email: input.adminEmail, role: 'org_owner', source: 'platform-admin/provision' },
   });
 
   // ── Step 7: Invitation — enqueue immediately (see architecture decision:  ──
@@ -901,6 +1823,474 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
     provisioning_run_id:  runId,
     demo_request_updated: demoRequestUpdated,
   });
+}
+
+// ─── Handlers — Demo Request Rejection / Deletion ─────────────────────────────
+//
+// Reject is the missing counterpart to Convert to Customer — a platform
+// admin declining a request needs a real reason (for their own records and,
+// per the Product Owner's explicit request, so the prospect is told
+// something actionable) rather than just flipping status to 'declined' with
+// no trace of why. Requires an Edge Function (not the plain client-side
+// table update every other demo-request field uses) because sending the
+// rejection email needs the service-role Resend credential, same reasoning
+// as every other server-only action in this file.
+
+const REJECTION_REASONS = [
+  'duplicate_email', 'duplicate_request', 'spam_or_fraud', 'incomplete_invalid_info',
+  'not_target_market', 'unable_to_verify_business', 'outside_service_area', 'other',
+] as const;
+type RejectionReason = typeof REJECTION_REASONS[number];
+
+const REJECTION_EMAIL_COPY: Record<RejectionReason, { subject: string; body: (schoolName: string, description: string) => string }> = {
+  duplicate_email: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi kan tyvärr inte gå vidare med den här förfrågan — e-postadressen är redan registrerad hos en annan trafikskola på plattformen.</p>
+      <p>Om detta är fel, eller om ni vill registrera en ny, fristående trafikskola: skicka gärna in en ny förfrågan med en annan e-postadress, så hjälper vi er vidare.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  duplicate_request: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi ser att vi redan har en tidigare förfrågan från er — vi hör av oss om den istället för att hantera denna som en ny.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  spam_or_fraud: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName) => `
+      <p>Hej,</p>
+      <p>Vi kan tyvärr inte gå vidare med registreringen för ${schoolName}.</p>
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  incomplete_invalid_info: {
+    subject: 'Vi behöver mer information om er trafikskola',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi kunde tyvärr inte gå vidare med uppgifterna i er förfrågan.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Skicka gärna in en ny förfrågan med kompletta uppgifter, så hjälper vi er vidare.</p>
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  not_target_market: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Trafikcloud är byggt specifikt för svenska trafikskolor, och vi kan tyvärr inte gå vidare med er förfrågan just nu.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  unable_to_verify_business: {
+    subject: 'Vi behöver mer information om er trafikskola',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi kunde tyvärr inte verifiera verksamheten utifrån uppgifterna i er förfrågan.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Skicka gärna in en ny förfrågan, eller kontakta oss direkt på <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a> så hjälper vi er vidare.</p>
+    `,
+  },
+  outside_service_area: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi kan tyvärr inte gå vidare med er förfrågan just nu.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+  other: {
+    subject: 'Angående er registrering hos Trafikcloud',
+    body: (schoolName, description) => `
+      <p>Hej,</p>
+      <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${schoolName}</strong>.</p>
+      <p>Vi kan tyvärr inte gå vidare med er förfrågan.</p>
+      ${description ? `<p>${description}</p>` : ''}
+      <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+    `,
+  },
+};
+
+async function handleRejectDemoRequest(ctx: EdgeRequestContext, demoId: string, rawBody: unknown): Promise<Response> {
+  const db = createServiceClient();
+
+  const body = (rawBody ?? {}) as { reason?: unknown; description?: unknown };
+  const reason = typeof body.reason === 'string' ? body.reason : '';
+  const description = typeof body.description === 'string' ? body.description.trim() : '';
+
+  if (!REJECTION_REASONS.includes(reason as RejectionReason)) {
+    return badRequest(ctx, `reason must be one of: ${REJECTION_REASONS.join(', ')}`);
+  }
+  if (reason === 'other' && description.length === 0) {
+    return badRequest(ctx, 'A description is required when reason is "other"');
+  }
+
+  const { data: request, error: fetchErr } = await db
+    .from('demo_requests')
+    .select('id, school_name, email, converted_organization_id, status')
+    .eq('id', demoId)
+    .maybeSingle();
+
+  if (fetchErr || !request) return notFound(ctx);
+  if (request.converted_organization_id) {
+    return badRequest(ctx, 'This request has already been converted to a customer and cannot be rejected');
+  }
+
+  const { error: updateErr } = await db
+    .from('demo_requests')
+    .update({
+      status: 'declined',
+      rejection_reason:      reason,
+      rejection_description: description || null,
+      rejected_at: new Date().toISOString(),
+      rejected_by: ctx.actorId,
+    })
+    .eq('id', demoId);
+
+  if (updateErr) {
+    logger.error('platform-admin.demo_request.reject_failed', { correlation_id: ctx.correlationId, demo_request_id: demoId, error: updateErr.message });
+    return internalError(ctx, 'Failed to reject demo request');
+  }
+
+  // Best-effort — never fail the reject action over email delivery, matching
+  // demo-requests/index.ts's own welcome-email pattern.
+  let emailSent = false;
+  try {
+    const copy = REJECTION_EMAIL_COPY[reason as RejectionReason];
+    const result = await dispatchMessage({
+      channel: 'email', provider: 'resend', to: request.email, from: 'Trafikcloud <info@trafikcloud.se>',
+      subject: copy.subject,
+      body: copy.body(request.school_name, description),
+    });
+    emailSent = result.status === 'sent';
+    if (!emailSent) {
+      logger.warn('platform-admin.demo_request.reject_email_failed', { correlation_id: ctx.correlationId, demo_request_id: demoId, error: result.error });
+    }
+  } catch (err) {
+    logger.warn('platform-admin.demo_request.reject_email_exception', { correlation_id: ctx.correlationId, demo_request_id: demoId, error: err instanceof Error ? err.message : String(err) });
+  }
+
+  logger.info('platform-admin.demo_request.rejected', { correlation_id: ctx.correlationId, demo_request_id: demoId, reason, actor_id: ctx.actorId, email_sent: emailSent });
+
+  return ok(ctx, { id: demoId, status: 'declined', rejection_reason: reason, email_sent: emailSent });
+}
+
+async function handleDeleteDemoRequest(ctx: EdgeRequestContext, demoId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: request } = await db
+    .from('demo_requests')
+    .select('id, converted_organization_id')
+    .eq('id', demoId)
+    .maybeSingle();
+
+  if (!request) return notFound(ctx);
+  if (request.converted_organization_id) {
+    return badRequest(ctx, 'This request has already been converted to a customer and cannot be deleted');
+  }
+
+  // Hard delete, by design — demo_requests has no RLS delete policy (service
+  // role only), and a rejected/spam lead has no downstream records depending
+  // on it (unlike an organization, which always gets a soft delete instead).
+  const { error } = await db.from('demo_requests').delete().eq('id', demoId);
+  if (error) {
+    logger.error('platform-admin.demo_request.delete_failed', { correlation_id: ctx.correlationId, demo_request_id: demoId, error: error.message });
+    return internalError(ctx, 'Failed to delete demo request');
+  }
+
+  logger.info('platform-admin.demo_request.deleted', { correlation_id: ctx.correlationId, demo_request_id: demoId, actor_id: ctx.actorId });
+  return ok(ctx, { id: demoId, deleted: true });
+}
+
+// ─── Handlers — Trial Requests (pre/post-provisioning lifecycle control) ────
+//
+// tenant_trial_sessions / tenant_trial_events (migrations 20260807215630,
+// 20260808174906, 20260808180915) — full lifecycle documented in
+// trial-signup/index.ts's own header comment. Platform Admin's real control
+// window is everything before a session reaches 'provisioning' — no
+// organization, tenant user, or external integration exists before then, so
+// Reject/Cancel/Expire/Delete here are always safe, cheap operations. Once a
+// session reaches 'active' (a real organization now exists), the existing
+// Organisationer page's Suspend/Terminate/Extend Trial/Delete — already
+// built, already correctly enforced via get_user_jwt_claims' `o.status =
+// 'active'` join — is the right tool, not duplicated here.
+
+const TRIAL_TERMINAL_STATUSES = ['active', 'rejected', 'cancelled', 'expired'];
+
+async function handleListTrialRequests(ctx: EdgeRequestContext, url: URL): Promise<Response> {
+  const db = createServiceClient();
+  const statusFilter = url.searchParams.get('status');
+
+  let q = db.from('tenant_trial_sessions')
+    .select('id, token, email, driving_school_name, organization_id, admin_user_id, status, expires_at, email_verified_at, completed_at, rejected_at, rejection_reason, cancelled_at, cancellation_reason, created_at, updated_at')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (statusFilter) q = q.eq('status', statusFilter);
+
+  const { data, error } = await q;
+  if (error) {
+    logger.error('platform-admin.trial_requests.list_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return internalError(ctx, 'Failed to list trial requests');
+  }
+  return ok(ctx, data ?? []);
+}
+
+async function handleTrialRequestDetail(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session, error } = await db.from('tenant_trial_sessions').select('*').eq('id', id).maybeSingle();
+  if (error || !session) return notFound(ctx);
+
+  const { data: events } = await db.from('tenant_trial_events').select('*').eq('session_id', id).order('created_at', { ascending: true });
+  return ok(ctx, { session, events: events ?? [] });
+}
+
+// Statuses a trial request must be in for approval to make sense — a
+// completed questionnaire waiting for review, or a previously-failed
+// provisioning attempt: either the applicant corrected and resubmitted
+// (lands back on questionnaire_completed via POST /:token/complete), or
+// Platform Admin wants to immediately retry a run that failed for a
+// transient/platform reason with no answers to fix.
+const TRIAL_APPROVABLE_STATUSES = ['questionnaire_completed', 'provisioning_failed'];
+
+async function handleApproveTrialRequest(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session, error: fetchErr } = await db.from('tenant_trial_sessions')
+    .select('id, email, driving_school_name, status, interview_answers').eq('id', id).maybeSingle();
+  if (fetchErr || !session) return notFound(ctx);
+  if (!TRIAL_APPROVABLE_STATUSES.includes(session.status)) {
+    return badRequest(ctx, `This request is ${session.status} and cannot be approved — it must be questionnaire_completed (submitted, awaiting review).`);
+  }
+
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'approved', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+  });
+  await db.from('tenant_trial_sessions').update({ status: 'approved' }).eq('id', id);
+  logger.info('platform-admin.trial_requests.approved', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId });
+
+  const result = await provisionTrialOrganization(db, session, ctx.correlationId);
+  if (!result.ok) {
+    logger.error('platform-admin.trial_requests.provisioning_failed', { correlation_id: ctx.correlationId, id, code: result.code, error: result.message });
+    return new Response(
+      JSON.stringify({ code: result.code, message: result.message, trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+      { status: result.status, headers: jsonHeaders(ctx) },
+    );
+  }
+
+  logger.info('platform-admin.trial_requests.provisioned', { correlation_id: ctx.correlationId, id, organization_id: result.organizationId });
+  return ok(ctx, {
+    id, status: 'active', organization_id: result.organizationId,
+    lesson_types_created: result.lessonTypesCreated, package_templates_created: result.packageTemplatesCreated,
+    branch_created: result.branchCreated, priced_lesson_types: result.pricedLessonTypes,
+    vehicles_created: result.vehiclesCreated, instructors_created: result.instructorsCreated,
+    staff_invited: result.staffInvited, additional_branches_created: result.additionalBranchesCreated,
+    slots_generated: result.slotsGenerated,
+  });
+}
+
+async function handleRejectTrialRequest(ctx: EdgeRequestContext, id: string, rawBody: unknown): Promise<Response> {
+  const db = createServiceClient();
+  const body = (rawBody ?? {}) as { reason?: unknown; description?: unknown };
+  const reason = typeof body.reason === 'string' ? body.reason : '';
+  const description = typeof body.description === 'string' ? body.description.trim() : '';
+
+  if (!REJECTION_REASONS.includes(reason as RejectionReason)) {
+    return badRequest(ctx, `reason must be one of: ${REJECTION_REASONS.join(', ')}`);
+  }
+  if (reason === 'other' && description.length === 0) {
+    return badRequest(ctx, 'A description is required when reason is "other"');
+  }
+
+  const { data: session, error: fetchErr } = await db.from('tenant_trial_sessions').select('id, email, driving_school_name, status').eq('id', id).maybeSingle();
+  if (fetchErr || !session) return notFound(ctx);
+  if (TRIAL_TERMINAL_STATUSES.includes(session.status)) {
+    return badRequest(ctx, `This request is already ${session.status} and cannot be rejected`);
+  }
+
+  const { error: updateErr } = await db.from('tenant_trial_sessions').update({
+    status: 'rejected', rejected_at: new Date().toISOString(), rejected_by: ctx.actorId, rejection_reason: reason,
+  }).eq('id', id);
+  if (updateErr) {
+    logger.error('platform-admin.trial_requests.reject_failed', { correlation_id: ctx.correlationId, id, error: updateErr.message });
+    return internalError(ctx, 'Failed to reject trial request');
+  }
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'rejected', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+    metadata: { reason, description },
+  });
+
+  let emailSent = false;
+  try {
+    const result = await dispatchMessage({
+      channel: 'email', provider: 'resend', to: session.email, from: 'Trafikcloud <info@trafikcloud.se>',
+      subject: 'Angående er registrering hos Trafikcloud',
+      body: `
+        <div style="font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; color: #0f172a;">
+          <p style="font-size: 20px; font-weight: 700; margin-bottom: 4px;">Trafikcloud</p>
+          <h2 style="font-size: 18px; margin-top: 24px;">Angående er registrering</h2>
+          <p>Hej,</p>
+          <p>Tack för ert intresse för Trafikcloud på uppdrag av <strong>${session.driving_school_name}</strong>. Vi kan tyvärr inte gå vidare med den här förfrågan just nu.</p>
+          ${description ? `<p>${description}</p>` : ''}
+          <p>Har ni frågor är ni varmt välkomna att höra av er till <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+        </div>`,
+    });
+    emailSent = result.status === 'sent';
+  } catch (err) {
+    logger.warn('platform-admin.trial_requests.reject_email_exception', { correlation_id: ctx.correlationId, id, error: err instanceof Error ? err.message : String(err) });
+  }
+
+  logger.info('platform-admin.trial_requests.rejected', { correlation_id: ctx.correlationId, id, reason, actor_id: ctx.actorId, email_sent: emailSent });
+  return ok(ctx, { id, status: 'rejected' });
+}
+
+async function handleCancelTrialRequest(ctx: EdgeRequestContext, id: string, rawBody: unknown): Promise<Response> {
+  const db = createServiceClient();
+  const body = (rawBody ?? {}) as { reason?: unknown };
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+
+  const { data: session, error: fetchErr } = await db.from('tenant_trial_sessions').select('id, email, driving_school_name, status, organization_id').eq('id', id).maybeSingle();
+  if (fetchErr || !session) return notFound(ctx);
+  if (['rejected', 'cancelled', 'expired'].includes(session.status)) {
+    return badRequest(ctx, `This request is already ${session.status}`);
+  }
+  if (session.status === 'active' && session.organization_id) {
+    return badRequest(ctx, 'This trial has already been provisioned — use Suspend/Terminate on the organization instead (Organisationer).');
+  }
+
+  const { error: updateErr } = await db.from('tenant_trial_sessions').update({
+    status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: ctx.actorId, cancellation_reason: reason || null,
+  }).eq('id', id);
+  if (updateErr) {
+    logger.error('platform-admin.trial_requests.cancel_failed', { correlation_id: ctx.correlationId, id, error: updateErr.message });
+    return internalError(ctx, 'Failed to cancel trial request');
+  }
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'cancelled', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+    metadata: { reason },
+  });
+
+  logger.info('platform-admin.trial_requests.cancelled', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId });
+  return ok(ctx, { id, status: 'cancelled' });
+}
+
+async function handleExpireTrialRequest(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session, error: fetchErr } = await db.from('tenant_trial_sessions').select('id, email, driving_school_name, status').eq('id', id).maybeSingle();
+  if (fetchErr || !session) return notFound(ctx);
+  if (TRIAL_TERMINAL_STATUSES.includes(session.status)) {
+    return badRequest(ctx, `This request is already ${session.status}`);
+  }
+
+  const { error: updateErr } = await db.from('tenant_trial_sessions').update({ status: 'expired' }).eq('id', id);
+  if (updateErr) {
+    logger.error('platform-admin.trial_requests.expire_failed', { correlation_id: ctx.correlationId, id, error: updateErr.message });
+    return internalError(ctx, 'Failed to expire trial request');
+  }
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'expired', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+  });
+
+  logger.info('platform-admin.trial_requests.expired', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId });
+  return ok(ctx, { id, status: 'expired' });
+}
+
+async function handleDeleteTrialRequest(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session } = await db.from('tenant_trial_sessions').select('id, email, driving_school_name').eq('id', id).maybeSingle();
+  if (!session) return notFound(ctx);
+
+  // tenant_trial_events.session_id is ON DELETE SET NULL — the audit trail
+  // survives this delete (email/driving_school_name are denormalized onto
+  // each event row for exactly this reason — "preserve the audit record").
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'deleted', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail,
+  });
+
+  const { error } = await db.from('tenant_trial_sessions').delete().eq('id', id);
+  if (error) {
+    logger.error('platform-admin.trial_requests.delete_failed', { correlation_id: ctx.correlationId, id, error: error.message });
+    return internalError(ctx, 'Failed to delete trial request');
+  }
+
+  logger.info('platform-admin.trial_requests.deleted', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId });
+  return ok(ctx, { id, deleted: true });
+}
+
+async function handleResendTrialVerification(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session } = await db.from('tenant_trial_sessions').select('id, token, email, driving_school_name, status, email_verified_at').eq('id', id).maybeSingle();
+  if (!session) return notFound(ctx);
+  if (session.email_verified_at) return badRequest(ctx, 'This email is already verified');
+  if (TRIAL_TERMINAL_STATUSES.includes(session.status)) return badRequest(ctx, `This request is ${session.status} and cannot be resent`);
+
+  const functionsUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const verifyUrl = `${functionsUrl}/functions/v1/trial-signup/${session.token}/verify-email`;
+
+  let sent = false;
+  try {
+    const result = await dispatchMessage({
+      channel: 'email', provider: 'resend', to: session.email, from: 'Trafikcloud <info@trafikcloud.se>',
+      subject: 'Bekräfta din e-postadress – Trafikcloud',
+      body: verifyEmailHtml(session.driving_school_name, verifyUrl),
+    });
+    sent = result.status === 'sent';
+  } catch (err) {
+    logger.warn('platform-admin.trial_requests.resend_verification_exception', { correlation_id: ctx.correlationId, id, error: err instanceof Error ? err.message : String(err) });
+  }
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'verification_email_resent', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail, metadata: { sent },
+  });
+
+  logger.info('platform-admin.trial_requests.verification_resent', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId, sent });
+  return ok(ctx, { id, sent });
+}
+
+async function handleResendTrialQuestionnaire(ctx: EdgeRequestContext, id: string): Promise<Response> {
+  const db = createServiceClient();
+  const { data: session } = await db.from('tenant_trial_sessions').select('id, token, email, driving_school_name, status, email_verified_at').eq('id', id).maybeSingle();
+  if (!session) return notFound(ctx);
+  if (!session.email_verified_at) return badRequest(ctx, 'This email has not been verified yet — resend the verification email instead');
+  if (TRIAL_TERMINAL_STATUSES.includes(session.status)) return badRequest(ctx, `This request is ${session.status} and cannot be resent`);
+
+  const setupUrl = `${getAppOrigin()}/onboarding/${session.token}`;
+
+  let sent = false;
+  try {
+    const result = await dispatchMessage({
+      channel: 'email', provider: 'resend', to: session.email, from: 'Trafikcloud <info@trafikcloud.se>',
+      subject: 'Berätta om er verksamhet – Trafikcloud',
+      body: questionnaireEmailHtml(session.driving_school_name, setupUrl),
+    });
+    sent = result.status === 'sent';
+  } catch (err) {
+    logger.warn('platform-admin.trial_requests.resend_questionnaire_exception', { correlation_id: ctx.correlationId, id, error: err instanceof Error ? err.message : String(err) });
+  }
+  await logTrialEvent(db, {
+    sessionId: id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'questionnaire_email_resent', actorType: 'admin', actorId: ctx.actorId, actorEmail: ctx.actorEmail, metadata: { sent },
+  });
+
+  logger.info('platform-admin.trial_requests.questionnaire_resent', { correlation_id: ctx.correlationId, id, actor_id: ctx.actorId, sent });
+  return ok(ctx, { id, sent });
 }
 
 // ─── Handlers — Organization Administrator Management ────────────────────────
@@ -1026,9 +2416,12 @@ async function handleInviteAdmin(ctx: EdgeRequestContext, orgId: string, rawBody
     if (opts.userId) await db.auth.admin.deleteUser(opts.userId);
   }
 
-  const temporaryPassword = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-  const { data: authData, error: authError } = await db.auth.admin.createUser({
-    email: input.email, password: temporaryPassword, email_confirm: true,
+  // Real Supabase Auth invitation, same mechanism and rationale as
+  // handleProvision's Step 5 — no hidden, never-delivered password.
+  const origin = getAppOrigin();
+  const { data: authData, error: authError } = await db.auth.admin.inviteUserByEmail(input.email, {
+    data:       { first_name: input.firstName, last_name: input.lastName },
+    redirectTo: `${origin}/auth/accept-invite`,
   });
   if (authError || !authData.user) {
     logger.error('platform-admin.invite-admin.auth_user_failed', { correlation_id: ctx.correlationId, error: authError?.message });
@@ -1052,7 +2445,7 @@ async function handleInviteAdmin(ctx: EdgeRequestContext, orgId: string, rawBody
 
   const { data: membership, error: membershipError } = await db
     .from('memberships')
-    .insert({ user_id: userId, organization_id: orgId, status: 'active', joined_at: nowIso })
+    .insert({ user_id: userId, organization_id: orgId, status: 'pending', joined_at: nowIso })
     .select('id')
     .single();
   if (membershipError || !membership) {
@@ -1074,8 +2467,15 @@ async function handleInviteAdmin(ctx: EdgeRequestContext, orgId: string, rawBody
     return internalError(ctx, 'Failed to assign role');
   }
 
-  // Non-fatal — mirrors the invitation-enqueue step in handleProvision (same
-  // disclosed gap: no email provider processes this event yet).
+  await recordIdentityEvent({
+    eventType: 'invite.created', provider: 'password', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { invited_email: input.email, role: input.role, source: 'platform-admin/orgs/admins' },
+  });
+
+  // Kept for the org timeline (get_platform_org_timeline reads these rows
+  // directly, regardless of whether an email-worker ever processes them —
+  // the real email now goes out via inviteUserByEmail above).
   const { data: org } = await db.from('organizations').select('name').eq('id', orgId).maybeSingle();
   const { error: outboxError } = await db.rpc('insert_outbox_event', {
     p_event_type: 'org.admin_invited',
@@ -1272,14 +2672,13 @@ async function handleTransferOwnership(ctx: EdgeRequestContext, orgId: string, u
 
 // ─── Administrator Invitation Lifecycle (Resend / Cancel) ────────────────────
 //
-// Organization Administration, Phase 4. The current invitation has no
-// token or link — auth.admin.createUser(email_confirm:true) activates the
-// account immediately (see handleInviteAdmin's own comment) — so there is
-// nothing for Supabase Auth to expire, and neither action below tries to
-// invent one. Both are scoped to invitation_status = 'pending' only (i.e.
-// last_sign_in_at IS NULL): an administrator who has already logged in is
-// no longer "an invitation," they're a real administrator — Disable
-// Administrator is the correct action for them, not these two.
+// Organization Administration, Phase 4. Administrators are created via
+// auth.admin.inviteUserByEmail (handleProvision / handleInviteAdmin) — a real
+// Supabase invite token/link that expires, so Resend genuinely has something
+// to reissue. Both actions below are scoped to invitation_status = 'pending'
+// only (i.e. last_sign_in_at IS NULL): an administrator who has already
+// logged in is no longer "an invitation," they're a real administrator —
+// Disable Administrator is the correct action for them, not these two.
 
 // Cancels any not-yet-processed invite/resend outbox events for this target,
 // so a future notification worker never dispatches a stale one —
@@ -1297,28 +2696,45 @@ async function handleResendInvitation(ctx: EdgeRequestContext, orgId: string, us
   const db = createServiceClient();
 
   const { data: membership } = await db
-    .from('memberships').select('id').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
+    .from('memberships').select('id, status').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
   if (!membership) return notFound(ctx);
-
-  const { data: authUser, error: authLookupError } = await db.auth.admin.getUserById(userId);
-  if (authLookupError || !authUser?.user) return notFound(ctx);
-  if (authUser.user.last_sign_in_at) {
+  // membership.status (not last_sign_in_at) is the authoritative signal: it
+  // only leaves 'pending' once activate_membership() runs after a successful
+  // password submission — merely opening the invite link already sets
+  // last_sign_in_at, so that alone can't distinguish "accepted" from
+  // "opened the link and abandoned it".
+  if (membership.status !== 'pending') {
     return badRequest(ctx, 'This administrator has already accepted their invitation — use Disable Administrator instead');
   }
 
   const { data: profile } = await db.from('profiles').select('email, first_name, last_name').eq('id', userId).maybeSingle();
   if (!profile?.email) return internalError(ctx, 'Administrator profile not found');
 
-  // Rotate the credential — the original temp password was never delivered
-  // (no email provider processes these events yet, the same disclosed gap
-  // as Provisioning), so resending must issue a genuinely new one rather
-  // than just re-notifying with nothing changed.
-  const newTemporaryPassword = `${crypto.randomUUID()}${crypto.randomUUID()}`;
-  const { error: pwError } = await db.auth.admin.updateUserById(userId, { password: newTemporaryPassword });
-  if (pwError) {
-    logger.error('platform-admin.resend-invitation.password_rotate_failed', { correlation_id: ctx.correlationId, error: pwError.message });
+  // Re-sends a real, working link via Supabase Auth's own recovery mechanism
+  // (the pending administrator never had a password to begin with under the
+  // inviteUserByEmail-based flow, so there is nothing to rotate) — lands on
+  // the existing ResetPasswordPage, which lets them set their first password
+  // exactly like AcceptInvitePage does for a first-time invite.
+  //
+  // resetPasswordForEmail (not admin.generateLink, which only mints a token
+  // and never sends mail) is what actually dispatches the email, via the
+  // same GoTrue/SMTP path ForgotPasswordPage.tsx's self-service flow already
+  // relies on — confirmed live: generateLink left zero trace in Auth/Resend
+  // logs despite reporting success, resetPasswordForEmail does not.
+  const origin = getAppOrigin();
+  const { error: linkError } = await createAnonClient().auth.resetPasswordForEmail(profile.email, {
+    redirectTo: `${origin}/auth/reset-password`,
+  });
+  if (linkError) {
+    logger.error('platform-admin.resend-invitation.link_failed', { correlation_id: ctx.correlationId, error: linkError.message });
     return internalError(ctx, 'Failed to resend invitation');
   }
+
+  await recordIdentityEvent({
+    eventType: 'invite.resent', provider: 'password', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { email: profile.email, source: 'platform-admin/orgs/admins/resend-invitation' },
+  });
 
   await supersedeInviteEvents(db, orgId, profile.email);
 
@@ -1346,13 +2762,13 @@ async function handleCancelInvitation(ctx: EdgeRequestContext, orgId: string, us
   const db = createServiceClient();
 
   const { data: membership } = await db
-    .from('memberships').select('id').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
+    .from('memberships').select('id, status').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
   if (!membership) return notFound(ctx);
   const membershipId = membership.id as string;
 
-  const { data: authUser, error: authLookupError } = await db.auth.admin.getUserById(userId);
-  if (authLookupError || !authUser?.user) return notFound(ctx);
-  if (authUser.user.last_sign_in_at) {
+  // See handleResendInvitation: membership.status, not last_sign_in_at, is
+  // the authoritative "not yet activated" signal.
+  if (membership.status !== 'pending') {
     return badRequest(ctx, 'This administrator has already accepted their invitation — use Disable Administrator instead');
   }
 
@@ -1395,6 +2811,105 @@ async function handleCancelInvitation(ctx: EdgeRequestContext, orgId: string, us
 
   logger.info('platform-admin.cancel-invitation.complete', { correlation_id: ctx.correlationId, org_id: orgId, user_id: userId });
   return ok(ctx, { user_id: userId, cancelled: true });
+}
+
+// ─── Password Reset (Send / Force) ───────────────────────────────────────────
+//
+// Both let a Platform Administrator help an administrator regain access
+// without ever knowing, typing, or storing that administrator's password —
+// "never expose existing passwords" is satisfied structurally, not by
+// convention, since neither handler ever reads or sets a password value the
+// caller could see. Both use auth.admin.generateLink(type: 'recovery'), the
+// same Supabase-native mechanism ForgotPasswordPage.tsx's self-service flow
+// uses, landing on the same existing ResetPasswordPage.
+//
+// Send Password Reset: for an administrator who already has real access and
+// simply needs a way back in (forgot their password, locked out, etc.) —
+// the platform-admin-initiated equivalent of them clicking "Glömt lösenord"
+// themselves. Their current password keeps working until they complete the
+// reset.
+//
+// Force Password Reset: for a security-relevant situation (suspected
+// compromise, admin leaving, etc.) where the *current* password must stop
+// working immediately, not just whenever the administrator gets around to
+// resetting it. Rotates the credential to a throwaway value the platform
+// administrator never sees (auth.admin.updateUserById), then sends the same
+// recovery link. This also serves as the platform's "change an
+// administrator's password" capability — the account's password is changed,
+// just never by a human directly typing a new one in, per Supabase Auth
+// best practice and the same "never expose existing passwords" constraint.
+
+async function handleSendPasswordReset(ctx: EdgeRequestContext, orgId: string, userId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: membership } = await db
+    .from('memberships').select('id').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
+  if (!membership) return notFound(ctx);
+
+  const { data: profile } = await db.from('profiles').select('email').eq('id', userId).maybeSingle();
+  if (!profile?.email) return internalError(ctx, 'Administrator profile not found');
+
+  // resetPasswordForEmail actually dispatches the email via GoTrue/SMTP —
+  // admin.generateLink only mints a token and never sends mail, see
+  // handleResendInvitation above for the same fix rationale.
+  const origin = getAppOrigin();
+  const { error: linkError } = await createAnonClient().auth.resetPasswordForEmail(profile.email, {
+    redirectTo: `${origin}/auth/reset-password`,
+  });
+  if (linkError) {
+    logger.error('platform-admin.send-password-reset.link_failed', { correlation_id: ctx.correlationId, error: linkError.message });
+    return internalError(ctx, 'Failed to send password reset');
+  }
+
+  await recordIdentityEvent({
+    eventType: 'password_reset.sent', provider: 'password', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { email: profile.email, source: 'platform-admin/orgs/admins/send-password-reset' },
+  });
+
+  logger.info('platform-admin.send-password-reset.complete', { correlation_id: ctx.correlationId, org_id: orgId, user_id: userId });
+  return ok(ctx, { user_id: userId, password_reset: 'sent' });
+}
+
+async function handleForcePasswordReset(ctx: EdgeRequestContext, orgId: string, userId: string): Promise<Response> {
+  const db = createServiceClient();
+
+  const { data: membership } = await db
+    .from('memberships').select('id').eq('organization_id', orgId).eq('user_id', userId).maybeSingle();
+  if (!membership) return notFound(ctx);
+
+  const { data: profile } = await db.from('profiles').select('email').eq('id', userId).maybeSingle();
+  if (!profile?.email) return internalError(ctx, 'Administrator profile not found');
+
+  // Invalidate the current password immediately — a throwaway value the
+  // platform administrator never sees or stores.
+  const throwawayPassword = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+  const { error: pwError } = await db.auth.admin.updateUserById(userId, { password: throwawayPassword });
+  if (pwError) {
+    logger.error('platform-admin.force-password-reset.rotate_failed', { correlation_id: ctx.correlationId, error: pwError.message });
+    return internalError(ctx, 'Failed to force password reset');
+  }
+
+  // resetPasswordForEmail actually dispatches the email via GoTrue/SMTP —
+  // admin.generateLink only mints a token and never sends mail, see
+  // handleResendInvitation above for the same fix rationale.
+  const origin = getAppOrigin();
+  const { error: linkError } = await createAnonClient().auth.resetPasswordForEmail(profile.email, {
+    redirectTo: `${origin}/auth/reset-password`,
+  });
+  if (linkError) {
+    logger.error('platform-admin.force-password-reset.link_failed', { correlation_id: ctx.correlationId, error: linkError.message });
+    return internalError(ctx, 'Password was invalidated but the reset email could not be sent — use Send Password Reset to retry');
+  }
+
+  await recordIdentityEvent({
+    eventType: 'password_reset.forced', provider: 'password', severity: 'warning', userId, organizationId: orgId,
+    actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
+    metadata: { email: profile.email, source: 'platform-admin/orgs/admins/force-password-reset' },
+  });
+
+  logger.info('platform-admin.force-password-reset.complete', { correlation_id: ctx.correlationId, org_id: orgId, user_id: userId });
+  return ok(ctx, { user_id: userId, password_reset: 'forced' });
 }
 
 // ─── Handlers — Tenant Onboarding Monitoring + Go Live Approval ─────────────

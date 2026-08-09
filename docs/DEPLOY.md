@@ -6,6 +6,8 @@ Maintained by: Platform Engineering
 > **This project uses hosted Supabase** (project ref: `ulgsndzfksphquqakelq`).
 > Part 1 (local Docker setup) is optional for local development only.
 > For day-to-day work, connect directly to the hosted project — no Docker required.
+>
+> **Single active environment (Platform Environment Configuration Sprint 2).** An earlier plan to provision a separate, dedicated Supabase project for pilot was explicitly reversed by the project owner. `ulgsndzfksphquqakelq` is the one active project and evolves in place through iterative, baseline-and-rollback-disciplined changes rather than environment duplication — Part 3 below ("Production Deployment") targets *this same project*, not a second one. Do not propose a second project without a new, compelling technical reason.
 
 This runbook covers local development setup, pilot deployment, and production deployment sequencing. Follow the steps in order.
 
@@ -122,7 +124,7 @@ Useful local ports:
 supabase db push
 ```
 
-This applies all 139 migrations in lexicographic filename order. On a fresh local stack this is equivalent to `supabase db reset` followed by the seed.
+This applies every migration in `supabase/migrations/` in lexicographic filename order — run `ls supabase/migrations/*.sql | wc -l` for the current count rather than trusting a number here, since this file drifts every time a migration is added (224 as of Sprint 4F; do not treat that as current by the time you read this). On a fresh local stack this is equivalent to `supabase db reset` followed by the seed.
 
 Verify migration status:
 ```bash
@@ -245,42 +247,18 @@ Replace `<WORKER_SECRET>` with the value set via `supabase secrets set`.
 
 ### Production — pg_cron setup
 
-After deploying to production, run this SQL once in the Supabase SQL Editor (Dashboard → SQL Editor):
+**Configured and live as of 2026-07-21.** `event-worker-tick` (every minute) and `communication-worker-tick` (every 2 minutes) are both registered and running against the hosted project. Full architecture, the wrapper-function pattern actually used, Vault secret handling, monitoring guidance, and the operational runbook (manual invocation, health checks, troubleshooting, secret rotation): see `docs/SCHEDULED_JOBS_ARCHITECTURE.md`.
 
-```sql
--- Enable pg_net extension if not already enabled
-CREATE EXTENSION IF NOT EXISTS pg_net;
+Note for anyone provisioning a fresh project from scratch: the current setup reads `WORKER_SECRET` from Supabase Vault via a `SECURITY DEFINER` wrapper function (`public.invoke_event_worker()` / `public.invoke_communication_worker()`), rather than embedding the secret directly in the `cron.schedule()` command string — do not use the inline-secret pattern this section previously documented; it stores the secret in plain text inside `cron.job`, which the Vault-based wrapper approach avoids. See `docs/SCHEDULED_JOBS_ARCHITECTURE.md` §4–§5 for the actual function definitions and setup steps.
 
--- Schedule event-worker to run every minute
-SELECT cron.schedule(
-  'event-worker-tick',
-  '* * * * *',
-  format(
-    $cron$
-    SELECT net.http_post(
-      url     := %L,
-      headers := %L::jsonb,
-      body    := '{}'::jsonb
-    );
-    $cron$,
-    'https://<project-id>.supabase.co/functions/v1/event-worker',
-    '{"Authorization": "Bearer <WORKER_SECRET>", "Content-Type": "application/json"}'
-  )
-);
-
--- Verify it was created
-SELECT jobname, schedule, command FROM cron.job WHERE jobname = 'event-worker-tick';
-```
-
-Replace `<project-id>` with your Supabase project ID and `<WORKER_SECRET>` with the production secret.
-
-To verify the worker is running after setup:
+To verify the worker is running:
 ```sql
 SELECT * FROM cron.job_run_details 
 WHERE jobname = 'event-worker-tick' 
 ORDER BY start_time DESC 
 LIMIT 5;
 ```
+Note: `cron.job_run_details` only reflects the wrapper function's own (near-instant) execution, not the downstream worker run — use `worker_run_log` for actual worker health (`docs/SCHEDULED_JOBS_ARCHITECTURE.md` §9, §12).
 
 ---
 
@@ -448,3 +426,11 @@ The TypeScript path aliases require all imports to be resolvable. Run `pnpm type
 ### Migrations fail mid-way
 
 Each migration is a single transaction. A failure leaves the database in the last-successful-migration state. Fix the failing migration and re-run `supabase db push` — already-applied migrations are skipped automatically.
+
+### New user signup / invitation / password reset fails with a rate-limit or never arrives
+
+**Known, live, currently unresolved as of Sprint 3 (Email Infrastructure & Authentication Completion).** Supabase Auth on the hosted project is still using Supabase's own default email sender, which has a low rate limit — confirmed exhausted (`429 over_email_send_rate_limit`) during live testing. No custom SMTP provider is configured. This blocks every Auth flow that requires sending an email. Fix (Dashboard + DNS + Resend account, none executable from this repository): `docs/operational-runbook.md` §13 and the full step-by-step runbook in `docs/INTEGRATION_CONFIGURATION_GUIDE.md` §4.2.
+
+### `GET /functions/v1/health`, `/health/live`, `/health/ready` all return 404 `Unknown health route`
+
+**Fixed in Sprint 2A (Platform Validation & Readiness).** Found during Sprint 2 (Platform Environment Configuration), fixed the following sprint. Root cause: `supabase/functions/health/index.ts` stripped a `/functions/v1/health` prefix from `req.url`'s pathname before matching routes, but the hosted gateway actually delivers the pathname already stripped down to just `/health`, `/health/live`, or `/health/ready` — so the prefix-strip regex never matched, and every route fell through to the 404 handler. Fix: changed the prefix-strip to match `/health` instead of `/functions/v1/health` (one line), redeployed only the `health` function with `--no-verify-jwt` (required — see the `verify_jwt` warning below), and confirmed live: all three routes now return `200` with correct JSON bodies. If this regresses in the future (e.g. Supabase changes gateway path-forwarding behavior again), the same `curl` test used to find and verify this fix is the fastest way to confirm.

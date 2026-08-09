@@ -1,8 +1,9 @@
 import { useState, useRef, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Users, Mail, Phone, Clock, CheckCircle, XCircle, MessageSquare,
-  TrendingUp, Plus, ChevronRight, ArrowRight,
+  TrendingUp, Plus, ChevronRight, ArrowRight, ClipboardList,
 } from 'lucide-react';
 import { Button, Skeleton, toast, ScrollArea } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
@@ -16,17 +17,27 @@ import { CreateLeadDialog } from '../components/CreateLeadDialog.js';
 export type LeadStatus = 'new' | 'contacted' | 'enrolled' | 'declined';
 
 export interface Lead {
-  id:               string;
-  first_name:       string;
-  last_name:        string;
-  email:            string | null;
-  phone:            string | null;
-  license_category: string;
-  notes:            string | null;
-  status:           LeadStatus;
-  source:           string;
-  created_at:       string;
-  updated_at:       string;
+  id:                         string;
+  first_name:                 string;
+  last_name:                  string;
+  email:                      string | null;
+  phone:                      string | null;
+  license_category:           string;
+  notes:                      string | null;
+  status:                     LeadStatus;
+  source:                     string;
+  created_at:                 string;
+  updated_at:                 string;
+  preferred_start_date:       string | null;
+  driving_experience:         string | null;
+  learner_permit_status:      string | null;
+  preferred_transmission:     string;
+  preferred_lesson_times:     string[];
+  preferred_language:         string;
+  existing_license_category:  string | null;
+  needs_theory:                boolean;
+  needs_risk1:                 boolean;
+  needs_risk2:                 boolean;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -263,7 +274,11 @@ export function LeadsPage() {
       if (!orgId) return [];
       const { data, error } = await supabase
         .from('student_leads')
-        .select('id, first_name, last_name, email, phone, license_category, notes, status, source, created_at, updated_at')
+        .select(`
+          id, first_name, last_name, email, phone, license_category, notes, status, source, created_at, updated_at,
+          preferred_start_date, driving_experience, learner_permit_status, preferred_transmission,
+          preferred_lesson_times, preferred_language, existing_license_category, needs_theory, needs_risk1, needs_risk2
+        `)
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false })
         .limit(200);
@@ -333,7 +348,7 @@ export function LeadsPage() {
         <div>
           <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
             <Users className="w-5 h-5 text-purple-600" />
-            Leads & Anmälningar
+            Leads
             {newCount > 0 && (
               <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">{newCount} ny{newCount !== 1 ? 'a' : ''}</span>
             )}
@@ -347,6 +362,20 @@ export function LeadsPage() {
           Ny lead
         </Button>
       </div>
+
+      {/* Cross-link: package enrollment interest goes through a separate,
+          commercial flow (pricing/campaign/coupon data attached) and is
+          managed on its own page — not silently merged into this list, but
+          made discoverable from here since both start as "someone showed
+          interest." */}
+      <Link
+        to="/enrollments"
+        className="shrink-0 flex items-center gap-2.5 rounded-xl border border-border bg-muted/30 px-3.5 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+      >
+        <ClipboardList className="w-4 h-4 shrink-0" />
+        <span>Intresseanmälningar för paket från kurskatalogen visas under <strong className="text-foreground font-medium">Anmälningar</strong>, inte här.</span>
+        <ArrowRight className="w-3.5 h-3.5 shrink-0 ml-auto" />
+      </Link>
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0">

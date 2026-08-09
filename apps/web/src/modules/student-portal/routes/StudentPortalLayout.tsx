@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   getStoredPortalSession, storePortalSession, clearPortalSession,
-  validatePortalToken, usePortalNotifications, type PortalSession,
+  validatePortalToken, useUnreadNotificationCount, type PortalSession,
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
@@ -76,8 +76,8 @@ function AppLogo({ orgName }: { orgName: string }) {
 // ─── Desktop sidebar ──────────────────────────────────────────────────────────
 
 function DesktopSidebar({ session }: { session: PortalSession }) {
-  const { data: notifications } = usePortalNotifications();
-  const msgCount = notifications?.length ?? 0;
+  const { data: unread } = useUnreadNotificationCount();
+  const msgCount = unread?.count ?? 0;
   const initial  = (session.student_name ?? 'E')[0]?.toUpperCase() ?? 'E';
   const elevId   = derivedStudentNumber(session.student_id);
 
@@ -179,8 +179,8 @@ function DesktopSidebar({ session }: { session: PortalSession }) {
 // ─── Mobile bottom navigation ─────────────────────────────────────────────────
 
 function MobileBottomNav() {
-  const { data: notifications } = usePortalNotifications();
-  const msgCount = notifications?.length ?? 0;
+  const { data: unread } = useUnreadNotificationCount();
+  const msgCount = unread?.count ?? 0;
 
   return (
     <nav
@@ -318,8 +318,8 @@ function PortalLoadingScreen() {
 // ─── Desktop top bar ──────────────────────────────────────────────────────────
 
 function DesktopTopBar({ session }: { session: PortalSession }) {
-  const { data: notifications } = usePortalNotifications();
-  const notifCount = notifications?.length ?? 0;
+  const { data: unread } = useUnreadNotificationCount();
+  const notifCount = unread?.count ?? 0;
   const firstName  = session.student_name.split(' ')[0] ?? session.student_name;
 
   return (

@@ -7,6 +7,7 @@ import {
   DateRange, DateField, SelectInput,
   csvDownload, printReport,
 } from '../components/ReportCard.js';
+import { fetchStudentCreditBalances } from '../lib/creditBalance.js';
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 function today()      { return new Date().toISOString().slice(0, 10); }
@@ -340,18 +341,22 @@ export function GrundrapporterPage() {
     } catch { toast({ title: 'Export misslyckades', variant: 'destructive' }); }
   })();
 
+  // Reads student_package_assignments, not student_packages — the latter's
+  // quantity_consumed is never updated by the consumption pipeline (lesson
+  // booking/completion writes lessons_used on the assignments row only; see
+  // 20260720000006_sync_purchase_package_to_assignments.sql and the identical
+  // fix already applied in student-portal/guardian-portal's /packages routes),
+  // so it always reads back 0 regardless of actual usage.
   const exportKunderLektionssaldo = () => void runExport(async () => {
-    const { data } = await supabase.from('student_packages')
-      .select('id, student_id, quantity_granted, quantity_consumed, quantity_expired, price_paid, status, created_at, students(first_name, last_name, email)')
+    const { data } = await supabase.from('student_package_assignments')
+      .select('id, student_id, package_quantity, lessons_used, final_price_incl_vat, status, created_at, students(first_name, last_name, email)')
       .eq('status', 'active')
-      .is('archived_at', null)
       .order('created_at', { ascending: false }).limit(1000);
     return (data ?? [])
       .map((r: Record<string, unknown>) => {
-        const granted  = (r['quantity_granted']  as number) ?? 0;
-        const consumed = (r['quantity_consumed'] as number) ?? 0;
-        const expired  = (r['quantity_expired']  as number) ?? 0;
-        return { r, remaining: granted - consumed - expired };
+        const granted  = (r['package_quantity'] as number) ?? 0;
+        const consumed = (r['lessons_used']      as number) ?? 0;
+        return { r, remaining: granted - consumed };
       })
       .filter(({ remaining }) => remaining > 0)
       .map(({ r, remaining }) => {
@@ -360,8 +365,8 @@ export function GrundrapporterPage() {
           'Elev':              s ? `${s['first_name'] ?? ''} ${s['last_name'] ?? ''}`.trim() : '',
           'E-post':            s ? (s['email'] ?? '') : '',
           'Återstående lekt.': remaining,
-          'Totalt lekt.':      r['quantity_granted'] ?? 0,
-          'Betalt (kr)':       cur(r['price_paid'] as number),
+          'Totalt lekt.':      r['package_quantity'] ?? 0,
+          'Betalt (kr)':       cur(r['final_price_incl_vat'] as number),
           'Skapad':            dateFmt(r['created_at'] as string),
         };
       }) as Record<string, unknown>[];
@@ -370,20 +375,19 @@ export function GrundrapporterPage() {
   const exportKunderLektionssaldoPdf = () => void (async () => {
     toast({ title: 'Förbereder PDF…' });
     try {
-      const { data } = await supabase.from('student_packages')
-        .select('quantity_granted, quantity_consumed, quantity_expired, price_paid, students(first_name, last_name)')
-        .eq('status', 'active').is('archived_at', null).limit(500);
+      const { data } = await supabase.from('student_package_assignments')
+        .select('package_quantity, lessons_used, final_price_incl_vat, students(first_name, last_name)')
+        .eq('status', 'active').limit(500);
       const rows = (data ?? [])
         .map((r: Record<string, unknown>) => {
-          const granted  = (r['quantity_granted']  as number) ?? 0;
-          const consumed = (r['quantity_consumed'] as number) ?? 0;
-          const expired  = (r['quantity_expired']  as number) ?? 0;
-          return { r, remaining: granted - consumed - expired };
+          const granted  = (r['package_quantity'] as number) ?? 0;
+          const consumed = (r['lessons_used']      as number) ?? 0;
+          return { r, remaining: granted - consumed };
         })
         .filter(({ remaining }) => remaining > 0)
         .map(({ r, remaining }) => {
           const s = r['students'] as Record<string, unknown> | null;
-          return [`${s?.['first_name'] ?? ''} ${s?.['last_name'] ?? ''}`.trim(), remaining, r['quantity_granted'], cur(r['price_paid'] as number)];
+          return [`${s?.['first_name'] ?? ''} ${s?.['last_name'] ?? ''}`.trim(), remaining, r['package_quantity'], cur(r['final_price_incl_vat'] as number)];
         });
       printReport(`Kunder med lektionssaldo – ${f3date}`, ['Elev', 'Kvar', 'Totalt', 'Betalt (kr)'], rows);
     } catch { toast({ title: 'Export misslyckades', variant: 'destructive' }); }
@@ -403,19 +407,13 @@ export function GrundrapporterPage() {
   })();
 
   const exportKunderElevsaldo = () => void runExport(async () => {
-    let q = supabase.from('students')
-      .select('first_name, last_name, email, phone, credit_balance, status, created_at')
-      .is('deleted_at', null)
-      .order('credit_balance', { ascending: f5type === 'negative' });
-    if (f5type === 'negative') q = q.lt('credit_balance', 0);
-    if (f5type === 'positive') q = q.gt('credit_balance', 0);
-    const { data } = await q.limit(1000);
-    return (data ?? []).map((r: Record<string, unknown>) => ({
+    const rows = await fetchStudentCreditBalances(f5type as 'negative' | 'positive' | 'all', 1000);
+    return rows.map(({ student: r, balance }) => ({
       'Förnamn':  r['first_name'] ?? '',
       'Efternamn': r['last_name'] ?? '',
       'E-post':   r['email'] ?? '',
       'Telefon':  r['phone'] ?? '',
-      'Saldo (kr)': cur(r['credit_balance'] as number),
+      'Saldo (lektioner)': balance,
       'Status':   r['status'] ?? '',
       'Skapad':   dateFmt(r['created_at'] as string),
     })) as Record<string, unknown>[];
@@ -424,13 +422,9 @@ export function GrundrapporterPage() {
   const exportKunderElevsaldoPdf = () => void (async () => {
     toast({ title: 'Förbereder PDF…' });
     try {
-      let q = supabase.from('students')
-        .select('first_name, last_name, credit_balance').is('deleted_at', null);
-      if (f5type === 'negative') q = q.lt('credit_balance', 0);
-      if (f5type === 'positive') q = q.gt('credit_balance', 0);
-      const { data } = await q.limit(500);
-      const rows = (data ?? []).map((r: Record<string, unknown>) => [`${r['first_name'] ?? ''} ${r['last_name'] ?? ''}`.trim(), cur(r['credit_balance'] as number)]);
-      printReport(`Kunder med elevsaldo (${f5type})`, ['Elev', 'Saldo (kr)'], rows);
+      const rows = await fetchStudentCreditBalances(f5type as 'negative' | 'positive' | 'all', 500);
+      const tableRows = rows.map(({ student: r, balance }) => [`${r['first_name'] ?? ''} ${r['last_name'] ?? ''}`.trim(), balance]);
+      printReport(`Kunder med elevsaldo (${f5type})`, ['Elev', 'Saldo (lektioner)'], tableRows);
     } catch { toast({ title: 'Export misslyckades', variant: 'destructive' }); }
   })();
 
@@ -600,33 +594,31 @@ export function GrundrapporterPage() {
   }, `debiterat_ej_fakturerat_${deb_from}_${deb_to}`);
 
   const exportElevPositivBalance = () => void runExport(async () => {
-    const { data } = await supabase.from('students')
-      .select('first_name, last_name, email, phone, credit_balance, status')
-      .gt('credit_balance', 0).is('deleted_at', null)
-      .order('credit_balance', { ascending: false }).limit(1000);
-    return (data ?? []).map((r: Record<string, unknown>) => ({
+    const rows = await fetchStudentCreditBalances('positive', 1000);
+    return rows.map(({ student: r, balance }) => ({
       'Förnamn':    r['first_name'] ?? '',
       'Efternamn':  r['last_name'] ?? '',
       'E-post':     r['email'] ?? '',
       'Telefon':    r['phone'] ?? '',
-      'Saldo (kr)': cur(r['credit_balance'] as number),
+      'Saldo (lektioner)': balance,
       'Status':     r['status'] ?? '',
     })) as Record<string, unknown>[];
   }, `elever_positiv_balans_${pos_date}`);
 
   const exportElevInaktivtPaket = () => void runExport(async () => {
     const cutoff = ago(Number(inakt_days));
-    const { data } = await supabase.from('student_packages')
-      .select('quantity_granted, quantity_consumed, quantity_expired, created_at, students(first_name, last_name, email)')
+    // See exportKunderLektionssaldo above for why student_package_assignments
+    // (not student_packages) is the correct source for actual usage.
+    const { data } = await supabase.from('student_package_assignments')
+      .select('package_quantity, lessons_used, created_at, students(first_name, last_name, email)')
       .eq('status', 'active')
       .lt('created_at', cutoff)
       .order('created_at', { ascending: true }).limit(1000);
     return (data ?? [])
       .map((r: Record<string, unknown>) => {
-        const granted  = (r['quantity_granted']  as number) ?? 0;
-        const consumed = (r['quantity_consumed'] as number) ?? 0;
-        const expired  = (r['quantity_expired']  as number) ?? 0;
-        return { r, remaining: granted - consumed - expired };
+        const granted  = (r['package_quantity'] as number) ?? 0;
+        const consumed = (r['lessons_used']      as number) ?? 0;
+        return { r, remaining: granted - consumed };
       })
       .filter(({ remaining }) => remaining > 0)
       .map(({ r, remaining }) => {
@@ -635,7 +627,7 @@ export function GrundrapporterPage() {
           'Elev':              s ? `${s['first_name'] ?? ''} ${s['last_name'] ?? ''}`.trim() : '',
           'E-post':            s?.['email'] ?? '',
           'Återstående lekt.': remaining,
-          'Totalt lekt.':      r['quantity_granted'],
+          'Totalt lekt.':      r['package_quantity'],
           'Paket skapades':    dateFmt(r['created_at'] as string),
         };
       }) as Record<string, unknown>[];
@@ -674,38 +666,40 @@ export function GrundrapporterPage() {
   })();
 
   const exportForlustFordran = () => void runExport(async () => {
-    const { data } = await supabase.from('invoices')
-      .select('invoice_number, total_amount, currency, voided_at, void_reason, students(first_name, last_name)')
+    const { data, error } = await supabase.from('invoices')
+      .select('invoice_number, total_amount, currency, void_at, void_reason, students(first_name, last_name)')
       .eq('status', 'void')
-      .gte('voided_at', forl_from).lte('voided_at', forl_to + 'T23:59:59')
-      .order('voided_at', { ascending: false }).limit(1000);
+      .gte('void_at', forl_from).lte('void_at', forl_to + 'T23:59:59')
+      .order('void_at', { ascending: false }).limit(1000);
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
       const s = r['students'] as Record<string, unknown> | null;
       return {
         'Fakturanr':   r['invoice_number'] ?? '',
         'Elev':        s ? `${s['first_name'] ?? ''} ${s['last_name'] ?? ''}`.trim() : 'Gästköp',
         'Belopp (kr)': cur(r['total_amount'] as number),
-        'Makulerades': dateFmt(r['voided_at'] as string),
+        'Makulerades': dateFmt(r['void_at'] as string),
         'Orsak':       r['void_reason'] ?? '',
       };
     }) as Record<string, unknown>[];
   }, `forlust_fordran_${forl_from}_${forl_to}`);
 
   const exportPaketforsaljning = () => void runExport(async () => {
-    const { data } = await supabase.from('student_packages')
-      .select('quantity_granted, quantity_consumed, quantity_expired, price_paid, status, created_at, students(first_name, last_name)')
+    // See exportKunderLektionssaldo above for why student_package_assignments
+    // (not student_packages) is the correct source for actual usage.
+    const { data } = await supabase.from('student_package_assignments')
+      .select('package_quantity, lessons_used, final_price_incl_vat, status, created_at, students(first_name, last_name)')
       .gte('created_at', pak_from).lte('created_at', pak_to + 'T23:59:59')
       .order('created_at', { ascending: false }).limit(2000);
     return (data ?? []).map((r: Record<string, unknown>) => {
-      const granted  = (r['quantity_granted']  as number) ?? 0;
-      const consumed = (r['quantity_consumed'] as number) ?? 0;
-      const expired  = (r['quantity_expired']  as number) ?? 0;
+      const granted  = (r['package_quantity'] as number) ?? 0;
+      const consumed = (r['lessons_used']      as number) ?? 0;
       const s = r['students'] as Record<string, unknown> | null;
       return {
         'Elev':              s ? `${s['first_name'] ?? ''} ${s['last_name'] ?? ''}`.trim() : '',
         'Totalt lekt.':      granted,
-        'Återstående lekt.': granted - consumed - expired,
-        'Betalt (kr)':       cur(r['price_paid'] as number),
+        'Återstående lekt.': granted - consumed,
+        'Betalt (kr)':       cur(r['final_price_incl_vat'] as number),
         'Status':            r['status'] ?? '',
         'Skapad':            dateFmt(r['created_at'] as string),
       };
@@ -715,15 +709,14 @@ export function GrundrapporterPage() {
   const exportPaketforsaljningPdf = () => void (async () => {
     toast({ title: 'Förbereder PDF…' });
     try {
-      const { data } = await supabase.from('student_packages')
-        .select('quantity_granted, quantity_consumed, quantity_expired, price_paid, students(first_name, last_name)')
+      const { data } = await supabase.from('student_package_assignments')
+        .select('package_quantity, lessons_used, final_price_incl_vat, students(first_name, last_name)')
         .gte('created_at', pak_from).lte('created_at', pak_to + 'T23:59:59').limit(500);
       const rows = (data ?? []).map((r: Record<string, unknown>) => {
-        const granted  = (r['quantity_granted']  as number) ?? 0;
-        const consumed = (r['quantity_consumed'] as number) ?? 0;
-        const expired  = (r['quantity_expired']  as number) ?? 0;
+        const granted  = (r['package_quantity'] as number) ?? 0;
+        const consumed = (r['lessons_used']      as number) ?? 0;
         const s = r['students'] as Record<string, unknown> | null;
-        return [`${s?.['first_name'] ?? ''} ${s?.['last_name'] ?? ''}`.trim(), granted, granted - consumed - expired, cur(r['price_paid'] as number)];
+        return [`${s?.['first_name'] ?? ''} ${s?.['last_name'] ?? ''}`.trim(), granted, granted - consumed, cur(r['final_price_incl_vat'] as number)];
       });
       printReport(`Paketförsäljningsöversikt ${pak_from} – ${pak_to}`, ['Elev', 'Totalt', 'Kvar', 'Betalt (kr)'], rows);
     } catch { toast({ title: 'Export misslyckades', variant: 'destructive' }); }
@@ -753,18 +746,19 @@ export function GrundrapporterPage() {
   }, `personliga_aktiviteter_${pers_from}_${pers_to}`);
 
   const exportRaderadeForsal = () => void runExport(async () => {
-    const { data } = await supabase.from('invoices')
-      .select('invoice_number, total_amount, voided_at, void_reason, students(first_name, last_name)')
+    const { data, error } = await supabase.from('invoices')
+      .select('invoice_number, total_amount, void_at, void_reason, students(first_name, last_name)')
       .eq('status', 'void')
-      .gte('voided_at', rad_from).lte('voided_at', rad_to + 'T23:59:59')
-      .order('voided_at', { ascending: false }).limit(1000);
+      .gte('void_at', rad_from).lte('void_at', rad_to + 'T23:59:59')
+      .order('void_at', { ascending: false }).limit(1000);
+    if (error) throw error;
     return (data ?? []).map((r: Record<string, unknown>) => {
       const s = r['students'] as Record<string, unknown> | null;
       return {
         'Fakturanr':   r['invoice_number'] ?? '',
         'Elev':        s ? `${s['first_name'] ?? ''} ${s['last_name'] ?? ''}`.trim() : 'Gästköp',
         'Belopp (kr)': cur(r['total_amount'] as number),
-        'Makulerades': dateFmt(r['voided_at'] as string),
+        'Makulerades': dateFmt(r['void_at'] as string),
         'Orsak':       r['void_reason'] ?? '',
       };
     }) as Record<string, unknown>[];

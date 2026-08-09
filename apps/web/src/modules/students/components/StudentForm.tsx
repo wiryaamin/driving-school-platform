@@ -22,8 +22,15 @@ import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js'
 import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { useFeatureAccess } from '@core/rbac/SubscriptionGate.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+
+// Radix's <Select.Item> forbids an empty-string value (it's reserved to mean
+// "cleared, show placeholder"), so the "no company" option needs a non-empty
+// sentinel here — form state itself still stores '' for "no company", exactly
+// as before, this sentinel never leaves the Select's onValueChange/value pair.
+const NO_COMPANY_VALUE = '__none__';
 
 const PERMIT_GROUP_OPTIONS = [
   { value: 'B',   label: 'Behörighet B' },
@@ -245,7 +252,25 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
           if (d.address_line1) form.setValue('address_line1', d.address_line1);
           if (d.postal_code)   form.setValue('postal_code', d.postal_code);
           if (d.city)          form.setValue('city', d.city);
-          toast({ title: 'Uppgifter hämtade', description: 'Granska informationen innan du sparar.' });
+
+          // Emigrated/protected-identity records are still "found," but the
+          // receptionist must know before trusting the (possibly stale or
+          // deliberately withheld) address data enough to confirm it.
+          if (d.emigrated) {
+            toast({
+              title:       'Personen är folkbokförd utomlands',
+              description: 'Adressuppgifter kan vara inaktuella — kontrollera innan du sparar.',
+              variant:     'destructive',
+            });
+          } else if (d.protected_identity) {
+            toast({
+              title:       'Skyddad identitet',
+              description: 'Adressuppgifter visas inte. Hantera enligt skolans rutiner för skyddad identitet.',
+              variant:     'destructive',
+            });
+          } else {
+            toast({ title: 'Uppgifter hämtade', description: 'Granska informationen innan du sparar.' });
+          }
         } else if (result.status === 'not_found') {
           toast({
             title:       'Ingen information hittades',
@@ -269,7 +294,8 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
 
   const { data: instructorsData } = useInstructorList({ per_page: 100 }, { enabled: open });
   const instructors = instructorsData?.data ?? [];
-  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: open });
+  const hasCorporateAccess = useFeatureAccess('corporate:customers:manage');
+  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: open && hasCorporateAccess });
   const companies = corporateData?.data ?? [];
 
   useEffect(() => {
@@ -535,14 +561,17 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Anslut till företag</FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value ?? ''}>
+                            <Select
+                              onValueChange={(v) => field.onChange(v === NO_COMPANY_VALUE ? '' : v)}
+                              value={field.value || NO_COMPANY_VALUE}
+                            >
                               <FormControl>
                                 <SelectTrigger>
                                   <SelectValue placeholder="- Inget företag -" />
                                 </SelectTrigger>
                               </FormControl>
                               <SelectContent>
-                                <SelectItem value="">- Inget företag -</SelectItem>
+                                <SelectItem value={NO_COMPANY_VALUE}>- Inget företag -</SelectItem>
                                 {companies.map((c) => (
                                   <SelectItem key={c.id} value={c.id}>
                                     {c.company_name}

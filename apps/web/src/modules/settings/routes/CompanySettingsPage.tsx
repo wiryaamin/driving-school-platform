@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight, Upload } from 'lucide-react';
+import { Building2, ChevronRight } from 'lucide-react';
 import {
   Button, Skeleton,
   Card, CardContent, CardHeader, CardTitle, CardFooter,
-  Input, Label,
+  Input, Label, Switch,
   toast,
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
@@ -29,8 +29,8 @@ interface OrgSettings {
   customer_email?:   string;
   customer_phone?:   string;
   swish_number?:     string;
-  nets_secret_key?:  string;
-  nets_checkout_key?: string;
+  public_catalog_enabled?: boolean;
+  public_booking_enabled?: boolean;
   instagram?:        string;
   facebook?:         string;
   tiktok?:           string;
@@ -43,6 +43,7 @@ interface OrgRow {
   legal_name: string;
   org_number: string | null;
   vat_number: string | null;
+  slug:       string | null;
   settings:   OrgSettings;
 }
 
@@ -54,8 +55,8 @@ type FormFields = {
   postal_address: string; postal_zip: string; postal_city: string;
   visit_address: string; visit_zip: string; visit_city: string;
   swish_number: string;
-  nets_secret_key: string; nets_checkout_key: string;
   instagram: string; facebook: string; tiktok: string; youtube: string;
+  public_catalog_enabled: boolean; public_booking_enabled: boolean;
 };
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -64,8 +65,8 @@ function validateBasic(f: FormFields): Record<string, string> {
   const e: Record<string, string> = {};
   if (f.org_number && !/^\d{6}-\d{4}$/.test(f.org_number))
     e['org_number'] = 'Ogiltigt format. Ange organisationsnumret som XXXXXX-XXXX.';
-  if (f.vat_number && !/^SE\d{10}$/.test(f.vat_number))
-    e['vat_number'] = 'Ogiltigt format. Ange momsregistreringsnumret som SE + 10 siffror.';
+  if (f.vat_number && !/^SE\d{12}$/.test(f.vat_number))
+    e['vat_number'] = 'Ogiltigt format. Ange momsregistreringsnumret som SE + 12 siffror.';
   return e;
 }
 
@@ -102,7 +103,7 @@ export function CompanySettingsPage() {
       if (!orgId) return null;
       const { data } = await supabase
         .from('organizations')
-        .select('id, name, legal_name, org_number, vat_number, settings')
+        .select('id, name, legal_name, org_number, vat_number, slug, settings')
         .eq('id', orgId)
         .single();
       return data as OrgRow | null;
@@ -118,8 +119,9 @@ export function CompanySettingsPage() {
     customer_email: '', customer_phone: '',
     postal_address: '', postal_zip: '', postal_city: '',
     visit_address: '', visit_zip: '', visit_city: '',
-    swish_number: '', nets_secret_key: '', nets_checkout_key: '',
+    swish_number: '',
     instagram: '', facebook: '', tiktok: '', youtube: '',
+    public_catalog_enabled: true, public_booking_enabled: true,
   });
 
   const [basicErrors,   setBasicErrors]   = useState<Record<string, string>>({});
@@ -149,8 +151,8 @@ export function CompanySettingsPage() {
       visit_zip:         s.visit_zip ?? '',
       visit_city:        s.visit_city ?? '',
       swish_number:      s.swish_number ?? '',
-      nets_secret_key:   s.nets_secret_key ?? '',
-      nets_checkout_key: s.nets_checkout_key ?? '',
+      public_catalog_enabled: s.public_catalog_enabled ?? true,
+      public_booking_enabled: s.public_booking_enabled ?? true,
       instagram:         s.instagram ?? '',
       facebook:          s.facebook ?? '',
       tiktok:            s.tiktok ?? '',
@@ -158,7 +160,9 @@ export function CompanySettingsPage() {
     });
   }, [org]);
 
-  function field(key: keyof FormFields) {
+  type StringFieldKey = { [K in keyof FormFields]: FormFields[K] extends string ? K : never }[keyof FormFields];
+
+  function field(key: StringFieldKey) {
     return {
       value:    form[key],
       onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -286,22 +290,84 @@ export function CompanySettingsPage() {
     onError: () => toast({ title: 'Kunde inte spara Stripe-uppgifter — kontrollera nyckeln', variant: 'destructive' }),
   });
 
-  const updatePaymentGateways = useMutation({
+  // Nets credentials — same pattern as Stripe above: server-side, encrypted,
+  // write-only from the client's perspective, saved through the dedicated
+  // nets-credentials function rather than a direct table write.
+  interface NetsCredentialStatus {
+    nets_secret_key_configured:   boolean;
+    nets_secret_key_masked:       string | null;
+    nets_checkout_key_configured: boolean;
+    nets_checkout_key_masked:     string | null;
+  }
+
+  const { data: netsStatus, isLoading: netsStatusLoading } = useQuery<NetsCredentialStatus | null>({
+    queryKey: ['nets-credentials-status', orgId],
+    queryFn: async () => {
+      if (!orgId) return null;
+      const { data, error } = await supabase.functions.invoke<{ data: NetsCredentialStatus }>(
+        'nets-credentials', { method: 'GET' },
+      );
+      if (error) return null;
+      return data?.data ?? null;
+    },
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
+  const [netsKeyInput,      setNetsKeyInput]      = useState('');
+  const [netsCheckoutInput, setNetsCheckoutInput]  = useState('');
+
+  const saveNetsCredentials = useMutation({
+    mutationFn: async (fields: { nets_secret_key?: string; nets_checkout_key?: string }) => {
+      const { error, data } = await supabase.functions.invoke<{ data: NetsCredentialStatus }>(
+        'nets-credentials', { method: 'POST', body: fields },
+      );
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['nets-credentials-status', orgId] });
+      setNetsKeyInput('');
+      setNetsCheckoutInput('');
+      toast({ title: 'Nets-uppgifter sparades' });
+    },
+    onError: () => toast({ title: 'Kunde inte spara Nets-uppgifter', variant: 'destructive' }),
+  });
+
+  const updatePublicVisibility = useMutation({
+    mutationFn: async (next: { public_catalog_enabled: boolean; public_booking_enabled: boolean }) => {
+      if (!orgId) return;
+      const cur = (org?.settings ?? {}) as OrgSettings;
+      await supabase.from('organizations').update({
+        settings: {
+          ...cur,
+          public_catalog_enabled: next.public_catalog_enabled,
+          public_booking_enabled: next.public_booking_enabled,
+        },
+      } as never).eq('id', orgId);
+      setForm(prev => ({ ...prev, ...next }));
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: 'Synlighet på webben sparades' });
+    },
+    onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
+  });
+
+  const updateSwish = useMutation({
     mutationFn: async () => {
       if (!orgId) return;
       const cur = (org?.settings ?? {}) as OrgSettings;
       await supabase.from('organizations').update({
         settings: {
           ...cur,
-          swish_number:      form.swish_number      || undefined,
-          nets_secret_key:   form.nets_secret_key   || undefined,
-          nets_checkout_key: form.nets_checkout_key || undefined,
+          swish_number: form.swish_number || undefined,
         },
       } as never).eq('id', orgId);
     },
     onSuccess: () => {
       invalidate();
-      toast({ title: 'Betallösningar sparades' });
+      toast({ title: 'Swish-nummer sparades' });
     },
     onError: () => toast({ title: 'Fel vid sparning', variant: 'destructive' }),
   });
@@ -396,7 +462,7 @@ export function CompanySettingsPage() {
             <Field id="customer_phone" label="Skolans telefonnummer" placeholder="070-XXX XX XX" {...field('customer_phone')} />
           </div>
           <div className="grid grid-cols-3 gap-4">
-            <Field id="contact_person" label="Er kontaktperson" placeholder="Namn" {...field('contact_person')} />
+            <Field id="contact_person" label="Er kontaktperson (endast referens)" placeholder="Namn" {...field('contact_person')} />
             <Field
               id="contact_email" label="E-post (kontaktperson)" placeholder="kontakt@foretag.se"
               type="email" error={contactErrors['contact_email']} {...field('contact_email')}
@@ -409,7 +475,7 @@ export function CompanySettingsPage() {
         <div className="px-6 pb-4 space-y-3 border-t border-border pt-4">
           <div>
             <p className="text-sm font-medium text-foreground">Postadress</p>
-            <p className="text-xs text-muted-foreground">Syns på utbildningskortet och faktura</p>
+            <p className="text-xs text-muted-foreground">Inte implementerat ännu — visas för närvarande inte på utbildningskortet eller fakturan.</p>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <Field id="postal_address" label="Adress" placeholder="Gatuadress" {...field('postal_address')} />
@@ -422,7 +488,7 @@ export function CompanySettingsPage() {
         <div className="px-6 pb-4 space-y-3 border-t border-border pt-4">
           <div>
             <p className="text-sm font-medium text-foreground">Besöksadress</p>
-            <p className="text-xs text-muted-foreground">Synlig på TABSwebb</p>
+            <p className="text-xs text-muted-foreground">Inte implementerat ännu — det finns ingen TABSwebb-integration i plattformen som visar denna adress.</p>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <Field id="visit_address" label="Adress" placeholder="Gatuadress" {...field('visit_address')} />
@@ -436,6 +502,61 @@ export function CompanySettingsPage() {
             {updateContact.isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </CardFooter>
+      </Card>
+
+      {/* Public website presence */}
+      <Card>
+        <CardHeader className="pb-0 px-6 pt-6">
+          <CardTitle className="text-sm font-semibold">Publik webbnärvaro</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Styr om skolans publika sidor är tillgängliga för besökare på webben.
+          </p>
+        </CardHeader>
+        <CardContent className="p-6 space-y-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">Kurskatalog &amp; anmälan</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Paket, priser och anmälningsformulär —{' '}
+                <span className="font-mono text-[11px] bg-muted px-1 py-px rounded">
+                  {(import.meta.env.VITE_APP_URL as string | undefined) ?? ''}/catalog/{orgId ?? ''}
+                </span>
+              </p>
+            </div>
+            <Switch
+              checked={form.public_catalog_enabled}
+              onCheckedChange={(checked) =>
+                updatePublicVisibility.mutate({
+                  public_catalog_enabled: checked,
+                  public_booking_enabled: form.public_booking_enabled,
+                })
+              }
+              disabled={updatePublicVisibility.isPending}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">Kontaktformulär</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Enkelt intresseformulär utan katalog —{' '}
+                <span className="font-mono text-[11px] bg-muted px-1 py-px rounded">
+                  {(import.meta.env.VITE_APP_URL as string | undefined) ?? ''}/book?org={org?.slug ?? ''}
+                </span>
+              </p>
+            </div>
+            <Switch
+              checked={form.public_booking_enabled}
+              onCheckedChange={(checked) =>
+                updatePublicVisibility.mutate({
+                  public_catalog_enabled: form.public_catalog_enabled,
+                  public_booking_enabled: checked,
+                })
+              }
+              disabled={updatePublicVisibility.isPending}
+            />
+          </div>
+        </CardContent>
       </Card>
 
       {/* Payment gateways */}
@@ -540,29 +661,84 @@ export function CompanySettingsPage() {
           </div>
 
           {/* Nets */}
-          <div className="space-y-2 pt-4 border-t border-border">
+          <div className="space-y-3 pt-4 border-t border-border">
             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Nets</p>
-            <div className="grid grid-cols-2 gap-3">
-              <Field id="nets_secret_key" label="Nets Secret Key" placeholder="Nets Secret Key" {...field('nets_secret_key')} />
-              <Field id="nets_checkout_key" label="Nets Checkout Key" placeholder="Nets Checkout Key" {...field('nets_checkout_key')} />
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              Ingen kortbetalning via Nets är kopplad till kassan ännu — uppgifterna nedan sparas säkert
+              för framtida bruk men används inte i utcheckningsflödet i denna version.
+            </p>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="nets_secret_key_input">Nets Secret Key</Label>
+              <p className="text-[11px] text-muted-foreground">
+                {netsStatusLoading ? 'Kontrollerar status…'
+                  : netsStatus?.nets_secret_key_configured
+                    ? netsStatus.nets_secret_key_masked
+                      ? <>Konfigurerad: <span className="font-mono">{netsStatus.nets_secret_key_masked}</span></>
+                      : 'Konfigurerad'
+                    : 'Inte konfigurerad'}
+                {' '}— värdet visas aldrig igen efter att det sparats; ange ett nytt för att ersätta det.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  id="nets_secret_key_input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={netsKeyInput}
+                  onChange={e => setNetsKeyInput(e.target.value)}
+                  placeholder="Nets Secret Key"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!netsKeyInput.trim() || saveNetsCredentials.isPending}
+                  onClick={() => saveNetsCredentials.mutate({ nets_secret_key: netsKeyInput.trim() })}
+                >
+                  {saveNetsCredentials.isPending ? 'Sparar…' : 'Spara'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="nets_checkout_key_input">Nets Checkout Key</Label>
+              <p className="text-[11px] text-muted-foreground">
+                {netsStatusLoading ? 'Kontrollerar status…'
+                  : netsStatus?.nets_checkout_key_configured
+                    ? netsStatus.nets_checkout_key_masked
+                      ? <>Konfigurerad: <span className="font-mono">{netsStatus.nets_checkout_key_masked}</span></>
+                      : 'Konfigurerad'
+                    : 'Inte konfigurerad'}
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  id="nets_checkout_key_input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={netsCheckoutInput}
+                  onChange={e => setNetsCheckoutInput(e.target.value)}
+                  placeholder="Nets Checkout Key"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!netsCheckoutInput.trim() || saveNetsCredentials.isPending}
+                  onClick={() => saveNetsCredentials.mutate({ nets_checkout_key: netsCheckoutInput.trim() })}
+                >
+                  {saveNetsCredentials.isPending ? 'Sparar…' : 'Spara'}
+                </Button>
+              </div>
             </div>
           </div>
 
-          {/* Apple Pay */}
-          <div className="pt-4 border-t border-border space-y-3">
+          {/* Apple Pay — domain verification upload not yet implemented; do not present a live control */}
+          <div className="pt-4 border-t border-border space-y-2">
             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Apple Pay (via Nets)</p>
-            <label className="inline-flex cursor-pointer">
-              <span className="inline-flex items-center gap-2 h-9 px-3 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-                <Upload className="w-4 h-4" strokeWidth={2} aria-hidden="true" />
-                Ladda upp Apple Domain Verification-filen
-              </span>
-              <input type="file" className="sr-only" accept=".txt,.json" />
-            </label>
+            <p className="text-xs text-muted-foreground">Kommer i en framtida version.</p>
           </div>
         </CardContent>
         <CardFooter className="justify-end px-6 pb-6 pt-0">
-          <Button size="sm" onClick={() => updatePaymentGateways.mutate()} disabled={updatePaymentGateways.isPending}>
-            {updatePaymentGateways.isPending ? 'Sparar…' : 'Spara'}
+          <Button size="sm" onClick={() => updateSwish.mutate()} disabled={updateSwish.isPending}>
+            {updateSwish.isPending ? 'Sparar…' : 'Spara Swish-nummer'}
           </Button>
         </CardFooter>
       </Card>
@@ -571,6 +747,9 @@ export function CompanySettingsPage() {
       <Card>
         <CardHeader className="pb-0 px-6 pt-6">
           <CardTitle className="text-sm font-semibold">Sociala medier</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Sparas som referens — det finns ingen publik webbplats i plattformen ännu som visar dessa länkar.
+          </p>
         </CardHeader>
         <CardContent className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -620,3 +799,4 @@ function Field({
     </div>
   );
 }
+

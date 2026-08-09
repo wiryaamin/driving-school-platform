@@ -3,29 +3,44 @@ import { Search, UserCheck } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Button, Input, ScrollArea, Skeleton, Separator,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Label,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
 import type { LessonSlot } from '@platform/types';
 import type { Student } from '@modules/students/hooks/useStudents.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import { useCreateBooking } from '../hooks/useSchedulingMutations.js';
+import { useLessonTypes } from '../hooks/useLessonTypes.js';
 import { formatSlotDate, formatSlotTime, formatCapacity, isSlotFull } from '../lib/calendarUtils.js';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface BookingDialogProps {
-  open:         boolean;
-  onOpenChange: (open: boolean) => void;
-  slot:         LessonSlot | null;
-  onSuccess?:   () => void;
+  open:            boolean;
+  onOpenChange:    (open: boolean) => void;
+  slot:            LessonSlot | null;
+  onSuccess?:      () => void;
+  // "Hitta matchande elever" from the empty-slot command card — pre-filters
+  // the search to students training for this licence category, instead of
+  // the full student list.
+  matchCategory?:  string | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDialogProps) {
+export function BookingDialog({ open, onOpenChange, slot, onSuccess, matchCategory }: BookingDialogProps) {
   const [search, setSearch]               = useState('');
   const [debouncedSearch, setDebounced]   = useState('');
   const [selectedStudent, setSelected]    = useState<Student | null>(null);
+  const [matchOnly, setMatchOnly]         = useState(!!matchCategory);
+  const [lessonTypeId, setLessonTypeId]   = useState('');
+
+  // Generic availability slot — no lesson type bound at creation, one must be
+  // chosen at booking time (auto-generated instructor working-hours slots).
+  const needsLessonType = !!slot && slot.lesson_type_id == null;
+
+  const { data: lessonTypes, isLoading: lessonTypesLoading } = useLessonTypes({ enabled: open && needsLessonType });
 
   // Debounce search
   useEffect(() => {
@@ -39,11 +54,18 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
       setSearch('');
       setDebounced('');
       setSelected(null);
+      setLessonTypeId('');
+    } else {
+      setMatchOnly(!!matchCategory);
     }
-  }, [open]);
+  }, [open, matchCategory]);
 
   const { data: studentsData, isLoading: studentsLoading } = useStudentList(
-    { per_page: 50, ...(debouncedSearch ? { search: debouncedSearch } : {}) },
+    {
+      per_page: 50,
+      ...(debouncedSearch ? { search: debouncedSearch } : {}),
+      ...(matchOnly && matchCategory ? { licence_category: matchCategory } : {}),
+    },
     { enabled: open },
   );
 
@@ -58,14 +80,24 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
     onOpenChange(false);
   }
 
-  function handleConfirm() {
+  function handleConfirm(status?: 'confirmed' | 'reserved') {
     if (!slot || !selectedStudent) return;
+    if (needsLessonType && !lessonTypeId) return;
 
     createBooking.mutate(
-      { slot_id: slot.id, student_id: selectedStudent.id },
+      {
+        slot_id: slot.id,
+        student_id: selectedStudent.id,
+        ...(status ? { status } : {}),
+        ...(needsLessonType ? { lesson_type_id: lessonTypeId } : {}),
+      },
       {
         onSuccess: () => {
-          toast({ title: 'Lektion bokad', description: `${selectedStudent.first_name} ${selectedStudent.last_name} har bokats in.` });
+          toast(
+            status === 'reserved'
+              ? { title: 'Plats reserverad', description: `Reserverad åt ${selectedStudent.first_name} ${selectedStudent.last_name} i ca 30 min.` }
+              : { title: 'Lektion bokad', description: `${selectedStudent.first_name} ${selectedStudent.last_name} har bokats in.` }
+          );
           handleClose();
           onSuccess?.();
         },
@@ -107,6 +139,25 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
           </p>
         )}
 
+        {needsLessonType && (
+          <div className="space-y-1.5">
+            <Label>Lektionstyp *</Label>
+            <Select value={lessonTypeId} onValueChange={setLessonTypeId} disabled={isFull || lessonTypesLoading}>
+              <SelectTrigger>
+                <SelectValue placeholder={lessonTypesLoading ? 'Laddar...' : 'Välj lektionstyp...'} />
+              </SelectTrigger>
+              <SelectContent>
+                {(lessonTypes ?? []).map((lt) => (
+                  <SelectItem key={lt.id} value={lt.id}>{lt.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Detta pass har ingen förvald lektionstyp — ange vilken typ av lektion som bokas.
+            </p>
+          </div>
+        )}
+
         <Separator />
 
         <div className="space-y-3">
@@ -121,6 +172,18 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
               autoFocus
             />
           </div>
+
+          {matchCategory && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={matchOnly}
+                onChange={(e) => setMatchOnly(e.target.checked)}
+                className="w-3.5 h-3.5 accent-primary"
+              />
+              Visa endast elever som tränar för behörighet {matchCategory}
+            </label>
+          )}
 
           <ScrollArea className="h-44 sm:h-52 rounded-md border">
             {studentsLoading ? (
@@ -178,8 +241,16 @@ export function BookingDialog({ open, onOpenChange, slot, onSuccess }: BookingDi
             Avbryt
           </Button>
           <Button
-            onClick={handleConfirm}
-            disabled={isPending || !selectedStudent || isFull}
+            variant="outline"
+            onClick={() => handleConfirm('reserved')}
+            disabled={isPending || !selectedStudent || isFull || (needsLessonType && !lessonTypeId)}
+            title="Håller platsen i ca 30 minuter utan att slutgiltigt boka"
+          >
+            {isPending ? 'Reserverar...' : 'Reservera'}
+          </Button>
+          <Button
+            onClick={() => handleConfirm('confirmed')}
+            disabled={isPending || !selectedStudent || isFull || (needsLessonType && !lessonTypeId)}
           >
             {isPending ? 'Bokar...' : 'Boka lektion'}
           </Button>

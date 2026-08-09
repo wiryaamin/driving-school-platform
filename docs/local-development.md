@@ -95,6 +95,23 @@ psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
   -f supabase/seed/demo_continuity.sql
 ```
 
+### Other files in `supabase/seed/`
+
+`supabase/seed/` has more files than the two above — none of them declare which one supersedes another, so this is a factual list of what each does, not a recommendation of which to run. Pick based on what you actually need; running more than one of the overlapping "demo data" scripts may double-seed data.
+
+| File | Purpose (from its own header comment) |
+|---|---|
+| `bootstrap_platform_admin.sql` | Creates the first platform superadmin (separate from `bootstrap_org_admin.sql`, which creates a tenant admin) |
+| `demo_full_data.sql` | Realistic Swedish driving school data for UI testing — overlaps in purpose with `demo_data.sql`/`demo_sprint_1_10.sql` below |
+| `demo_sprint_1_10.sql` | "Sprint 1–10 Comprehensive Operational Data" — also overlaps with the above; requires all migrations applied first |
+| `demo_schedule.sql` | 4 instructors + one week of lesson slots, for a quick visual check of the booking calendar |
+| `demo_schedule_slots.sql` | Denser slot generation — current week + next 3 weeks, all active instructors |
+| `seed_demo_slots_now.sql` | Quick slot seed for the coming week, assumes an org + instructors already exist |
+| `seed_lesson_types.sql` | The full Swedish lesson-type catalogue (Riskutbildning, etc.) — likely needed regardless of which demo-data script above you use |
+| `quiz_questions.sql` | Driving theory quiz questions (system-wide, not org-scoped) — run via Dashboard SQL Editor per its own header, not `psql` |
+
+**Not resolved by this sprint:** which of `demo_data.sql` / `demo_full_data.sql` / `demo_sprint_1_10.sql` (and separately, `demo_schedule.sql` / `demo_schedule_slots.sql` / `seed_demo_slots_now.sql`) is the one to actually use going forward. This is a real product decision, not a documentation gap this document can resolve on its own — flagged in `docs/DOCUMENTATION_AND_REPOSITORY_READINESS.md` for a human to prune or consolidate.
+
 ---
 
 ## Platform Admin Bootstrap

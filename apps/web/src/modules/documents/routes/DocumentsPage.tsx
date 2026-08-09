@@ -1,13 +1,17 @@
-import { useState, useRef } from 'react';
-import { FileText, Upload, Trash2, Download, Loader2, Search, Eye, User } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { FileText, Upload, Trash2, Download, Loader2, Search, Eye, User, Check, X, UserCheck } from 'lucide-react';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
-import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, toast } from '@platform/ui';
+import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, toast, Textarea, ScrollArea, Skeleton } from '@platform/ui';
+import { useStudentList } from '@modules/students/hooks/useStudents.js';
+import type { Student } from '@modules/students/hooks/useStudents.js';
 import {
   useDocumentList,
   useDocumentUpload,
   useDocumentDelete,
   useDocumentDownloadUrl,
+  useApproveDocument,
+  useRejectDocument,
   CATEGORY_LABELS,
   STATUS_LABELS,
   type DocumentCategory,
@@ -53,13 +57,32 @@ interface UploadDialogProps {
 function UploadDialog({ open, onClose }: UploadDialogProps) {
   const upload = useDocumentUpload();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [studentId, setStudentId] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [category, setCategory] = useState<DocumentCategory>('other');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState<File | null>(null);
 
+  // Was previously a raw "Elev-ID — UUID för eleven" text field, unusable by
+  // a non-technical staff member without going around it via the student's
+  // own detail page instead (Business Workflow Execution Audit, 2026-08-07).
+  // Mirrors the same searchable picker already proven in BookingDialog.tsx.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: studentsData, isLoading: studentsLoading } = useStudentList(
+    { per_page: 50, ...(debouncedSearch ? { search: debouncedSearch } : {}) },
+    { enabled: open },
+  );
+  const students = studentsData?.data ?? [];
+
   function reset() {
-    setStudentId('');
+    setSearch('');
+    setDebouncedSearch('');
+    setSelectedStudent(null);
     setCategory('other');
     setDescription('');
     setFile(null);
@@ -67,13 +90,13 @@ function UploadDialog({ open, onClose }: UploadDialogProps) {
   }
 
   async function handleSubmit() {
-    if (!file || !studentId.trim()) {
-      toast({ title: 'Fyll i elev-ID och välj en fil', variant: 'destructive' });
+    if (!file || !selectedStudent) {
+      toast({ title: 'Välj en elev och en fil', variant: 'destructive' });
       return;
     }
     try {
       await upload.mutateAsync({
-        student_id: studentId.trim(),
+        student_id: selectedStudent.id,
         category,
         file,
         ...(description ? { description } : {}),
@@ -94,13 +117,59 @@ function UploadDialog({ open, onClose }: UploadDialogProps) {
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-foreground">Elev-ID *</label>
-            <input
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="UUID för eleven"
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-            />
+            <label className="mb-1 block text-sm font-medium text-foreground">Elev *</label>
+            {selectedStudent ? (
+              <div className="flex items-center justify-between rounded-md border border-input bg-accent/40 px-3 py-2 text-sm">
+                <span className="flex items-center gap-1.5 font-medium text-foreground">
+                  <UserCheck className="w-3.5 h-3.5 shrink-0 text-primary" />
+                  {selectedStudent.first_name} {selectedStudent.last_name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedStudent(null)}
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Byt
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                  <input
+                    className="w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder="Sök elev..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <ScrollArea className="mt-2 h-36 rounded-md border">
+                  {studentsLoading ? (
+                    <div className="p-3 space-y-2">
+                      {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full rounded" />)}
+                    </div>
+                  ) : students.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-sm text-muted-foreground py-6">
+                      Inga elever hittades
+                    </div>
+                  ) : (
+                    <div className="p-1">
+                      {students.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSelectedStudent(s)}
+                          className="w-full text-left px-3 py-2 rounded text-sm hover:bg-accent text-foreground transition-colors"
+                        >
+                          <span className="font-medium">{s.first_name} {s.last_name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
+              </>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-foreground">Kategori</label>
@@ -146,6 +215,58 @@ function UploadDialog({ open, onClose }: UploadDialogProps) {
   );
 }
 
+// ─── Reject dialog ────────────────────────────────────────────────────────────
+
+interface RejectDialogProps {
+  doc:     StudentDocument | null;
+  onClose: () => void;
+}
+
+function RejectDialog({ doc, onClose }: RejectDialogProps) {
+  const rejectDoc = useRejectDocument();
+  const [reason, setReason] = useState('');
+
+  async function handleConfirm() {
+    if (!doc) return;
+    try {
+      await rejectDoc.mutateAsync({ id: doc.id, studentId: doc.student_id, reason });
+      toast({ title: 'Dokument avvisat' });
+      setReason('');
+      onClose();
+    } catch (err) {
+      toast({ title: 'Kunde inte avvisa', description: String(err), variant: 'destructive' });
+    }
+  }
+
+  return (
+    <Dialog open={!!doc} onOpenChange={(v) => { if (!v) { setReason(''); onClose(); } }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Avvisa dokument</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 py-2">
+          <p className="text-sm text-muted-foreground">
+            {doc?.file_name} markeras som avvisad. Ange gärna en anledning så eleven vet vad som behöver åtgärdas.
+          </p>
+          <Textarea
+            placeholder="Anledning (valfritt)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => { setReason(''); onClose(); }}>Avbryt</Button>
+          <Button variant="destructive" disabled={rejectDoc.isPending} onClick={() => void handleConfirm()}>
+            {rejectDoc.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Avvisa dokument
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function DocumentsPage() {
@@ -156,6 +277,9 @@ export function DocumentsPage() {
   const [previewName, setPreviewName] = useState('');
   const getDownloadUrl = useDocumentDownloadUrl();
   const deleteDoc = useDocumentDelete();
+  const approveDoc = useApproveDocument();
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [rejectingDoc, setRejectingDoc] = useState<StudentDocument | null>(null);
   const { data: docs = [], isLoading } = useDocumentList();
 
   const filtered = docs.filter((d) => {
@@ -192,6 +316,18 @@ export function DocumentsPage() {
       a.click();
     } catch {
       toast({ title: 'Kunde inte hämta fil', variant: 'destructive' });
+    }
+  }
+
+  async function handleApprove(doc: StudentDocument) {
+    setReviewingId(doc.id);
+    try {
+      await approveDoc.mutateAsync({ id: doc.id, studentId: doc.student_id });
+      toast({ title: 'Dokument godkänt' });
+    } catch (err) {
+      toast({ title: 'Kunde inte godkänna', description: String(err), variant: 'destructive' });
+    } finally {
+      setReviewingId(null);
     }
   }
 
@@ -294,7 +430,14 @@ export function DocumentsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">{CATEGORY_LABELS[doc.category]}</td>
-                      <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={doc.status} />
+                        {doc.status === 'rejected' && doc.rejection_reason && (
+                          <p className="mt-0.5 max-w-[180px] truncate text-xs text-muted-foreground" title={doc.rejection_reason}>
+                            {doc.rejection_reason}
+                          </p>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground tabular-nums">{formatBytes(doc.file_size_bytes)}</td>
                       <td className="px-4 py-3 text-muted-foreground tabular-nums">{formatDate(doc.created_at)}</td>
                       <td className="px-4 py-3">
@@ -315,6 +458,29 @@ export function DocumentsPage() {
                           >
                             <Download className="h-4 w-4" />
                           </Button>
+                          {doc.status === 'pending_review' && (
+                            <PermissionGate permission="documents:document:update">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title="Godkänn"
+                                disabled={reviewingId === doc.id}
+                                onClick={() => void handleApprove(doc)}
+                              >
+                                {reviewingId === doc.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Check className="h-4 w-4 text-green-600" />}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title="Avvisa"
+                                onClick={() => setRejectingDoc(doc)}
+                              >
+                                <X className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </PermissionGate>
+                          )}
                           <PermissionGate permission="documents:document:delete">
                             <Button
                               variant="ghost"
@@ -342,6 +508,8 @@ export function DocumentsPage() {
       <PermissionGate permission="documents:document:create">
         <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} />
       </PermissionGate>
+
+      <RejectDialog doc={rejectingDoc} onClose={() => setRejectingDoc(null)} />
 
       {/* Image preview modal */}
       <Dialog open={!!previewUrl} onOpenChange={() => setPreviewUrl(null)}>

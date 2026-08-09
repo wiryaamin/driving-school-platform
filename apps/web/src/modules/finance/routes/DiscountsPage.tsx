@@ -1,12 +1,11 @@
 import { useState, useMemo } from 'react';
 import {
   Plus, Loader2, AlertCircle, Tag, Copy, Check, ChevronRight,
-  X, ToggleLeft, Ticket, RefreshCw,
+  ToggleLeft, Ticket, RefreshCw,
 } from 'lucide-react';
 import {
   Button, Input, Label, Textarea, Switch,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-  Sheet, SheetContent,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Badge, Tabs, TabsList, TabsTrigger,
   toast,
@@ -234,8 +233,8 @@ function DiscountDetailSheet({ discount, onClose }: { discount: DiscountDefiniti
 
   return (
     <>
-      <Sheet open={Boolean(discount)} onOpenChange={v => { if (!v) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-lg overflow-y-auto p-0">
+      <Dialog open={Boolean(discount)} onOpenChange={v => { if (!v) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-lg max-h-[85vh] overflow-y-auto p-0">
           {discount && (
             <>
               <div className="sticky top-0 z-10 bg-background border-b px-5 py-4">
@@ -249,9 +248,6 @@ function DiscountDetailSheet({ discount, onClose }: { discount: DiscountDefiniti
                       {formatDiscountValue(discount)} · {SCOPE_LABELS[discount.discount_scope]}
                     </p>
                   </div>
-                  <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors shrink-0">
-                    <X className="w-4 h-4 text-muted-foreground" />
-                  </button>
                 </div>
               </div>
 
@@ -351,8 +347,8 @@ function DiscountDetailSheet({ discount, onClose }: { discount: DiscountDefiniti
               </div>
             </>
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       <AddCouponDialog discount={addCouponOpen ? discount : null} onClose={() => setAddCouponOpen(false)} />
     </>

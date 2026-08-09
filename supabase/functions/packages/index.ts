@@ -40,8 +40,8 @@ function fail(ctx: EdgeRequestContext, status: number, code: string, message: st
 }
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(ctx, 403, 'FORBIDDEN', 'Organisation context is required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(ctx, 403, 'FORBIDDEN', `Requires permission: ${code}`);
   return null;
 }
@@ -112,6 +112,9 @@ async function handleCreateOffering(req: Request, ctx: EdgeRequestContext, clien
     return fail(ctx, 422, 'VALIDATION_ERROR', 'name, lesson_category, quantity, price are required');
   }
 
+  const marketingBadges = Array.isArray(body['marketing_badges']) ? body['marketing_badges'] : [];
+  const featured        = Boolean(body['featured'] ?? false) || marketingBadges.includes('featured');
+
   const { data, error } = await client
     .from('package_offerings')
     .insert({
@@ -124,6 +127,7 @@ async function handleCreateOffering(req: Request, ctx: EdgeRequestContext, clien
       quantity:        Number(quantity),
       bundle_credits:  body['bundle_credits']   ?? [],
       price:           Number(price),
+      compare_at_price: body['compare_at_price'] != null ? Number(body['compare_at_price']) : null,
       currency:        body['currency']         ?? 'SEK',
       vat_rate:        body['vat_rate']         ?? 0.25,
       validity_days:   body['validity_days']    ?? null,
@@ -131,7 +135,9 @@ async function handleCreateOffering(req: Request, ctx: EdgeRequestContext, clien
       metadata:        body['metadata']         ?? {},
       package_code:    body['package_code']     ?? null,
       visibility:      body['visibility']       ?? 'internal',
-      featured:        body['featured']         ?? false,
+      featured,
+      included_items:   Array.isArray(body['included_items']) ? body['included_items'] : [],
+      marketing_badges: marketingBadges,
       internal_notes:  body['internal_notes']   ?? null,
       created_by:      ctx.actorId,
     })
@@ -177,12 +183,20 @@ async function handleUpdateOffering(id: string, req: Request, ctx: EdgeRequestCo
   catch { return fail(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
 
   const allowed = [
-    'name', 'description', 'price', 'vat_rate', 'validity_days', 'sort_order', 'metadata',
-    'package_code', 'visibility', 'featured', 'internal_notes',
+    'name', 'description', 'price', 'compare_at_price', 'vat_rate', 'validity_days', 'sort_order', 'metadata',
+    'package_code', 'visibility', 'featured', 'internal_notes', 'included_items', 'marketing_badges',
   ];
   const patch: Record<string, unknown> = { updated_by: ctx.actorId };
   for (const key of allowed) {
     if (body[key] !== undefined) patch[key] = body[key];
+  }
+  // Keep the legacy `featured` boolean in sync when the form sends the new
+  // badges array — older code paths still read the boolean directly. Only
+  // derives one direction (badges → boolean): a caller sending just
+  // `featured` with no `marketing_badges` is left as a plain boolean update,
+  // never destructively overwriting whatever badges already exist.
+  if (Array.isArray(patch['marketing_badges'])) {
+    patch['featured'] = (patch['marketing_badges'] as unknown[]).includes('featured');
   }
 
   const { data, error } = await client

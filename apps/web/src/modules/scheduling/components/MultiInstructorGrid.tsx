@@ -82,23 +82,30 @@ function slotHeightPx(slot: LessonSlot, hourHeight: number): number {
 
 // ─── Slot colour ──────────────────────────────────────────────────────────────
 
-// green = available (any remaining capacity), orange = full, red = blocked
+// Soft green = free (any remaining capacity), soft purple = booked/full.
+// blocked-by-staff keeps its own distinct solid purple so it doesn't read
+// as a customer booking; cancelled stays muted. Only the free/booked pair
+// was restyled to the Teoricentralen-matched pastel-card palette.
 function slotCls(slot: LessonSlot): string {
   if (slot.status === 'cancelled') {
     return 'bg-muted/50 text-muted-foreground/40 opacity-50';
   }
   if (slot.status === 'blocked') {
-    return 'bg-red-500 hover:bg-red-600 text-white';
+    return 'bg-purple-500 hover:bg-purple-600 text-white';
   }
-  if (
+  if (isBookedSlot(slot)) {
+    return 'bg-[#E8DCFF] border border-[#C7AEFF] text-[#5531A7] hover:bg-[#DECBFF] hover:border-[#B79AFF]';
+  }
+  // Open with any remaining capacity (0 or partial bookings) → free
+  return 'bg-[#DFF4DF] border border-[#B7DDB7] text-[#2F6F36] hover:bg-[#D3EED3] hover:border-[#A2D0A2]';
+}
+
+function isBookedSlot(slot: LessonSlot): boolean {
+  return (
     slot.status === 'full' ||
     slot.status === 'in_progress' ||
     slot.current_bookings >= slot.max_bookings
-  ) {
-    return 'bg-orange-400 hover:bg-orange-500 text-white';
-  }
-  // Open with any remaining capacity (0 or partial bookings) → green
-  return 'bg-green-500 hover:bg-green-600 text-white';
+  );
 }
 
 // ─── Slot map ─────────────────────────────────────────────────────────────────
@@ -463,17 +470,17 @@ function WeekBlock({
                       const height   = slotHeightPx(slot, hourHeight);
                       const startStr = toHHMM(slot.starts_at);
                       const endStr   = toHHMM(slot.ends_at);
-                      const typeName = lessonTypeMap[slot.lesson_type_id] ?? '';
+                      const typeName = lessonTypeMap[slot.lesson_type_id ?? ''] ?? '';
 
                       return (
                         <button
                           key={slot.id}
                           style={{
                             position: 'absolute',
-                            top:    top + 1,
-                            height: Math.max(height - 2, 14),
-                            left:   1,
-                            right:  1,
+                            top:    top + 2,
+                            height: Math.max(height - 4, 16),
+                            left:   2,
+                            right:  2,
                           }}
                           onClick={() => onSlotClick(slot)}
                           onMouseEnter={(e) => {
@@ -488,18 +495,18 @@ function WeekBlock({
                           onMouseLeave={onCellHoverEnd}
                           title={`${startStr} – ${endStr} · ${typeName || 'Körlektion'} · ${slot.current_bookings}/${slot.max_bookings}`}
                           className={cn(
-                            'rounded text-left overflow-hidden transition-colors',
+                            'rounded-md text-left overflow-hidden transition-colors',
                             slotCls(slot),
                           )}
                         >
-                          <div className="px-1 pt-0.5 h-full overflow-hidden flex flex-col">
+                          <div className="p-[3px] h-full overflow-hidden flex flex-col justify-center gap-0">
                             {/* Time range */}
-                            <span className="block text-[9px] font-bold leading-tight whitespace-nowrap">
+                            <span className="block text-[10px] font-semibold leading-[1.2] whitespace-nowrap text-left">
                               {startStr} –
                             </span>
                             {/* Lesson type (only when card is tall enough) */}
-                            {height >= 26 && (
-                              <span className="block text-[8px] leading-tight truncate opacity-90">
+                            {height >= 28 && (
+                              <span className="block text-[10px] leading-[1.2] truncate opacity-90 text-left">
                                 {typeName || `${slot.current_bookings}/${slot.max_bookings}`}
                               </span>
                             )}

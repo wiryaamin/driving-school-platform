@@ -24,10 +24,6 @@ import {
   DialogFooter,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Switch,
   Tabs,
   TabsContent,
@@ -524,11 +520,11 @@ function ScheduleDetailSheet({
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[520px] sm:w-[600px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>{schedule.name}</SheetTitle>
-          </SheetHeader>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{schedule.name}</DialogTitle>
+          </DialogHeader>
 
           <div className="mt-4 space-y-1 text-sm text-muted-foreground">
             {schedule.description && <p>{schedule.description}</p>}
@@ -611,8 +607,8 @@ function ScheduleDetailSheet({
               </div>
             )}
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {addingStage && (
         <AddStageDialog

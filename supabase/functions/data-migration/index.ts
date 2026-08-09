@@ -61,8 +61,8 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code = 'E
 const DATA_MIGRATION_PERMISSION = 'administration:organization:update';
 
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return err(ctx, 'Organisationskontext krävs', 403, 'FORBIDDEN');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return err(ctx, `Kräver behörighet: ${code}`, 403, 'FORBIDDEN');
   return null;
 }
@@ -71,8 +71,20 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+// Excel converts a phone-number column to a number when saving as CSV,
+// appending a spurious ".0" to every value (e.g. "46701234567.0") — an
+// unambiguous, lossless artifact to strip, not a guess at the real value.
+function cleanExcelPhone(raw: string): string {
+  return /^\d+\.0$/.test(raw) ? raw.slice(0, -2) : raw;
+}
+
 function isValidDate(d: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(Date.parse(d));
+  // YYYY-MM-DD, optionally followed by a time component (space or 'T'
+  // separator, HH:MM or HH:MM:SS) — several entities' date fields are
+  // timestamptz columns, and exports from other systems commonly include
+  // the time (e.g. "2026-06-17 18:16:55"), which is valid input, not
+  // malformed data; a date-only column just gets it truncated on insert.
+  return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(d) && !isNaN(Date.parse(d));
 }
 
 function parsePersonnummer(raw: string): { date_of_birth: string; personnummer_last4: string } | null {
@@ -132,7 +144,7 @@ function validateStudent(
   const first_name = (row['first_name'] ?? '').trim();
   const last_name  = (row['last_name']  ?? '').trim();
   const email      = (row['email']      ?? '').trim().toLowerCase();
-  const phone      = (row['phone']      ?? '').trim();
+  const phone      = cleanExcelPhone((row['phone'] ?? '').trim());
 
   if (!first_name) errors.push({ field: 'first_name', message: 'Förnamn är obligatoriskt', severity: 'error' });
   if (!last_name)  errors.push({ field: 'last_name',  message: 'Efternamn är obligatoriskt', severity: 'error' });
@@ -197,7 +209,7 @@ function validateStudent(
     ['practical_passed_at', practical_passed_at],
   ] as Array<[string, string]>) {
     if (val && !isValidDate(val)) {
-      errors.push({ field, message: `${field}: ogiltigt datumformat — förväntad YYYY-MM-DD`, severity: 'error' });
+      errors.push({ field, message: `${field}: ogiltigt datumformat — förväntad YYYY-MM-DD (valfri tid, t.ex. 18:16:55)`, severity: 'error' });
     }
   }
 
@@ -239,7 +251,7 @@ function validateInstructor(
   const first_name = (row['first_name'] ?? '').trim();
   const last_name  = (row['last_name']  ?? '').trim();
   const email      = (row['email']      ?? '').trim().toLowerCase();
-  const phone      = (row['phone']      ?? '').trim();
+  const phone      = cleanExcelPhone((row['phone'] ?? '').trim());
 
   if (!first_name) errors.push({ field: 'first_name', message: 'Förnamn är obligatoriskt', severity: 'error' });
   if (!last_name)  errors.push({ field: 'last_name',  message: 'Efternamn är obligatoriskt', severity: 'error' });
@@ -728,6 +740,7 @@ async function handleCreateSession(supabase: any, orgId: string, userId: string,
       file_size_bytes:  (b['file_size_bytes'] as number | undefined) ?? null,
       status:           'draft',
       created_by:       userId,
+      dry_run:          (b['dry_run'] as boolean | undefined) ?? false,
     })
     .select()
     .single();
@@ -764,7 +777,7 @@ async function handleCancelSession(supabase: any, orgId: string, id: string, ctx
 
   const { error } = await supabase
     .from('data_migration_sessions')
-    .update({ status: 'cancelled', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .update({ status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('id', id).eq('organization_id', orgId);
 
   if (error) return err(ctx, 'Kunde inte avbryta importsession', 500, 'INTERNAL_ERROR');
@@ -848,17 +861,34 @@ async function handleListRows(supabase: any, orgId: string, id: string, url: URL
   const status   = url.searchParams.get('status') ?? 'all';
   const from     = (page - 1) * per_page;
 
+  // Count first: a requested page past the end of the (possibly
+  // status-filtered) result set is a normal occurrence (e.g. the UI's page
+  // number is left over from a previous, larger-result filter tab), not a
+  // server error — PostgREST's .range() throws a range-not-satisfiable
+  // error rather than returning an empty page when `from` is beyond the
+  // total, so that case must be short-circuited before it's reached.
+  let countQ = supabase.from('data_migration_rows')
+    .select('id', { count: 'exact', head: true })
+    .eq('session_id', id);
+  if (status !== 'all') countQ = countQ.eq('validation_status', status);
+
+  const { count, error: countErr } = await countQ;
+  if (countErr) return err(ctx, 'Kunde inte hämta importrader', 500, 'INTERNAL_ERROR');
+
+  const total = count ?? 0;
+  if (from >= total) return json({ data: [], meta: { total, page, per_page } });
+
   let q = supabase.from('data_migration_rows')
-    .select('*', { count: 'exact' })
+    .select('*')
     .eq('session_id', id)
     .order('row_number', { ascending: true })
     .range(from, from + per_page - 1);
 
   if (status !== 'all') q = q.eq('validation_status', status);
 
-  const { data, error, count } = await q;
+  const { data, error } = await q;
   if (error) return err(ctx, 'Kunde inte hämta importrader', 500, 'INTERNAL_ERROR');
-  return json({ data: data ?? [], meta: { total: count ?? 0, page, per_page } });
+  return json({ data: data ?? [], meta: { total, page, per_page } });
 }
 
 // ─── Import: per-entity helpers ───────────────────────────────────────────────

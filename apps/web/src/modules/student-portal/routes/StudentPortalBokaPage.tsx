@@ -95,7 +95,7 @@ function formatDate(iso: string): string {
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
 }
 
 function slotDuration(starts_at: string, ends_at: string): number {
@@ -388,15 +388,21 @@ function SlotCard({
 // ─── Booking confirm sheet ────────────────────────────────────────────────────
 
 function BookingConfirmSheet({
-  slot, onClose, onConfirm, isPending,
+  slot, lessonTypes, onClose, onConfirm, isPending,
 }: {
-  slot:      PortalSlot;
-  onClose:   () => void;
-  onConfirm: () => void;
-  isPending: boolean;
+  slot:        PortalSlot;
+  lessonTypes: PortalLessonType[];
+  onClose:     () => void;
+  onConfirm:   (chosenLessonTypeId?: string) => void;
+  isPending:   boolean;
 }) {
   const instructor = [slot.instructor_first_name, slot.instructor_last_name].filter(Boolean).join(' ') || 'Instruktör';
   const duration   = slotDuration(slot.starts_at, slot.ends_at);
+  // A generic-availability slot has no fixed type — the student must pick
+  // one here before confirming, same requirement staff already have via
+  // BookingDialog for the equivalent staff-side slot.
+  const needsType = slot.lesson_type_name === null;
+  const [chosenTypeId, setChosenTypeId] = useState<string>('');
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-gray-950">
@@ -459,12 +465,30 @@ function BookingConfirmSheet({
             </div>
           )}
         </div>
+
+        {needsType && (
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Lektionstyp *
+            </label>
+            <select
+              value={chosenTypeId}
+              onChange={(e) => setChosenTypeId(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+            >
+              <option value="">Välj lektionstyp…</option>
+              {lessonTypes.map((lt) => (
+                <option key={lt.id} value={lt.id}>{lt.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="px-4 pb-6 pt-3 border-t border-gray-100 dark:border-gray-800 space-y-2">
         <button
-          onClick={onConfirm}
-          disabled={isPending}
+          onClick={() => onConfirm(needsType ? chosenTypeId : undefined)}
+          disabled={isPending || (needsType && !chosenTypeId)}
           className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold rounded-2xl transition-colors flex items-center justify-center gap-2"
         >
           {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
@@ -633,8 +657,16 @@ export function StudentPortalBokaPage() {
     [slots, selectedDay],
   );
 
+  // "Alla" must mean all — generic-availability slots (lesson_type_name
+  // null) used to be hidden under "Alla" because there was no unambiguous
+  // type to book them as, which made "Alla" show FEWER results than any
+  // specific tab and made real availability invisible whenever an org's
+  // slots were mostly type-less (e.g. freshly auto-provisioned instructor
+  // availability). Generic slots are now shown everywhere; which type the
+  // booking is for is resolved in BookingConfirmSheet instead of by hiding
+  // the slot until a tab happens to disambiguate it.
   const filteredSlots = useMemo(
-    () => typeFilter ? daySlots.filter(s => s.lesson_type_name === typeFilter) : daySlots,
+    () => typeFilter ? daySlots.filter(s => s.lesson_type_name === typeFilter || s.lesson_type_name === null) : daySlots,
     [daySlots, typeFilter],
   );
 
@@ -656,10 +688,15 @@ export function StudentPortalBokaPage() {
     setSelectedDay(today);
   }
 
-  function handleConfirmBooking() {
+  function handleConfirmBooking(chosenLessonTypeId?: string) {
     if (!pendingSlot) return;
     const slotId = pendingSlot.id;
-    createBooking.mutate(slotId, {
+    // Generic slots (lesson_type_name null) need an explicit type to book
+    // as — BookingConfirmSheet collects it directly when needed rather
+    // than inferring it from whichever tab happens to be active, since
+    // generic slots are now visible under every tab including "Alla".
+    const lessonTypeId = pendingSlot.lesson_type_name === null ? chosenLessonTypeId : undefined;
+    createBooking.mutate({ slotId, ...(lessonTypeId ? { lessonTypeId } : {}) }, {
       onSuccess: () => {
         setBooked(slotId);
         setPendingSlot(null);
@@ -688,6 +725,7 @@ export function StudentPortalBokaPage() {
       {pendingSlot && (
         <BookingConfirmSheet
           slot={pendingSlot}
+          lessonTypes={lessonTypes ?? []}
           onClose={() => setPendingSlot(null)}
           onConfirm={handleConfirmBooking}
           isPending={createBooking.isPending}

@@ -107,11 +107,11 @@ export function SchemaConfigPage() {
           </div>
         </label>
 
-        <label className="flex items-start gap-2 cursor-pointer">
-          <input type="checkbox" checked={openSlotOnCreate} onChange={e => setOpenSlotOnCreate(e.target.checked)} className="mt-0.5 rounded border-border accent-primary w-4 h-4 shrink-0" />
+        <label className="flex items-start gap-2 cursor-not-allowed opacity-60">
+          <input type="checkbox" checked={openSlotOnCreate} onChange={e => setOpenSlotOnCreate(e.target.checked)} disabled className="mt-0.5 rounded border-border accent-primary w-4 h-4 shrink-0" />
           <div>
             <span className="text-sm text-foreground">Öppna tidsluckan direkt efter skapande</span>
-            <p className="text-xs text-primary/70 mt-0.5">Markera denna ruta ifall du önskar att redigeringsmodalen för tidsluckan ska öppnas direkt efter att en ny tidslucka skapats i bokningsschemat.</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Inte implementerat ännu — skapande av en tidslucka stänger formuläret men öppnar inte redigeringsvyn automatiskt idag.</p>
           </div>
         </label>
 

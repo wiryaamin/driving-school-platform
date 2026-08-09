@@ -1,6 +1,6 @@
-import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Search, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store } from 'lucide-react';
+import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Search, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store, Star, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate, NavLink } from 'react-router-dom';
+import { useNavigate, useLocation, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
@@ -8,6 +8,7 @@ import { useUiStore } from '@core/store/ui.store.js';
 import { useNotificationDot, useRecentActivity } from '@shared/hooks/useNotificationBell.js';
 import type { Notification } from '@shared/hooks/useNotificationBell.js';
 import { useLocations } from '@modules/scheduling/hooks/useLocations.js';
+import { useFavorites, useAddFavorite, useRemoveFavorite } from '@shared/hooks/useFavorites.js';
 
 // ─── Location Picker (Gap 8) ──────────────────────────────────────────────────
 
@@ -87,6 +88,130 @@ function LocationPicker() {
   );
 }
 
+// ─── Favorites ────────────────────────────────────────────────────────────────
+
+function prettifyPath(path: string): string {
+  const last = path.split('/').filter(Boolean).pop() ?? path;
+  return last.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || 'Startsida';
+}
+
+function FavoritesMenu() {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState('');
+  const { data: favorites = [] } = useFavorites();
+  const addFavorite = useAddFavorite();
+  const removeFavorite = useRemoveFavorite();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const currentPath = location.pathname;
+  const alreadyFavorited = favorites.some((f) => f.path === currentPath);
+
+  function startAdding() {
+    setLabel(prettifyPath(currentPath));
+    setAdding(true);
+  }
+
+  async function handleAdd() {
+    if (!label.trim()) return;
+    try {
+      await addFavorite.mutateAsync({ label: label.trim(), path: currentPath });
+      setAdding(false);
+    } catch {
+      // Unique constraint (already favorited) or transient error — either
+      // way, closing the mini-form is the right recovery, no page reload needed.
+      setAdding(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'relative w-9 h-9 rounded-lg flex items-center justify-center',
+          'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+          open && 'text-foreground bg-accent',
+        )}
+        aria-label="Favoriter"
+      >
+        <Star className="w-4 h-4" />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setAdding(false); }} aria-hidden />
+          <div className="absolute right-0 top-full mt-1 w-72 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/60">Favoriter</p>
+              {!alreadyFavorited && !adding && (
+                <button
+                  type="button"
+                  onClick={startAdding}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  + Lägg till denna sida
+                </button>
+              )}
+            </div>
+
+            {adding && (
+              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border">
+                <input
+                  autoFocus
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleAdd(); if (e.key === 'Escape') setAdding(false); }}
+                  className="flex-1 h-7 px-2 text-xs rounded-md border border-input bg-background"
+                  placeholder="Namn på favorit"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleAdd()}
+                  disabled={addFavorite.isPending}
+                  className="h-7 px-2 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  Spara
+                </button>
+              </div>
+            )}
+
+            {favorites.length === 0 && !adding ? (
+              <div className="px-3 py-6 text-center">
+                <Star className="w-5 h-5 text-muted-foreground mx-auto mb-1.5" />
+                <p className="text-xs text-muted-foreground">Inga favoriter ännu</p>
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto py-1">
+                {favorites.map((f) => (
+                  <div key={f.id} className="group flex items-center gap-1 px-1">
+                    <button
+                      type="button"
+                      onClick={() => { setOpen(false); navigate(f.path); }}
+                      className="flex-1 min-w-0 flex items-center gap-2 px-2 py-2 text-sm text-popover-foreground hover:bg-accent rounded-md transition-colors text-left truncate"
+                    >
+                      {f.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeFavorite.mutate(f.id)}
+                      className="w-6 h-6 shrink-0 rounded flex items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                      aria-label="Ta bort favorit"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function TopBar() {
   const { user, profile } = useSessionStore();
   const { toggleMobileMenu, theme, toggleTheme } = useUiStore();
@@ -155,6 +280,7 @@ export function TopBar() {
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
+          <FavoritesMenu />
           <NotificationBell />
           <HelpSupportMenu />
 
@@ -185,10 +311,11 @@ const STATUS_ICON: Record<string, { icon: typeof CheckCircle; cls: string }> = {
 
 function notifRoute(n: Notification): string | null {
   if (!n.reference_type || !n.reference_id) return null;
-  if (n.reference_type === 'student')  return `/students/${n.reference_id}`;
-  if (n.reference_type === 'invoice')  return `/finance/invoices/${n.reference_id}`;
-  if (n.reference_type === 'booking')  return '/scheduling';
-  if (n.reference_type === 'slot')     return '/scheduling';
+  if (n.reference_type === 'student')             return `/students/${n.reference_id}`;
+  if (n.reference_type === 'invoice')              return `/finance/invoices/${n.reference_id}`;
+  if (n.reference_type === 'booking')              return '/scheduling';
+  if (n.reference_type === 'slot')                 return '/scheduling';
+  if (n.reference_type === 'regulatory_workflow')  return `/regulatory?open=${n.reference_id}`;
   return null;
 }
 
@@ -309,6 +436,7 @@ function NotificationBell() {
 
 function HelpSupportMenu() {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
 
   const HELP_GROUPS: Array<{ heading?: string; items: Array<{
     key:         string;
@@ -316,6 +444,7 @@ function HelpSupportMenu() {
     icon:        typeof LifeBuoy;
     href?:       string;
     tel?:        string;
+    path?:       string;
     external?:   boolean;
     comingSoon?: boolean;
   }> }> = [
@@ -323,7 +452,9 @@ function HelpSupportMenu() {
       items: [
         { key: 'help',      labelSv: 'Hjälpcenter',    icon: LifeBuoy,      comingSoon: true },
         { key: 'feedback',  labelSv: 'Feedbackportal',  icon: MessageSquare, comingSoon: true },
-        { key: 'changelog', labelSv: 'Ändringslogg',   icon: History,       comingSoon: true },
+        // Ändringslogg is the Announcements/Nyheter feature under a different
+        // name — same page, not a separate coming-soon item (see 'news' below).
+        { key: 'changelog', labelSv: 'Ändringslogg',   icon: History,       path: '/nyheter' },
       ],
     },
     {
@@ -341,7 +472,7 @@ function HelpSupportMenu() {
     {
       heading: 'Resurser',
       items: [
-        { key: 'news',    labelSv: 'Nyheter',        icon: Newspaper,  comingSoon: true },
+        { key: 'news',    labelSv: 'Nyheter',        icon: Newspaper,  path: '/nyheter' },
         { key: 'faq',     labelSv: 'Vanliga frågor', icon: HelpCircle, comingSoon: true },
         { key: 'gallery', labelSv: 'Bildgalleri',    icon: ImageIcon,  comingSoon: true },
         { key: 'shop',    labelSv: 'Köp online',     icon: Store,      comingSoon: true },
@@ -394,6 +525,20 @@ function HelpSupportMenu() {
                         <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
                         <span className="flex-1">{item.labelSv}</span>
                       </div>
+                    );
+                  }
+
+                  if (item.path) {
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => { setOpen(false); navigate(item.path!); }}
+                        className={baseClass}
+                      >
+                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
+                        <span className="flex-1 text-left">{item.labelSv}</span>
+                      </button>
                     );
                   }
 

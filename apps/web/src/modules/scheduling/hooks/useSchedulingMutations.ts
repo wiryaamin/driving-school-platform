@@ -4,6 +4,7 @@ import type { LessonBooking, LessonSlot, CancellationCategory, BookingStatus } f
 import { slotKeys } from './useSlots.js';
 import { bookingKeys } from './useBookings.js';
 import { waitlistKeys } from './useWaitlist.js';
+import { extractFunctionErrorMessage } from '@modules/platform/lib/provisioningSchema.js';
 
 // ─── Create slot types ────────────────────────────────────────────────────────
 
@@ -29,6 +30,13 @@ export interface CreateBookingInput {
   slot_id:    string;
   student_id: string;
   price_sek?: number | null;
+  // Required only when the slot itself has no lesson_type_id (a generic
+  // availability slot) — the backend rejects with LESSON_TYPE_REQUIRED otherwise.
+  lesson_type_id?: string;
+  // Defaults to 'confirmed' (an instant, final staff booking). Pass 'reserved'
+  // for a temporary hold — the backend auto-expires unconfirmed reservations
+  // after ~30 min via expire_stale_reservations().
+  status?:    Extract<BookingStatus, 'confirmed' | 'reserved'>;
 }
 
 export interface CancelBookingInput {
@@ -37,6 +45,11 @@ export interface CancelBookingInput {
   cancellation_reason?:    string | null;
   cancellation_category?:  CancellationCategory | null;
 }
+
+// credit_reversal_failed is only ever present (and true) when the booking had
+// consumed a package credit and the automatic reversal on cancel failed —
+// the cancellation itself still succeeded, so callers should warn, not block.
+export type CancelBookingResult = LessonBooking & { credit_reversal_failed?: boolean };
 
 export interface UpdateBookingStatusInput {
   id:      string;
@@ -71,6 +84,16 @@ export interface UpdateSlotNotesInput {
   notes: string | null;
 }
 
+export interface UpdateSlotCapacityInput {
+  id:           string;
+  max_bookings: number;
+}
+
+export interface UpdateSlotStatusInput {
+  id:     string;
+  status: 'open' | 'blocked';
+}
+
 // ─── API helpers ─────────────────────────────────────────────────────────────
 
 async function apiCreateSlot(input: CreateSlotInput): Promise<LessonSlot> {
@@ -78,7 +101,11 @@ async function apiCreateSlot(input: CreateSlotInput): Promise<LessonSlot> {
     method: 'POST',
     body:   input,
   });
-  if (error) throw error;
+  // supabase-js's raw error.message on a non-2xx response is a generic
+  // "Edge Function returned a non-2xx status code" — it never surfaces the
+  // specific reason (e.g. "Instructor is not available during this time
+  // window") that slots/index.ts already computes and returns in the body.
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skapa pass'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -89,24 +116,31 @@ async function apiCreateBooking(input: CreateBookingInput): Promise<LessonBookin
   const body: Record<string, unknown> = {
     slot_id:    input.slot_id,
     student_id: input.student_id,
+    // Staff booking directly from the calendar has no pending checkout step —
+    // unlike the backend's 'reserved' default (a temporary hold, auto-cancelled
+    // by expire_stale_reservations() after ~30 min), this booking is final the
+    // moment staff creates it, so it must skip the hold state entirely.
+    // Callers may explicitly pass 'reserved' for a deliberate temporary hold.
+    status:     input.status ?? 'confirmed',
   };
   if (input.price_sek !== undefined) body['price_sek'] = input.price_sek;
+  if (input.lesson_type_id !== undefined) body['lesson_type_id'] = input.lesson_type_id;
 
   const { data, error } = await supabase.functions.invoke<{ data: LessonBooking }>('bookings', {
     method: 'POST',
     body,
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte skapa bokning'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
 
-async function apiCancelBooking(input: CancelBookingInput): Promise<LessonBooking> {
+async function apiCancelBooking(input: CancelBookingInput): Promise<CancelBookingResult> {
   const body: Record<string, unknown> = {};
   if (input.cancellation_reason   !== undefined) body['cancellation_reason']   = input.cancellation_reason;
   if (input.cancellation_category !== undefined) body['cancellation_category'] = input.cancellation_category;
 
-  const { data, error } = await supabase.functions.invoke<{ data: LessonBooking }>(`bookings/${input.id}/cancel`, {
+  const { data, error } = await supabase.functions.invoke<{ data: CancelBookingResult }>(`bookings/${input.id}/cancel`, {
     method: 'PATCH',
     body,
   });
@@ -173,6 +207,31 @@ async function apiUpdateSlotInstructor(input: UpdateSlotInstructorInput): Promis
   if (error) throw error;
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
+}
+
+async function apiUpdateSlotCapacity(input: UpdateSlotCapacityInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { max_bookings: input.max_bookings },
+  });
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera antal platser'));
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+async function apiUpdateSlotStatus(input: UpdateSlotStatusInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { status: input.status },
+  });
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera passets status'));
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+async function apiDeleteSlot(id: string): Promise<void> {
+  const { error } = await supabase.functions.invoke(`slots/${id}`, { method: 'DELETE' });
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte ta bort passet'));
 }
 
 // ─── Mutation hooks ───────────────────────────────────────────────────────────
@@ -282,6 +341,41 @@ export function useUpdateSlotInstructor() {
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
+export function useUpdateSlotCapacity() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotCapacity,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
+export function useUpdateSlotStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotStatus,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useDeleteSlot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiDeleteSlot,
+    onSuccess: (_data, id) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 }

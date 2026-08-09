@@ -87,6 +87,7 @@ const PAGE_MAP: Record<string, ComponentType> = {
   'communication/config':            KommunikationConfigPage,
   'communication/phrases':           GemensammaFraserPage,
   'communication/templates':         MeddelandemallarPage,
+  'communication/email-templates':   MarknadsföringPage,
   'communication/automation':        AutomatiseringsReglerPage,
   'education/licenses':             UtbildningsbehörigheterPage,
   'education/materials':            MaterialsSettingsPage,

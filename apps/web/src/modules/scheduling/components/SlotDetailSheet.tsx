@@ -1,22 +1,31 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell, GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText, Search, UserCheck } from 'lucide-react';
+import {
+  Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell,
+  GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText, Search, UserCheck, Phone, Mail,
+  Ban, Trash2, Pencil, Copy, MapPin, Tag, CreditCard, Languages, History, UserSearch,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle,
   Button, Badge, Separator, ScrollArea, Skeleton,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Input,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
-import type { LessonSlot, LessonBooking, BookingStatus, Student } from '@platform/types';
+import type { LessonSlot, LessonBooking, BookingStatus, Student, LessonCategory } from '@platform/types';
 import { useStudentsBatch, useStudentList } from '@modules/students/hooks/useStudents.js';
 import { useInstructor, useInstructorList } from '@modules/instructors/index.js';
+import { useStudentPackages } from '@modules/finance/hooks/usePackages.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
 import { useWaitlistForSlot, useAddToWaitlist, usePromoteFromWaitlist } from '../hooks/useWaitlist.js';
-import { useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes, useUpdateSlotInstructor } from '../hooks/useSchedulingMutations.js';
+import {
+  useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes, useUpdateSlotInstructor,
+  useUpdateSlotCapacity, useUpdateSlotStatus, useDeleteSlot, useUpdateSlotTiming,
+} from '../hooks/useSchedulingMutations.js';
 import { useVehicles } from '@modules/resources/index.js';
+import { useLessonTypes } from '../hooks/useLessonTypes.js';
+import { useLocations, formatLocationAddress } from '../hooks/useLocations.js';
 import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 import { SlotStatusBadge } from './SlotStatusBadge.js';
 import { BookingStatusBadge, isTerminalBookingStatus } from './BookingStatusBadge.js';
@@ -24,7 +33,40 @@ import { BookingMessageHistory } from './BookingMessageHistory.js';
 import { CancelBookingDialog } from './CancelBookingDialog.js';
 import { BookingDialog } from './BookingDialog.js';
 import { RescheduleBookingDialog } from './RescheduleBookingDialog.js';
+import { CreateSlotSheet } from './CreateSlotSheet.js';
 import { formatSlotDate, formatSlotTime, formatCapacity, slotDurationMinutes, isSlotFull } from '../lib/calendarUtils.js';
+
+// ─── Lesson category labels (Swedish) — mirrors CreateSlotSheet's own map ─────
+
+const CATEGORY_LABELS: Record<LessonCategory, string> = {
+  driving:      'Körning',
+  theory:       'Teori',
+  risk1:        'Risk 1',
+  risk2:        'Risk 2',
+  simulator:    'Simulator',
+  assessment:   'Bedömning',
+  intensive:    'Intensiv',
+  group_theory: 'Gruppteori',
+  other:        'Övrigt',
+};
+
+const PERMIT_STAGE_LABELS: Record<string, string> = {
+  not_started:          'Ej påbörjad',
+  theory_study:         'Teoristudier',
+  risk1_booked:         'Risk 1 bokad',
+  risk1_completed:      'Risk 1 genomförd',
+  risk2_booked:         'Risk 2 bokad',
+  risk2_completed:      'Risk 2 genomförd',
+  theory_exam_booked:   'Teoriprov bokat',
+  theory_passed:        'Teoriprov godkänt',
+  practical_exam_booked:'Uppkörning bokad',
+  practical_passed:     'Uppkörning godkänd',
+  licence_issued:       'Körkort utfärdat',
+};
+
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
 // ─── Student name — clickable link to student detail ─────────────────────────
 
@@ -106,7 +148,28 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
       },
       {
         onSuccess: () => toast({ title: `Påminnelse skickad till ${student.first_name}` }),
-        onError:   () => toast({ title: 'Kunde inte skicka påminnelse', variant: 'destructive' }),
+        onError:   (err) => toast({ title: 'Kunde inte skicka påminnelse', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }),
+      }
+    );
+  }
+
+  function handleSendEmail() {
+    if (!student?.email) return;
+    const subject = `Din körlektion ${slotLabel}`;
+    const body = `Hej ${student.first_name},\n\nDetta är en bekräftelse på din körlektion ${slotLabel}.\n\nVälkommen!`;
+    sendMessage.mutate(
+      {
+        channel:           'email',
+        recipient_type:    'student',
+        recipient_id:      student.id,
+        recipient_address: student.email,
+        subject,
+        body,
+        metadata: { event: 'booking_email_manual', manual: true },
+      },
+      {
+        onSuccess: () => toast({ title: `E-post skickat till ${student.first_name}` }),
+        onError:   (err) => toast({ title: 'Kunde inte skicka e-post', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }),
       }
     );
   }
@@ -146,6 +209,9 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
         </div>
         <BookingStatusBadge status={booking.status} />
       </div>
+
+      {/* Package credits, permit stage, preferred language */}
+      <StudentOperationalInfo studentId={booking.student_id} student={student} />
 
       {/* Attendance row — prominent for confirmed bookings */}
       {booking.status === 'confirmed' && !terminal && (
@@ -230,6 +296,30 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
                 Påminnelse
               </Button>
             )}
+
+            {/* Ring — direct tel: link */}
+            {student?.phone && (
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" asChild>
+                <a href={`tel:${student.phone}`}>
+                  <Phone className="w-3 h-3" />
+                  Ring
+                </a>
+              </Button>
+            )}
+
+            {/* Skicka e-post */}
+            {student?.email && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                disabled={sendMessage.isPending}
+                onClick={handleSendEmail}
+              >
+                {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+                E-post
+              </Button>
+            )}
           </div>
         </PermissionGate>
       )}
@@ -250,6 +340,15 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
             <BookingMessageHistory studentId={booking.student_id} maxCount={3} />
           </div>
         )}
+      </div>
+
+      {/* Operational history — booked/modified timestamps */}
+      <div className="ml-9 flex items-center gap-1 text-[10px] text-muted-foreground/50">
+        <History className="w-2.5 h-2.5" />
+        <span>
+          Bokad {formatTimestamp(booking.created_at)}
+          {booking.updated_at !== booking.created_at && ` · Ändrad ${formatTimestamp(booking.updated_at)}`}
+        </span>
       </div>
     </div>
   );
@@ -400,6 +499,130 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
   );
 }
 
+// ─── Lesson type — name, category, duration, price ────────────────────────────
+
+function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
+  const { data: lessonTypes, isLoading } = useLessonTypes();
+
+  if (lessonTypeId == null) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Tag className="w-3.5 h-3.5 shrink-0" />
+        <span className="italic">Ingen förvald lektionstyp — tillgängligt för valfri bokning</span>
+      </div>
+    );
+  }
+
+  const lessonType = lessonTypes?.find(lt => lt.id === lessonTypeId);
+
+  if (!lessonType) {
+    if (isLoading) {
+      return (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Tag className="w-3.5 h-3.5 shrink-0" />
+          <Skeleton className="h-4 w-24 inline-block" />
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Tag className="w-3.5 h-3.5 shrink-0" />
+        <span className="italic">Okänd lektionstyp</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+      <Tag className="w-3.5 h-3.5 shrink-0" />
+      <span className="font-medium text-foreground">{lessonType.name}</span>
+      <Badge variant="outline" className="text-[10px] font-normal py-0">
+        {CATEGORY_LABELS[lessonType.category] ?? lessonType.category}
+      </Badge>
+      {lessonType.pricing_sek != null && (
+        <span className="text-muted-foreground">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
+      )}
+    </div>
+  );
+}
+
+// ─── Branch / meeting location ─────────────────────────────────────────────────
+
+function BranchRow({ locationId }: { locationId: string | null }) {
+  const { data: locations = [] } = useLocations();
+  if (!locationId) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 italic">
+        <MapPin className="w-3.5 h-3.5 shrink-0" />
+        Ingen filial/mötesplats angiven
+      </div>
+    );
+  }
+  const location = locations.find(l => l.id === locationId);
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <MapPin className="w-3.5 h-3.5 shrink-0" />
+      {location ? (
+        <span className="font-medium text-foreground">
+          {location.name}
+          <span className="ml-1 font-normal text-muted-foreground">— {formatLocationAddress(location)}</span>
+        </span>
+      ) : (
+        <span className="font-mono text-[10px]">{locationId.slice(0, 8)}…</span>
+      )}
+    </div>
+  );
+}
+
+// ─── Licence categories the assigned instructor may teach ────────────────────
+
+function LicenceCategoriesRow({ instructorId }: { instructorId: string }) {
+  const { data: instructor } = useInstructor(instructorId);
+  if (!instructor || instructor.teaching_categories.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+      <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+      <span>Behörighet:</span>
+      {instructor.teaching_categories.map(cat => (
+        <Badge key={cat} variant="outline" className="text-[10px] font-normal py-0">{cat}</Badge>
+      ))}
+    </div>
+  );
+}
+
+// ─── Student operational summary — package credits, permit stage, language ───
+
+function StudentOperationalInfo({ studentId, student }: { studentId: string; student: Student | undefined }) {
+  const { data: packagesData } = useStudentPackages(studentId);
+  const activePackages = (packagesData?.data ?? []).filter(p => p.status === 'active');
+  const remainingCredits = activePackages.reduce((sum, p) => sum + p.quantity_remaining, 0);
+
+  if (!student) return null;
+
+  return (
+    <div className="ml-9 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      {activePackages.length > 0 && (
+        <span className="flex items-center gap-1">
+          <CreditCard className="w-3 h-3" />
+          {remainingCredits} lektion{remainingCredits !== 1 ? 'er' : ''} kvar
+        </span>
+      )}
+      {student.permit_stage && student.permit_stage !== 'not_started' && (
+        <span className="flex items-center gap-1">
+          <GraduationCap className="w-3 h-3" />
+          {PERMIT_STAGE_LABELS[student.permit_stage] ?? student.permit_stage}
+        </span>
+      )}
+      {student.preferred_language && student.preferred_language !== 'sv' && (
+        <span className="flex items-center gap-1">
+          <Languages className="w-3 h-3" />
+          {student.preferred_language}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── Session notes — add / edit instructor note on the slot ──────────────────
 
 function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | null }) {
@@ -470,6 +693,85 @@ function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | nu
           </button>
         </PermissionGate>
       )}
+    </div>
+  );
+}
+
+// ─── Edit slot — inline time + capacity editor ("Redigera pass") ─────────────
+
+function EditSlotPanel({
+  slot, onClose,
+}: {
+  slot:    LessonSlot;
+  onClose: () => void;
+}) {
+  const toLocalTime = (iso: string) => iso.slice(11, 16);
+  const [startTime, setStartTime] = useState(() => toLocalTime(slot.starts_at));
+  const [endTime,   setEndTime]   = useState(() => toLocalTime(slot.ends_at));
+  const [capacity,  setCapacity]  = useState(slot.max_bookings);
+
+  const updateTiming   = useUpdateSlotTiming();
+  const updateCapacity = useUpdateSlotCapacity();
+  const busy = updateTiming.isPending || updateCapacity.isPending;
+
+  function handleSave() {
+    const dateStr = slot.starts_at.slice(0, 10);
+    const newStartsAt = `${dateStr}T${startTime}:00`;
+    const newEndsAt   = `${dateStr}T${endTime}:00`;
+    const timeChanged = newStartsAt !== slot.starts_at.slice(0, 16) + ':00' || startTime !== toLocalTime(slot.starts_at) || endTime !== toLocalTime(slot.ends_at);
+    const capacityChanged = capacity !== slot.max_bookings;
+
+    const tasks: Promise<unknown>[] = [];
+    if (timeChanged) {
+      tasks.push(new Promise((resolve, reject) => {
+        updateTiming.mutate({ id: slot.id, starts_at: newStartsAt, ends_at: newEndsAt }, { onSuccess: resolve, onError: reject });
+      }));
+    }
+    if (capacityChanged) {
+      tasks.push(new Promise((resolve, reject) => {
+        updateCapacity.mutate({ id: slot.id, max_bookings: capacity }, { onSuccess: resolve, onError: reject });
+      }));
+    }
+    if (tasks.length === 0) { onClose(); return; }
+
+    Promise.all(tasks)
+      .then(() => { toast({ title: 'Pass uppdaterat' }); onClose(); })
+      .catch((err) => toast({
+        title:       'Kunde inte uppdatera passet',
+        description: err instanceof Error ? err.message : 'Försök igen',
+        variant:     'destructive',
+      }));
+  }
+
+  return (
+    <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] text-muted-foreground block mb-1">Starttid</label>
+          <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-xs" />
+        </div>
+        <div>
+          <label className="text-[10px] text-muted-foreground block mb-1">Sluttid</label>
+          <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="h-8 text-xs" />
+        </div>
+      </div>
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-1">Antal platser</label>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setCapacity(v => Math.max(1, v - 1))} disabled={capacity <= 1}>−</Button>
+          <span className="w-6 text-center text-xs font-medium tabular-nums">{capacity}</span>
+          <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setCapacity(v => Math.min(50, v + 1))} disabled={capacity >= 50}>+</Button>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" className="h-7 text-xs" disabled={busy || endTime <= startTime} onClick={handleSave}>
+          {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Spara'}
+        </Button>
+        <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onClose}>
+          Avbryt
+        </Button>
+        {endTime <= startTime && <span className="text-[10px] text-destructive">Sluttid måste vara efter starttid</span>}
+      </div>
     </div>
   );
 }
@@ -661,6 +963,7 @@ interface SlotDetailSheetProps {
 export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetProps) {
   const navigate = useNavigate();
   const [bookingDialogOpen,     setBookingDialogOpen]     = useState(false);
+  const [matchDialogOpen,       setMatchDialogOpen]       = useState(false);
   const [cancelBookingId,       setCancelBookingId]       = useState<string | null>(null);
   const [cancelStudentId,       setCancelStudentId]       = useState<string | null>(null);
   const [cancelDialogOpen,      setCancelDialogOpen]      = useState(false);
@@ -670,31 +973,21 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const [rescheduleDialogOpen,  setRescheduleDialogOpen]  = useState(false);
   const [waitlistExpanded,      setWaitlistExpanded]      = useState(false);
   const [addWaitlistDialogOpen, setAddWaitlistDialogOpen] = useState(false);
+  const [editSlotOpen,          setEditSlotOpen]          = useState(false);
+  const [duplicateSheetOpen,    setDuplicateSheetOpen]    = useState(false);
+  const [deleteConfirmOpen,     setDeleteConfirmOpen]     = useState(false);
+
+  const updateStatus = useUpdateSlotStatus();
+  const deleteSlot   = useDeleteSlot();
 
   function handleNavigate(path: string) {
     onOpenChange(false);
     navigate(path);
   }
 
-  // Reset all internal dialog state when the sheet closes or a different slot is opened.
-  // Prevents cancel/reschedule dialogs from a previous slot leaking into the next one.
-  useEffect(() => {
-    if (!open) {
-      setBookingDialogOpen(false);
-      setCancelBookingId(null);
-      setCancelStudentId(null);
-      setCancelDialogOpen(false);
-      setRescheduleBookingId(null);
-      setRescheduleStudentName('');
-      setRescheduleStudent(null);
-      setRescheduleDialogOpen(false);
-      setWaitlistExpanded(false);
-      setAddWaitlistDialogOpen(false);
-    }
-  }, [open]);
-
-  useEffect(() => {
+  function resetLocalDialogState() {
     setBookingDialogOpen(false);
+    setMatchDialogOpen(false);
     setCancelBookingId(null);
     setCancelStudentId(null);
     setCancelDialogOpen(false);
@@ -704,10 +997,71 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     setRescheduleDialogOpen(false);
     setWaitlistExpanded(false);
     setAddWaitlistDialogOpen(false);
+    setEditSlotOpen(false);
+    setDuplicateSheetOpen(false);
+    setDeleteConfirmOpen(false);
+  }
+
+  // Reset all internal dialog state when the sheet closes or a different slot is opened.
+  // Prevents cancel/reschedule dialogs from a previous slot leaking into the next one.
+  useEffect(() => {
+    if (!open) resetLocalDialogState();
+  }, [open]);
+
+  useEffect(() => {
+    resetLocalDialogState();
   }, [slot?.id]);
+
+  function handleBlock() {
+    if (!slot) return;
+    updateStatus.mutate(
+      { id: slot.id, status: 'blocked' },
+      {
+        onSuccess: () => toast({ title: 'Tiden blockerad' }),
+        onError:   (err) => toast({
+          title:       'Kunde inte blockera tiden',
+          description: err instanceof Error ? err.message : 'Försök igen',
+          variant:     'destructive',
+        }),
+      },
+    );
+  }
+
+  function handleUnblock() {
+    if (!slot) return;
+    updateStatus.mutate(
+      { id: slot.id, status: 'open' },
+      {
+        onSuccess: () => toast({ title: 'Tiden öppnad igen' }),
+        onError:   (err) => toast({
+          title:       'Kunde inte öppna tiden',
+          description: err instanceof Error ? err.message : 'Försök igen',
+          variant:     'destructive',
+        }),
+      },
+    );
+  }
+
+  function handleDelete() {
+    if (!slot) return;
+    deleteSlot.mutate(slot.id, {
+      onSuccess: () => {
+        toast({ title: 'Passet borttaget' });
+        setDeleteConfirmOpen(false);
+        onOpenChange(false);
+      },
+      onError: (err) => toast({
+        title:       'Kunde inte ta bort passet',
+        description: err instanceof Error ? err.message : 'Försök igen',
+        variant:     'destructive',
+      }),
+    });
+  }
 
   const { data: bookingsData, isLoading: bookingsLoading } = useBookingsForSlot(slot?.id ?? null);
   const { data: waitlistData }                              = useWaitlistForSlot(slot?.id ?? null);
+  const { data: assignedInstructor }                        = useInstructor(slot?.instructor_id ?? null);
+  const matchCategory = assignedInstructor?.teaching_categories[0] ?? null;
 
   const bookings      = bookingsData?.data ?? [];
   const waitlistItems = waitlistData ?? [];
@@ -759,15 +1113,15 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full sm:max-w-md flex flex-col p-0 gap-0">
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="w-full sm:max-w-md max-h-[85vh] flex flex-col p-0 gap-0">
           {/* Header */}
-          <SheetHeader className="px-5 pt-5 pb-4 border-b border-border">
+          <DialogHeader className="px-5 pt-5 pb-4 border-b border-border">
             <div className="flex items-start justify-between gap-3">
-              <SheetTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</SheetTitle>
+              <DialogTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</DialogTitle>
               <SlotStatusBadge status={slot.status} />
             </div>
-          </SheetHeader>
+          </DialogHeader>
 
           <ScrollArea className="flex-1">
             <div className="px-5 py-4 space-y-5">
@@ -790,11 +1144,14 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                     </span>
                   </div>
                   {full && (
-                    <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-900/40">
+                    <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-900/40">
                       Fullbokad
                     </Badge>
                   )}
                 </div>
+
+                {/* Lesson type */}
+                <LessonTypeRow lessonTypeId={slot.lesson_type_id} />
 
                 {/* Instructor */}
                 <InstructorRow
@@ -804,16 +1161,47 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   onNavigate={handleNavigate}
                 />
 
+                {/* Licence categories this instructor may teach */}
+                <LicenceCategoriesRow instructorId={slot.instructor_id} />
+
                 {/* Vehicle */}
                 <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
+
+                {/* Branch / meeting location */}
+                <BranchRow locationId={slot.location_id} />
 
                 {/* Session notes */}
                 <SessionNotesRow slotId={slot.id} notes={slot.notes} />
 
-                {/* Timing detail */}
+                {/* Edit slot — time + capacity */}
+                {!TERMINAL_SLOT_STATUSES.has(slot.status) && (
+                  <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                    {editSlotOpen ? (
+                      <EditSlotPanel slot={slot} onClose={() => setEditSlotOpen(false)} />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setEditSlotOpen(true)}
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5 shrink-0" />
+                        Redigera tid & platser
+                      </button>
+                    )}
+                  </PermissionGate>
+                )}
+
+                {/* Timing detail + operational history */}
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Clock className="w-3.5 h-3.5 shrink-0" />
                   <span className="font-mono">{slot.starts_at.slice(0, 16).replace('T', ' ')}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
+                  <History className="w-3 h-3 shrink-0" />
+                  <span>
+                    Skapat {formatTimestamp(slot.created_at)}
+                    {slot.updated_at !== slot.created_at && ` · Ändrat ${formatTimestamp(slot.updated_at)}`}
+                  </span>
                 </div>
               </div>
 
@@ -916,48 +1304,120 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
             </div>
           </ScrollArea>
 
-          {/* Footer action */}
-          {!full && slot.status === 'open' ? (
-            <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
-              <div className="px-5 py-4 border-t border-border">
-                <Button
-                  className="w-full"
-                  onClick={() => setBookingDialogOpen(true)}
-                >
+          {/* Footer actions — operational command bar */}
+          <div className="px-5 py-4 border-t border-border space-y-2.5">
+
+            {slot.status === 'blocked' && (
+              <p className="text-xs text-center text-muted-foreground">Passet är blockerat och inte öppet för bokning.</p>
+            )}
+            {slot.status === 'in_progress' && (
+              <p className="text-xs text-center text-muted-foreground">Lektion pågår – bokningsändringar hanteras av instruktören.</p>
+            )}
+            {slot.status === 'completed' && (
+              <p className="text-xs text-center text-muted-foreground">Lektionen är avslutad.</p>
+            )}
+            {slot.status === 'cancelled' && (
+              <p className="text-xs text-center text-muted-foreground">Passet är avbokat.</p>
+            )}
+            {full && slot.status === 'open' && (
+              <p className="text-xs text-center text-muted-foreground">Fullbokad – inga lediga platser.</p>
+            )}
+
+            {/* Primary action */}
+            {slot.status === 'open' && !full && (
+              <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                <Button className="w-full" onClick={() => setBookingDialogOpen(true)}>
                   Boka lektion
                 </Button>
-              </div>
-            </PermissionGate>
-          ) : (
-            <div className="px-5 py-4 border-t border-border space-y-2">
-              <p className="text-xs text-center text-muted-foreground">
-                {full
-                  ? 'Fullbokad – inga lediga platser.'
-                  : slot.status === 'in_progress'
-                  ? 'Lektion pågår – bokningsändringar hanteras av instruktören.'
-                  : slot.status === 'completed'
-                  ? 'Lektionen är avslutad.'
-                  : slot.status === 'cancelled'
-                  ? 'Passet är avbokat.'
-                  : slot.status === 'blocked'
-                  ? 'Passet är blockerat.'
-                  : 'Passet är inte öppet för bokning.'}
-              </p>
-              {full && slot.status === 'open' && (
+              </PermissionGate>
+            )}
+            {slot.status === 'open' && full && (
+              <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                <Button variant="outline" className="w-full" onClick={() => setAddWaitlistDialogOpen(true)}>
+                  Lägg till på väntelista
+                </Button>
+              </PermissionGate>
+            )}
+            {slot.status === 'blocked' && (
+              <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                <Button className="w-full" disabled={updateStatus.isPending} onClick={handleUnblock}>
+                  {updateStatus.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Öppna igen'}
+                </Button>
+              </PermissionGate>
+            )}
+
+            {/* Secondary operational actions */}
+            <div className="flex flex-wrap gap-1.5">
+              {slot.status === 'open' && !full && (
                 <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
                   <Button
+                    size="sm"
                     variant="outline"
-                    className="w-full"
-                    onClick={() => setAddWaitlistDialogOpen(true)}
+                    className="h-7 text-xs gap-1 flex-1"
+                    onClick={() => setMatchDialogOpen(true)}
                   >
-                    Lägg till på väntelista
+                    <UserSearch className="w-3 h-3" />
+                    Hitta elever
+                  </Button>
+                </PermissionGate>
+              )}
+
+              {slot.status === 'open' && slot.current_bookings === 0 && (
+                <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1 flex-1"
+                    disabled={updateStatus.isPending}
+                    onClick={handleBlock}
+                  >
+                    {updateStatus.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Ban className="w-3 h-3" />}
+                    Blockera
+                  </Button>
+                </PermissionGate>
+              )}
+
+              <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1 flex-1"
+                  onClick={() => setDuplicateSheetOpen(true)}
+                >
+                  <Copy className="w-3 h-3" />
+                  Kopiera
+                </Button>
+              </PermissionGate>
+
+              {!TERMINAL_SLOT_STATUSES.has(slot.status) && slot.current_bookings === 0 && (
+                <PermissionGate permission={Permissions.SCHEDULING_SLOT_DELETE}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1 flex-1 text-destructive border-destructive/30 hover:bg-destructive/10"
+                    onClick={() => setDeleteConfirmOpen(true)}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Ta bort
                   </Button>
                 </PermissionGate>
               )}
             </div>
-          )}
-        </SheetContent>
-      </Sheet>
+
+            {deleteConfirmOpen && (
+              <div className="flex items-center gap-2 p-2 rounded-lg border border-destructive/30 bg-destructive/5">
+                <span className="text-xs text-foreground flex-1">Ta bort detta pass?</span>
+                <Button size="sm" variant="destructive" className="h-7 text-xs" disabled={deleteSlot.isPending} onClick={handleDelete}>
+                  {deleteSlot.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Ja, ta bort'}
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={deleteSlot.isPending} onClick={() => setDeleteConfirmOpen(false)}>
+                  Avbryt
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Nested: create booking */}
       <BookingDialog
@@ -965,6 +1425,25 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
         onOpenChange={setBookingDialogOpen}
         slot={slot}
         onSuccess={() => setBookingDialogOpen(false)}
+      />
+
+      {/* Nested: find matching students — same dialog, pre-filtered by instructor's licence category */}
+      <BookingDialog
+        open={matchDialogOpen}
+        onOpenChange={setMatchDialogOpen}
+        slot={slot}
+        matchCategory={matchCategory}
+        onSuccess={() => setMatchDialogOpen(false)}
+      />
+
+      {/* Nested: duplicate slot — same instructor/vehicle/lesson type, new time */}
+      <CreateSlotSheet
+        open={duplicateSheetOpen}
+        onOpenChange={setDuplicateSheetOpen}
+        initialDate={new Date(`${slot.starts_at.slice(0, 10)}T12:00:00`)}
+        initialInstructorId={slot.instructor_id}
+        initialLessonTypeId={slot.lesson_type_id}
+        initialVehicleId={slot.vehicle_id}
       />
 
       {/* Nested: cancel booking */}

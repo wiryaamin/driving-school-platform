@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import {
   Button, Skeleton, Switch, Label, Input,
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
   toast,
 } from '@platform/ui';
@@ -15,6 +14,7 @@ import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { GoogleLocationMap } from '@shared/components/GoogleLocationMap.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -423,18 +423,18 @@ export function LocationsSettingsPage() {
         </div>
       )}
 
-      {/* Create / Edit Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="right" className="sm:max-w-lg flex flex-col overflow-hidden p-0">
+      {/* Create / Edit Dialog */}
+      <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
+        <DialogContent className="w-full sm:max-w-lg max-h-[85vh] flex flex-col overflow-hidden p-0">
 
-          <SheetHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0 pr-12">
-            <SheetTitle>{editingId ? 'Redigera filial' : 'Ny filial'}</SheetTitle>
-            <SheetDescription>
+          <DialogHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0 pr-12">
+            <DialogTitle>{editingId ? 'Redigera filial' : 'Ny filial'}</DialogTitle>
+            <DialogDescription>
               {editingId
                 ? 'Uppdatera filialens uppgifter nedan.'
                 : 'Lägg till en ny filial för er verksamhet.'}
-            </SheetDescription>
-          </SheetHeader>
+            </DialogDescription>
+          </DialogHeader>
 
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
 
@@ -538,6 +538,12 @@ export function LocationsSettingsPage() {
                   placeholder="t.ex. Stockholms län"
                 />
               </Field>
+
+              <GoogleLocationMap
+                addressLine1={form.address_line1}
+                postalCode={form.postal_code}
+                city={form.city}
+              />
             </section>
 
             {/* Kontaktuppgifter */}
@@ -615,17 +621,17 @@ export function LocationsSettingsPage() {
 
           </div>
 
-          <SheetFooter className="px-6 py-4 border-t border-border shrink-0 gap-2">
+          <DialogFooter className="px-6 py-4 border-t border-border shrink-0 gap-2">
             <Button variant="outline" onClick={() => setSheetOpen(false)} disabled={isPending}>
               Avbryt
             </Button>
             <Button onClick={handleSave} disabled={isPending}>
               {isPending ? 'Sparar…' : editingId ? 'Spara ändringar' : 'Skapa filial'}
             </Button>
-          </SheetFooter>
+          </DialogFooter>
 
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation */}
       <Dialog open={!!deleteId} onOpenChange={open => { if (!open) setDeleteId(null); }}>

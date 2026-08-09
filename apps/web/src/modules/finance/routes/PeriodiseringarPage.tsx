@@ -26,10 +26,6 @@ import {
   DialogTitle,
   Input,
   Label,
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
   Tabs,
   TabsContent,
   TabsList,
@@ -245,11 +241,11 @@ function AccrualDetailSheet({ scheduleId, onClose }: { scheduleId: string; onClo
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-        <SheetContent className="w-[560px] sm:w-[640px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>{isLoading ? 'Laddar…' : (data?.description ?? 'Periodisering')}</SheetTitle>
-          </SheetHeader>
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{isLoading ? 'Laddar…' : (data?.description ?? 'Periodisering')}</DialogTitle>
+          </DialogHeader>
 
           {isLoading ? (
             <div className="mt-4 space-y-3">
@@ -392,8 +388,8 @@ function AccrualDetailSheet({ scheduleId, onClose }: { scheduleId: string; onClo
               )}
             </div>
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       {releasing && data && <ReleaseAccrualDialog schedule={data} onClose={() => setReleasing(false)} />}
       {cancelling && data && <CancelAccrualDialog schedule={data} onClose={() => setCancelling(false)} />}

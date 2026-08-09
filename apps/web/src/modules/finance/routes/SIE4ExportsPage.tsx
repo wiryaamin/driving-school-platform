@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Download, FileText, Plus, RefreshCw } from 'lucide-react';
 import {
   Button, Badge,
-  Sheet, SheetContent, SheetHeader, SheetTitle,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   toast,
@@ -53,11 +52,11 @@ function SIE4DetailSheet({ id, onClose }: DetailSheetProps) {
     : 'SIE4.se';
 
   return (
-    <Sheet open={Boolean(id)} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full max-w-3xl flex flex-col gap-0 p-0">
-        <SheetHeader className="px-6 py-4 border-b border-border shrink-0">
-          <SheetTitle>SIE4-exportdetaljer</SheetTitle>
-        </SheetHeader>
+    <Dialog open={Boolean(id)} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="w-full sm:max-w-3xl max-h-[85vh] flex flex-col gap-0 p-0">
+        <DialogHeader className="px-6 py-4 border-b border-border shrink-0">
+          <DialogTitle>SIE4-exportdetaljer</DialogTitle>
+        </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
           {isLoading ? (
@@ -137,8 +136,8 @@ function SIE4DetailSheet({ id, onClose }: DetailSheetProps) {
             </>
           )}
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 

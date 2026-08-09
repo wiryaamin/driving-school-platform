@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   usePortalBalance, usePortalMe, usePortalOrg,
-  usePortalRecordSwishInitiated, usePortalCreateStripeCheckout,
+  usePortalRecordSwishInitiated, usePortalCreateStripeCheckout, usePortalCreateNetsCheckout,
   usePortalPaymentRequest, usePortalPackages,
 } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
@@ -96,11 +96,12 @@ type InvoiceData = {
 };
 
 const INVOICE_STATUS: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-  draft:    { label: 'Utkast',    cls: 'text-gray-400',   Icon: Clock          },
-  issued:   { label: 'Obetald',   cls: 'text-amber-600',  Icon: AlertTriangle  },
-  paid:     { label: 'Betald',    cls: 'text-green-600',  Icon: CheckCircle    },
-  overdue:  { label: 'Förfallen', cls: 'text-red-600',    Icon: AlertTriangle  },
-  void:     { label: 'Makulerad', cls: 'text-gray-400',   Icon: Clock          },
+  draft:           { label: 'Utkast',        cls: 'text-gray-400',   Icon: Clock          },
+  issued:          { label: 'Obetald',       cls: 'text-amber-600',  Icon: AlertTriangle  },
+  paid:            { label: 'Betald',        cls: 'text-green-600',  Icon: CheckCircle    },
+  partially_paid:  { label: 'Delvis betald', cls: 'text-amber-600',  Icon: AlertTriangle  },
+  overdue:         { label: 'Förfallen',     cls: 'text-red-600',    Icon: AlertTriangle  },
+  void:            { label: 'Makulerad',     cls: 'text-gray-400',   Icon: Clock          },
 };
 
 // ─── Invoice detail sheet ─────────────────────────────────────────────────────
@@ -364,6 +365,76 @@ function StripeSection({ unpaidInvs }: { unpaidInvs: InvoiceData[] }) {
   );
 }
 
+// ─── Nets card payment section ─────────────────────────────────────────────────
+
+function NetsSection({ unpaidInvs }: { unpaidInvs: InvoiceData[] }) {
+  const createCheckout                    = usePortalCreateNetsCheckout();
+  const [loadingInvoiceId, setLoadingId]  = useState<string | null>(null);
+  const [error, setError]                 = useState<string | null>(null);
+
+  async function handleCardPay(inv: InvoiceData) {
+    setLoadingId(inv.id);
+    setError(null);
+    try {
+      const result = await createCheckout.mutateAsync(inv.id);
+      // Redirect to Nets hosted payment page
+      window.location.href = result.session_url;
+    } catch (e) {
+      setError((e as Error).message ?? 'Betalning misslyckades. Försök igen.');
+      setLoadingId(null);
+    }
+  }
+
+  return (
+    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+      <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-50 dark:border-gray-800">
+        <CreditCard className="w-4 h-4 text-gray-400" />
+        <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100">Betala med kort (Nets)</h2>
+      </div>
+      <div className="px-5 py-4 space-y-3">
+        {error && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+            <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+          </div>
+        )}
+        {unpaidInvs.slice(0, 3).map(inv => {
+          const isLoading = loadingInvoiceId === inv.id;
+          return (
+            <button
+              key={inv.id}
+              onClick={() => void handleCardPay(inv)}
+              disabled={loadingInvoiceId !== null}
+              className="w-full flex items-center justify-between p-3 rounded-xl bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 dark:hover:bg-purple-900/30 active:scale-[0.99] transition-all disabled:opacity-60 disabled:cursor-not-allowed text-left"
+            >
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  {inv.invoice_number ?? `#${inv.id.slice(0, 8)}`}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {inv.status === 'overdue' ? 'Förfallen — ' : ''}{formatSek(inv.total_sek)}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {isLoading
+                  ? <Loader2 className="w-4 h-4 text-purple-500 animate-spin" />
+                  : <CreditCard className="w-4 h-4 text-purple-500" />
+                }
+                <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">
+                  {isLoading ? 'Öppnar...' : 'Betala'}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center">
+          Säker kortbetalning via Nets Easy
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Payment return banner (shown when returning from Stripe) ─────────────────
 
 function PaymentReturnBanner() {
@@ -476,7 +547,7 @@ export function StudentPortalKontoPage() {
 
   const hasDebt    = (balance?.outstanding_sek ?? 0) > 0;
   const swishNum   = org?.swish_number ?? null;
-  const unpaidInvs = balance?.recent_invoices.filter(inv => inv.status === 'issued' || inv.status === 'overdue') ?? [];
+  const unpaidInvs = balance?.recent_invoices.filter(inv => inv.status === 'issued' || inv.status === 'overdue' || inv.status === 'partially_paid') ?? [];
 
   return (
     <div className="px-4 py-5 max-w-lg mx-auto space-y-5">
@@ -562,7 +633,7 @@ export function StudentPortalKontoPage() {
               const pct = pkg.quantity_granted > 0
                 ? Math.round((pkg.quantity_consumed / pkg.quantity_granted) * 100)
                 : 0;
-              const isExhausted = pkg.status === 'exhausted';
+              const isExhausted = pkg.quantity_remaining <= 0;
               const isExpired   = pkg.expires_at ? new Date(pkg.expires_at) < new Date() : false;
               return (
                 <div key={pkg.id} className="px-5 py-3.5">
@@ -626,6 +697,7 @@ export function StudentPortalKontoPage() {
             <SwishSection swishNum={swishNum} unpaidInvs={unpaidInvs} />
           )}
           <StripeSection unpaidInvs={unpaidInvs} />
+          <NetsSection unpaidInvs={unpaidInvs} />
         </>
       )}
 

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { useTranslation } from '@platform/i18n';
 import { useAuth } from '@core/auth/hooks.js';
 import { supabase } from '@core/api/supabase.js';
-import { parseJwtClaims } from '@/lib/auth/jwt.js';
+import { parseJwtClaims, getPostLoginRoute } from '@/lib/auth/jwt.js';
 import { cn } from '@/lib/utils.js';
 import { BankidLogin } from '../components/BankidLogin.js';
 
@@ -55,7 +55,7 @@ export function LoginPage() {
     }
     const { data: { session } } = await supabase.auth.getSession();
     const claims = session ? parseJwtClaims(session.access_token) : null;
-    navigate(claims?.is_platform_admin ? '/platform/dashboard' : '/dashboard', { replace: true });
+    navigate(getPostLoginRoute(claims), { replace: true });
   };
 
   const onSubmit = async (values: LoginFormValues) => {
@@ -89,11 +89,13 @@ export function LoginPage() {
 
         {/* Email */}
         <FormField
+          id="login_email"
           label={t('login.email_label')}
           {...(errors.email?.message ? { error: errors.email.message } : {})}
         >
           <input
             {...register('email')}
+            id="login_email"
             type="email"
             placeholder={t('login.email_placeholder')}
             autoComplete="email"
@@ -112,11 +114,13 @@ export function LoginPage() {
 
         {/* Password */}
         <FormField
+          id="login_password"
           label={t('login.password_label')}
           {...(errors.password?.message ? { error: errors.password.message } : {})}
         >
           <input
             {...register('password')}
+            id="login_password"
             type="password"
             placeholder="••••••••"
             autoComplete="current-password"
@@ -134,7 +138,11 @@ export function LoginPage() {
 
         {/* Forgot password */}
         <div className="flex justify-end">
-          <button type="button" className="text-xs text-primary hover:text-primary/80 transition-colors">
+          <button
+            type="button"
+            onClick={() => navigate('/auth/forgot-password')}
+            className="text-xs text-primary hover:text-primary/80 transition-colors"
+          >
             {t('login.forgot_password')}
           </button>
         </div>
@@ -177,19 +185,21 @@ export function LoginPage() {
 // ─── FormField Helper ─────────────────────────────────────────────────────────
 
 function FormField({
+  id,
   label,
   error,
   children,
 }: {
+  id: string;
   label: string;
   error?: string;
   children: ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium text-foreground">{label}</label>
+      <label htmlFor={id} className="text-sm font-medium text-foreground">{label}</label>
       {children}
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
     </div>
   );
 }

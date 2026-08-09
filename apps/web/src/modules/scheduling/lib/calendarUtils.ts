@@ -11,13 +11,21 @@ export interface SlotStatusConfig {
   dot: string; // Tailwind bg class for badge dot
 }
 
+// green = free, red = booked/occupied (full or a lesson actively in
+// progress), purple = blocked by staff (a different concept from a
+// customer booking, kept visually distinct). Matches
+// components/MultiInstructorGrid.tsx and MultiVehicleGrid.tsx's convention
+// exactly — those two components render their own grid cells independently
+// (not through slotToCalendarEvent) and previously disagreed with this
+// config and each other (orange/amber for full, blue for open in one of
+// them) — all three are now the same scheme.
 export const SLOT_STATUS_CONFIG: Record<LessonSlotStatus, SlotStatusConfig> = {
   open:        { bg: '#16a34a',                    border: '#15803d',                   text: '#ffffff', label: 'Öppen',     dot: 'bg-green-500' },
-  full:        { bg: '#d97706',                    border: '#b45309',                   text: '#ffffff', label: 'Fullbokad', dot: 'bg-amber-500' },
-  in_progress: { bg: '#2563eb',                    border: '#3b82f6',                   text: '#ffffff', label: 'Pågår',     dot: 'bg-blue-500' },
+  full:        { bg: '#dc2626',                    border: '#b91c1c',                   text: '#ffffff', label: 'Fullbokad', dot: 'bg-red-500' },
+  in_progress: { bg: '#dc2626',                    border: '#b91c1c',                   text: '#ffffff', label: 'Pågår',     dot: 'bg-red-500' },
   completed:   { bg: 'rgba(107, 114, 128, 0.55)',  border: 'rgba(75, 85, 99, 0.5)',     text: '#ffffff', label: 'Slutförd',  dot: 'bg-gray-500' },
-  cancelled:   { bg: 'rgba(220, 38, 38, 0.45)',    border: 'rgba(185, 28, 28, 0.4)',    text: '#ffffff', label: 'Avbokad',   dot: 'bg-red-500' },
-  blocked:     { bg: 'rgba(55, 65, 81, 0.45)',     border: 'rgba(31, 41, 55, 0.4)',     text: '#d1d5db', label: 'Blockerad', dot: 'bg-gray-700' },
+  cancelled:   { bg: 'rgba(107, 114, 128, 0.35)',  border: 'rgba(75, 85, 99, 0.3)',     text: '#ffffff', label: 'Avbokad',   dot: 'bg-gray-500' },
+  blocked:     { bg: '#9333ea',                    border: '#7e22ce',                   text: '#ffffff', label: 'Blockerad', dot: 'bg-purple-500' },
 };
 
 export function getSlotStatusConfig(status: LessonSlotStatus): SlotStatusConfig {

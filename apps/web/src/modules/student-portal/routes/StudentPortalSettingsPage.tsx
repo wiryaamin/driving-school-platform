@@ -2,10 +2,11 @@ import { useState } from 'react';
 import {
   User, GraduationCap, Flag, Camera,
   Lock, Sun, Moon, Monitor, ChevronRight, AlertTriangle,
-  CheckCircle2, ClipboardCheck, Star, BookOpen, Award,
+  CheckCircle2, ClipboardCheck, Star, BookOpen, Award, Bell, BellOff,
 } from 'lucide-react';
-import { usePortalMe } from '../hooks/useStudentPortal.js';
+import { usePortalMe, useRegisterPushToken } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
+import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -118,6 +119,64 @@ function ThemeCard({
   );
 }
 
+// ─── Notifications card ───────────────────────────────────────────────────────
+
+const PUSH_STATUS_LABEL: Record<string, string> = {
+  not_configured: 'Push-notiser är inte tillgängliga just nu',
+  unsupported:    'Din webbläsare stöder inte push-notiser',
+  denied:         'Du har blockerat notiser för denna webbläsare',
+  registering:    'Aktiverar...',
+  error:          'Något gick fel — försök igen',
+};
+
+function NotificationsCard() {
+  const registerMutation = useRegisterPushToken();
+  const { status, error, subscribe } = usePushSubscription({
+    storageNamespace: 'student-portal',
+    register: (input) => registerMutation.mutateAsync(input),
+  });
+
+  const isGranted = status === 'granted';
+  const canEnable = status === 'default' || status === 'error';
+
+  return (
+    <div>
+      <SectionHeading>Notiser</SectionHeading>
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center gap-4 p-4">
+          <div className={cn(
+            'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
+            isGranted ? 'bg-green-100' : 'bg-gray-100',
+          )}>
+            {isGranted ? <Bell className="w-5 h-5 text-green-600" /> : <BellOff className="w-5 h-5 text-gray-400" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-800">Push-notiser</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {isGranted
+                ? 'Aktiverade för denna enhet — du får notiser om lektioner och bokningar.'
+                : (PUSH_STATUS_LABEL[status] ?? 'Få notiser om bokningar och påminnelser direkt i webbläsaren.')}
+            </p>
+          </div>
+          {canEnable && (
+            <button
+              onClick={() => void subscribe()}
+              className="text-xs font-semibold text-[#684EFF] px-3 py-1.5 rounded-full border border-[#684EFF]/30 bg-blue-50 hover:bg-blue-100 transition-colors shrink-0"
+            >
+              Aktivera
+            </button>
+          )}
+        </div>
+        {error && (
+          <div className="px-4 py-2.5 bg-red-50 border-t border-red-100">
+            <p className="text-xs text-red-600">{error}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Allmänt tab ──────────────────────────────────────────────────────────────
 
 function AllmantTab() {
@@ -193,6 +252,9 @@ function AllmantTab() {
           <ThemeCard mode="light"  label="Ljus"            Icon={Sun}     selected={theme === 'light'}  onSelect={() => selectTheme('light')}  />
         </div>
       </div>
+
+      {/* Notifications */}
+      <NotificationsCard />
 
       {/* Security */}
       <div>

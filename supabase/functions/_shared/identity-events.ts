@@ -26,7 +26,8 @@ export type IdentityEventProvider =
   | 'bankid'
   | 'entra_id'
   | 'google_workspace'
-  | 'saml';
+  | 'saml'
+  | 'person_lookup';
 
 export type IdentityEventSeverity = 'info' | 'warning' | 'critical';
 

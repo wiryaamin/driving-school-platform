@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Loader2, X, Plus, User, Copy, Check, ExternalLink, TrendingUp, Users, ChartBar, CheckCircle, XCircle, AlertCircle, Trash2, Car } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils.js';
@@ -21,6 +21,8 @@ import type { Vehicle } from '@modules/resources/hooks/useVehicles.js';
 import { useGenerateInstructorPortalToken } from '@modules/instructor-portal/hooks/useInstructorPortal.js';
 import { formatDateTime, computeCertStatus } from '../lib/instructorUtils.js';
 import { supabase } from '@core/api/supabase.js';
+import { toast } from '@platform/ui';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -151,17 +153,21 @@ function OversiktTab({
   const [phone,        setPhone]        = useState(instructor.phone ?? '');
   const [languages,    setLanguages]    = useState<string[]>(instructor.languages_spoken ?? []);
   const [langSearch,   setLangSearch]   = useState('');
-  const [presentation, setPresentation] = useState('');
-  const [sortOrder,    setSortOrder]    = useState('0');
-  const [inBooking,    setInBooking]    = useState(true);
-  const [inEcommerce,  setInEcommerce]  = useState(false);
-  const [onWebsite,    setOnWebsite]    = useState(true);
+  const [presentation, setPresentation] = useState(instructor.bio ?? '');
+  const [addressLine1, setAddressLine1] = useState(instructor.address_line1 ?? '');
+  const [postalCode,   setPostalCode]   = useState(instructor.postal_code ?? '');
+  const [city,         setCity]         = useState(instructor.city ?? '');
+  const [sortOrder,    setSortOrder]    = useState(String(instructor.sort_order));
+  const { organization } = useSession();
+  const [inBooking,    setInBooking]    = useState(instructor.show_in_booking);
+  const [inEcommerce,  setInEcommerce]  = useState(instructor.show_in_ecommerce);
+  const [onWebsite,    setOnWebsite]    = useState(instructor.show_on_website);
 
-  // Emergency contact (local state only)
-  const [nextFirstName, setNextFirstName] = useState('');
-  const [nextLastName,  setNextLastName]  = useState('');
-  const [nextEmail,     setNextEmail]     = useState('');
-  const [nextPhone,     setNextPhone]     = useState('');
+  // Emergency contact
+  const [nextFirstName, setNextFirstName] = useState(instructor.emergency_contact_first_name ?? '');
+  const [nextLastName,  setNextLastName]  = useState(instructor.emergency_contact_last_name ?? '');
+  const [nextEmail,     setNextEmail]     = useState(instructor.emergency_contact_email ?? '');
+  const [nextPhone,     setNextPhone]     = useState(instructor.emergency_contact_phone ?? '');
 
   // Sync if instructor prop changes
   useEffect(() => {
@@ -170,6 +176,18 @@ function OversiktTab({
     setEmail(instructor.email);
     setPhone(instructor.phone ?? '');
     setLanguages(instructor.languages_spoken ?? []);
+    setPresentation(instructor.bio ?? '');
+    setAddressLine1(instructor.address_line1 ?? '');
+    setPostalCode(instructor.postal_code ?? '');
+    setCity(instructor.city ?? '');
+    setSortOrder(String(instructor.sort_order));
+    setInBooking(instructor.show_in_booking);
+    setInEcommerce(instructor.show_in_ecommerce);
+    setOnWebsite(instructor.show_on_website);
+    setNextFirstName(instructor.emergency_contact_first_name ?? '');
+    setNextLastName(instructor.emergency_contact_last_name ?? '');
+    setNextEmail(instructor.emergency_contact_email ?? '');
+    setNextPhone(instructor.emergency_contact_phone ?? '');
   }, [instructor]);
 
   function removeLanguage(lang: string) {
@@ -233,9 +251,9 @@ function OversiktTab({
 
         {/* Address row */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-          <TextField label="Adress" value="" onChange={() => {}} placeholder="Ej registrerat" />
-          <TextField label="Postnummer" value="" onChange={() => {}} placeholder="Ej registrerat" />
-          <TextField label="Stad" value="" onChange={() => {}} placeholder="Ej registrerat" />
+          <TextField label="Adress" value={addressLine1} onChange={setAddressLine1} placeholder="Ej registrerat" />
+          <TextField label="Postnummer" value={postalCode} onChange={setPostalCode} placeholder="Ej registrerat" />
+          <TextField label="Stad" value={city} onChange={setCity} placeholder="Ej registrerat" />
         </div>
 
         {/* Meta row */}
@@ -280,6 +298,13 @@ function OversiktTab({
               last_name: lastName,
               email,
               phone: phone || null,
+              address_line1: addressLine1 || null,
+              postal_code: postalCode || null,
+              city: city || null,
+              sort_order: parseInt(sortOrder, 10) || 0,
+              show_in_booking: inBooking,
+              show_in_ecommerce: inEcommerce,
+              show_on_website: onWebsite,
             })
           }
         />
@@ -331,7 +356,7 @@ function OversiktTab({
       </SectionCard>
 
       {/* Presentation */}
-      <SectionCard title="Presentation till Teoricentralen">
+      <SectionCard title={`Presentation till ${organization?.name ?? 'trafikskolan'}`}>
         <textarea
           value={presentation}
           onChange={(e) => setPresentation(e.target.value)}
@@ -339,7 +364,10 @@ function OversiktTab({
           placeholder="Skriv en kort presentation..."
           className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-blue-400"
         />
-        <SaveButton loading={false} onClick={() => {}} />
+        <SaveButton
+          loading={saving}
+          onClick={() => onSave({ bio: presentation || null })}
+        />
       </SectionCard>
 
       {/* Anhöriga personer */}
@@ -350,7 +378,17 @@ function OversiktTab({
           <TextField label="E-postadress"  value={nextEmail}     onChange={setNextEmail}     placeholder="" />
           <TextField label="Telefonnummer" value={nextPhone}     onChange={setNextPhone}     placeholder="" />
         </div>
-        <SaveButton loading={false} onClick={() => {}} />
+        <SaveButton
+          loading={saving}
+          onClick={() =>
+            onSave({
+              emergency_contact_first_name: nextFirstName || null,
+              emergency_contact_last_name: nextLastName || null,
+              emergency_contact_email: nextEmail || null,
+              emergency_contact_phone: nextPhone || null,
+            })
+          }
+        />
       </SectionCard>
 
       {/* Favoritfordon */}
@@ -380,88 +418,8 @@ function SchemaTab({
 }: {
   instructor: NonNullable<ReturnType<typeof useInstructor>['data']>;
 }) {
-  const [template,      setTemplate]     = useState('');
-  const [startDate,     setStartDate]    = useState('');
-  const [endDate,       setEndDate]      = useState('');
-  const [noOverwrite,   setNoOverwrite]  = useState(false);
-  const [allowOverlap,  setAllowOverlap] = useState(false);
-
   return (
     <>
-      <SectionCard title="Generera schema">
-        <p className="text-sm text-gray-600 mb-4">
-          Välj en schemamall som du vill använda när du lägger ett schema till denna lärare.
-        </p>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-          <div>
-            <FieldLabel>Välj schemamall</FieldLabel>
-            <select
-              value={template}
-              onChange={(e) => setTemplate(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-            >
-              <option value="">Välj en schemamall</option>
-            </select>
-          </div>
-          <div>
-            <FieldLabel>Välj startdatum</FieldLabel>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-            />
-          </div>
-          <div>
-            <FieldLabel>Välj slutdatum</FieldLabel>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={noOverwrite}
-              onChange={(e) => setNoOverwrite(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-blue-500"
-            />
-            <div>
-              <p className="text-sm font-medium text-gray-800">Skriv inte över schemalagda tidsluckor</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Markera denna om du vill att befintliga obokade tider INTE ska skrivas över när du genererar ett nytt schema.
-              </p>
-            </div>
-          </label>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={allowOverlap}
-              onChange={(e) => setAllowOverlap(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-blue-500"
-            />
-            <div>
-              <p className="text-sm font-medium text-gray-800">Tillåt överlappande tidsluckor</p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Markera denna om du vill att befintliga tidsluckor ska överlappa med nya tidsluckor när du genererar ett nytt schema.
-              </p>
-            </div>
-          </label>
-        </div>
-
-        <div className="flex justify-end">
-          <button className="bg-green-500 hover:bg-green-600 text-white rounded-full px-6 py-2 text-sm font-semibold">
-            Generera
-          </button>
-        </div>
-      </SectionCard>
-
       <SectionCard title="Loggar">
         <p className="text-sm text-gray-400">Denna personal har inga loggar.</p>
       </SectionCard>
@@ -819,19 +777,43 @@ function TimeOffSection({
                         {statusInfo.label}
                       </span>
                     </td>
-                    <td className="py-2">
+                    <td className="py-2 space-x-3">
                       {to.status === 'pending' && (
-                        <button
-                          onClick={() => updateMutation.mutate({
-                            timeOffId:    to.id,
-                            instructorId,
-                            status:       'cancelled',
-                          })}
-                          disabled={updateMutation.isPending}
-                          className="text-xs text-red-400 hover:text-red-600 hover:underline disabled:opacity-50"
-                        >
-                          Avboka
-                        </button>
+                        <>
+                          <button
+                            onClick={() => updateMutation.mutate({
+                              timeOffId:    to.id,
+                              instructorId,
+                              status:       'approved',
+                            })}
+                            disabled={updateMutation.isPending}
+                            className="text-xs text-green-600 hover:text-green-700 hover:underline disabled:opacity-50"
+                          >
+                            Godkänn
+                          </button>
+                          <button
+                            onClick={() => updateMutation.mutate({
+                              timeOffId:    to.id,
+                              instructorId,
+                              status:       'rejected',
+                            })}
+                            disabled={updateMutation.isPending}
+                            className="text-xs text-gray-400 hover:text-gray-600 hover:underline disabled:opacity-50"
+                          >
+                            Neka
+                          </button>
+                          <button
+                            onClick={() => updateMutation.mutate({
+                              timeOffId:    to.id,
+                              instructorId,
+                              status:       'cancelled',
+                            })}
+                            disabled={updateMutation.isPending}
+                            className="text-xs text-red-400 hover:text-red-600 hover:underline disabled:opacity-50"
+                          >
+                            Avboka
+                          </button>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -1874,19 +1856,21 @@ function InstallningarTab({
         )}
       </SectionCard>
 
-      {/* Generate new password */}
-      <SectionCard title="Generera nytt lösenord">
-        <p className="text-sm text-gray-600 mb-4">
-          Generera ett nytt lösenord och skicka ut det via e-post.
+      {/* Password reset — only relevant if this instructor also has a staff
+          login account. That account is managed separately under Inställningar
+          → Användare, which already has a real, working password-reset flow
+          (invite/resend, forced reset) — this page has no reliable way to
+          look up which auth account, if any, belongs to this instructor, so
+          it points there rather than duplicating a control it can't back. */}
+      <SectionCard title="Lösenord">
+        <p className="text-sm text-gray-600">
+          Om den här läraren även har ett personalkonto för inloggning i Trafikcloud hanteras
+          lösenord under{' '}
+          <Link to="/settings/users" className="text-blue-600 hover:underline font-medium">
+            Inställningar → Användare
+          </Link>
+          .
         </p>
-        <div className="flex justify-end gap-2">
-          <button className="bg-green-500 hover:bg-green-600 text-white rounded-full px-5 py-2 text-sm font-semibold">
-            Skicka e-post
-          </button>
-          <button className="bg-green-500 hover:bg-green-600 text-white rounded-full px-5 py-2 text-sm font-semibold">
-            Skicka SMS
-          </button>
-        </div>
       </SectionCard>
 
       {/* Block */}
@@ -1967,7 +1951,17 @@ export function InstructorDetailPage() {
 
   function handleSave(patch: Record<string, unknown>) {
     if (!instructor) return;
-    updateMutation.mutate({ id: instructor.id, input: patch as Parameters<typeof updateMutation.mutate>[0]['input'] });
+    updateMutation.mutate(
+      { id: instructor.id, input: patch as Parameters<typeof updateMutation.mutate>[0]['input'] },
+      {
+        onSuccess: () => toast({ title: 'Ändringarna sparade' }),
+        onError: (e) => toast({
+          title: 'Kunde inte spara ändringarna',
+          description: e instanceof Error ? e.message : undefined,
+          variant: 'destructive',
+        }),
+      },
+    );
   }
 
   function handleBlock() {

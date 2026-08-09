@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Bell, Copy, Car, Search, Plus, SlidersHorizontal, RefreshCw,
+  Bell, Copy, Car, Search, Plus, SlidersHorizontal, RefreshCw, ChevronDown,
 } from 'lucide-react';
 import { PhoneLink } from '@shared/components/PhoneLink.js';
 import type { ColumnDef } from '@platform/ui';
@@ -30,6 +30,24 @@ const STATUS_TABS: { key: Exclude<KundTab, 'filter'>; label: string; status?: St
   { key: 'vilande',    label: 'Pausade',    status: 'paused'  },
   { key: 'arkiverade', label: 'Arkiverade', status: 'archived'},
 ];
+
+// A visually disabled select-like placeholder for a not-yet-implemented
+// filter. Radix's real SelectTrigger requires a <Select> ancestor context
+// even when `disabled` — rendering it standalone (as this used to) throws
+// "SelectTrigger must be used within Select" and crashes the whole page.
+function DisabledSelectPlaceholder({ placeholder, title }: { placeholder: string; title: string }) {
+  return (
+    <div
+      role="button"
+      aria-disabled="true"
+      title={title}
+      className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm cursor-not-allowed opacity-40"
+    >
+      <span>{placeholder}</span>
+      <ChevronDown className="h-4 w-4 opacity-50" />
+    </div>
+  );
+}
 
 // ─── Filter types ─────────────────────────────────────────────────────────────
 
@@ -351,13 +369,11 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
           {/* Har */}
           <div className="flex items-center gap-3">
             <span className="w-16 shrink-0 text-sm text-muted-foreground">Har</span>
-            <div
-              title="Statusfilter under implementation — filtrera på aktiv/utgången behörighet"
-              className="w-[180px]"
-            >
-              <SelectTrigger disabled className="w-full text-sm opacity-40 cursor-not-allowed">
-                <SelectValue placeholder="Aktuell" />
-              </SelectTrigger>
+            <div className="w-[180px]">
+              <DisabledSelectPlaceholder
+                placeholder="Aktuell"
+                title="Statusfilter under implementation — filtrera på aktiv/utgången behörighet"
+              />
             </div>
             <Select
               value={draft.licenceCategoryHar || 'ALL'}
@@ -377,13 +393,11 @@ function FilterPanel({ draft, onChange, onApply }: FilterPanelProps) {
           {/* Har inte */}
           <div className="flex items-center gap-3">
             <span className="w-16 shrink-0 text-sm text-muted-foreground">Har inte</span>
-            <div
-              title="Statusfilter under implementation — filtrera på aktiv/utgången behörighet"
-              className="w-[180px]"
-            >
-              <SelectTrigger disabled className="w-full text-sm opacity-40 cursor-not-allowed">
-                <SelectValue placeholder="Aktuell" />
-              </SelectTrigger>
+            <div className="w-[180px]">
+              <DisabledSelectPlaceholder
+                placeholder="Aktuell"
+                title="Statusfilter under implementation — filtrera på aktiv/utgången behörighet"
+              />
             </div>
             <Select
               value={draft.licenceCategoryHarInte || 'ALL'}
@@ -557,6 +571,22 @@ export function StudentListPage() {
   // Filter state — draft (form) vs applied (query)
   const [filterDraft,    setFilterDraft]    = useState<FilterDraft>(DEFAULT_FILTER);
   const [appliedFilter,  setAppliedFilter]  = useState<FilterDraft>(DEFAULT_FILTER);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep link from StudentDashboardPage's "Ny kund" — opens the create form
+  // directly instead of just landing on the list.
+  useEffect(() => {
+    if (searchParams.get('create') === '1') {
+      setEditStudent(null);
+      setFormOpen(true);
+      setSearchParams((prev) => {
+        prev.delete('create');
+        return prev;
+      }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);

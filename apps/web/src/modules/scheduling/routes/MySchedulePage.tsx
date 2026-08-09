@@ -291,7 +291,7 @@ function AgendaView({ instructorId, lessonTypeMap, onSlotClick }: AgendaViewProp
           const startLabel   = formatSlotTime(slot.starts_at);
           const endLabel     = formatSlotTime(slot.ends_at);
           const duration     = slotDurationMinutes(slot);
-          const typeName     = lessonTypeMap[slot.lesson_type_id] ?? 'Pass';
+          const typeName     = lessonTypeMap[slot.lesson_type_id ?? ''] ?? 'Pass';
 
           return (
             <div

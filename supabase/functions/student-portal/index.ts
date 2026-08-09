@@ -6,7 +6,8 @@ import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
-import { decryptCredential } from '../_shared/credential-crypto.ts';
+import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
+import { decryptCredential, encryptCredential } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -20,7 +21,12 @@ const GenerateTokenSchema = z.object({
 });
 
 const CreateBookingSchema = z.object({
-  slot_id: z.string().uuid(),
+  slot_id:         z.string().uuid(),
+  // Required only when the slot itself has no fixed lesson type (generic
+  // availability) — the lesson type the student was browsing under when
+  // they picked this slot. See GET /slots' comment for why generic slots
+  // are now visible here at all.
+  lesson_type_id:  z.string().uuid().optional(),
 });
 
 const RescheduleSchema = z.object({
@@ -34,6 +40,16 @@ const CancelSchema = z.object({
 const SlotsQuerySchema = z.object({
   from: z.string().optional(),
   to:   z.string().optional(),
+});
+
+const RegisterPushTokenSchema = z.object({
+  token:          z.string().min(16),
+  previous_token: z.string().min(16).optional(),
+  platform:       z.enum(['web', 'ios', 'android']).optional(),
+});
+
+const RevokePushTokenSchema = z.object({
+  token_id: z.string().uuid(),
 });
 
 const WaitlistJoinSchema = z.object({
@@ -66,8 +82,8 @@ function fail(status: number, message: string): Response {
 // admins bypass, otherwise the caller's JWT-derived permissions must include
 // the required code.
 function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
-  if (ctx.isPlatformAdmin) return null;
   if (ctx.organizationId === null) return fail(403, 'Organization context required');
+  if (ctx.isPlatformAdmin) return null;
   if (!ctx.permissions.includes(code)) return fail(403, `Requires permission: ${code}`);
   return null;
 }
@@ -108,13 +124,20 @@ async function resolvePortalToken(req: Request): Promise<PortalSession | null> {
 
   const { data, error } = await supabase
     .from('student_portal_sessions')
-    .select('id, student_id, organization_id')
+    .select('id, student_id, organization_id, students!student_id(deleted_at)')
     .eq('token_hash', hash)
     .is('revoked_at', null)
     .gt('expires_at', new Date().toISOString())
     .single();
 
   if (error || !data) return null;
+
+  // A token issued before the student was archived/withdrawn otherwise stays
+  // fully valid until its own TTL expires — generate-token blocks *new*
+  // links for an archived student, but never revokes ones already handed
+  // out, so withdrawal doesn't actually cut off self-service portal access.
+  const studentRow = (data as unknown as { students: { deleted_at: string | null } | null }).students;
+  if (studentRow?.deleted_at) return null;
 
   // Update last_used_at asynchronously — don't await
   void supabase
@@ -364,6 +387,13 @@ Deno.serve((req: Request) =>
         .eq('organization_id', organization_id)
         .eq('status', 'open')
         .is('deleted_at', null)
+        // Generic-availability slots (lesson_type_id null) ARE included —
+        // the frontend only surfaces them once the student has picked a
+        // specific lesson type filter (see StudentPortalBokaPage.tsx), at
+        // which point that choice becomes the booking's lesson_type_id.
+        // Previously excluded entirely, meaning auto-provisioned instructor
+        // availability (no fixed lesson type by default) was invisible to
+        // self-service students even though staff could see and book it.
         .gte('starts_at', fromDt)
         .order('starts_at')
         .limit(80);
@@ -443,7 +473,7 @@ Deno.serve((req: Request) =>
       const parsed = CreateBookingSchema.safeParse(body);
       if (!parsed.success) return fail(400, 'slot_id required');
 
-      const { slot_id } = parsed.data;
+      const { slot_id, lesson_type_id: dtoLessonTypeId } = parsed.data;
 
       // Verify slot exists and has capacity
       const { data: slot } = await supabase
@@ -460,13 +490,25 @@ Deno.serve((req: Request) =>
         return fail(409, 'Slot is fully booked');
       }
 
+      const slotLessonTypeId = (slot as { lesson_type_id: string | null }).lesson_type_id;
+      if (!slotLessonTypeId && !dtoLessonTypeId) {
+        return fail(422, 'Detta pass har ingen förvald lektionstyp — ange lektionstyp vid bokning.');
+      }
+      // Same fallback the staff booking path already uses (bookings/index.ts):
+      // the slot's own type wins when it has one; only a generic slot ever
+      // needs the student-supplied one.
+      const effectiveLessonTypeId = slotLessonTypeId ?? dtoLessonTypeId ?? null;
+
       // Prevent duplicate booking
       const { data: existing } = await supabase
         .from('lesson_bookings')
         .select('id')
         .eq('slot_id', slot_id)
         .eq('student_id', student_id)
-        .neq('status', 'cancelled')
+        // 'cancelled' alone isn't enough — a rescheduled-away booking keeps its
+        // old row (status: 'rescheduled') at this slot_id, and without excluding
+        // it too, the student can never book back into their original slot.
+        .not('status', 'in', '(cancelled,rescheduled)')
         .is('deleted_at', null)
         .maybeSingle();
 
@@ -478,7 +520,7 @@ Deno.serve((req: Request) =>
       const preflight = await resolveLessonPackageCredit(supabase, {
         organizationId: organization_id,
         studentId:      student_id,
-        lessonTypeId:   (slot as { lesson_type_id: string | null }).lesson_type_id,
+        lessonTypeId:   effectiveLessonTypeId,
       });
 
       if (preflight.kind === 'insufficient') {
@@ -487,7 +529,12 @@ Deno.serve((req: Request) =>
 
       const { data: booking, error: insertErr } = await insertLessonBooking(
         supabase,
-        { organization_id, slot_id, student_id, status: 'reserved' },
+        {
+          organization_id, slot_id, student_id, status: 'reserved',
+          // Only set explicitly for generic slots — an already-typed slot's
+          // own value flows through the DB trigger as before, untouched.
+          ...(!slotLessonTypeId && dtoLessonTypeId ? { lesson_type_id: dtoLessonTypeId } : {}),
+        },
         'id, slot_id, student_id, status, created_at',
       );
 
@@ -604,18 +651,27 @@ Deno.serve((req: Request) =>
 
       const originalStatus = (booking as { status: string }).status;
 
-      // Mark old booking as rescheduled
+      // Mark old booking as rescheduled. cancelled_at must stay NULL here —
+      // lesson_bookings_cancel_consistency CHECK requires
+      // (status = 'cancelled') = (cancelled_at IS NOT NULL), so setting it
+      // alongside status = 'rescheduled' violates the constraint on every
+      // call. Confirmed live 2026-08-06 via direct reproduction: this was a
+      // 100%-reproducible failure, not an edge case — every reschedule
+      // attempt through this endpoint has always hit this constraint.
       const { error: markErr } = await supabase
         .from('lesson_bookings')
-        .update({ status: 'rescheduled', cancelled_at: new Date().toISOString() })
+        .update({ status: 'rescheduled' })
         .eq('id', bookingId);
 
-      if (markErr) return fail(500, 'Reschedule failed');
+      if (markErr) {
+        console.error('[student-portal] reschedule: failed to mark old booking', markErr.message, markErr.code);
+        return fail(500, 'Reschedule failed');
+      }
 
       // Create new booking
       const { data: newBooking, error: insertErr } = await supabase
         .from('lesson_bookings')
-        .insert({ organization_id, slot_id: new_slot_id, student_id, status: 'reserved' })
+        .insert({ organization_id, slot_id: new_slot_id, student_id, status: 'reserved', rescheduled_from_id: bookingId })
         .select('id, slot_id, status, created_at')
         .single();
 
@@ -626,6 +682,15 @@ Deno.serve((req: Request) =>
           .from('lesson_bookings')
           .update({ status: originalStatus, cancelled_at: null })
           .eq('id', bookingId);
+        console.error('[student-portal] reschedule: failed to create new booking', insertErr.message, insertErr.code);
+        // 23P01 = Postgres exclusion_violation — the student already has
+        // another active booking overlapping the newly selected slot's time
+        // window (lesson_bookings_student_no_overlap). A real conflict, not
+        // a server error — surfaced distinctly so the student understands
+        // why, instead of a generic failure.
+        if (insertErr.code === '23P01') {
+          return fail(409, 'Ni har redan en bokad lektion som krockar med den valda tiden.');
+        }
         return fail(500, 'Failed to create rescheduled booking');
       }
       return ok(newBooking, 201);
@@ -633,28 +698,46 @@ Deno.serve((req: Request) =>
 
     // ── GET /balance — outstanding invoices ───────────────────────────────────
     if (req.method === 'GET' && path === '/balance') {
-      const { data: invoices } = await supabase
+      // total_sek is not a real column (it's total_amount/outstanding_amount
+      // here) — this query has been silently failing on every call (data
+      // came back null, the error was never checked), always reporting 0
+      // outstanding regardless of actual invoice state. Also widened the
+      // status filter: 'partially_paid' invoices (e.g. after a partial
+      // refund reduces paid_amount without zeroing the invoice) do have a
+      // real outstanding balance and were being excluded entirely.
+      const { data: invoices, error: invErr } = await supabase
         .from('invoices')
-        .select('id, invoice_number, total_sek, status, issued_at, due_date')
+        .select('id, invoice_number, total_amount, outstanding_amount, status, issued_at, due_date')
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
-        .is('deleted_at', null)
+        // invoices are append-only/void (not soft-deleted) — there is no
+        // deleted_at column here, only void_at (this query 500'd on every
+        // call until the error above was actually checked).
+        .is('void_at', null)
+        // draft invoices are an internal working state (no issued_at yet,
+        // amount not finalized) and must never be shown to the customer.
+        .neq('status', 'draft')
         .order('issued_at', { ascending: false })
         .limit(10);
 
-      type InvoiceRow = { id: string; invoice_number: string | null; total_sek: number; status: string; issued_at: string; due_date: string | null };
+      if (invErr) return fail(500, 'Failed to fetch balance');
+
+      type InvoiceRow = {
+        id: string; invoice_number: string | null; total_amount: number; outstanding_amount: number;
+        status: string; issued_at: string; due_date: string | null;
+      };
       const rows = (invoices as unknown as InvoiceRow[] | null) ?? [];
 
       const outstanding = rows
-        .filter(i => i.status === 'issued' || i.status === 'overdue')
-        .reduce((sum, i) => sum + (i.total_sek ?? 0), 0);
+        .filter(i => i.status === 'issued' || i.status === 'overdue' || i.status === 'partially_paid')
+        .reduce((sum, i) => sum + (i.outstanding_amount ?? 0), 0);
 
       return ok({
         outstanding_sek: outstanding,
         recent_invoices: rows.map(i => ({
           id:             i.id,
           invoice_number: i.invoice_number,
-          total_sek:      i.total_sek,
+          total_sek:      i.total_amount,
           status:         i.status,
           issued_at:      i.issued_at,
           due_date:       i.due_date,
@@ -1005,15 +1088,19 @@ Deno.serve((req: Request) =>
       const invoiceId   = body?.invoice_id;
       if (!invoiceId) return fail(400, 'invoice_id required');
 
-      // Verify invoice belongs to this student
+      // Verify invoice belongs to this student. total_sek/deleted_at are not
+      // real columns on invoices (total_amount/outstanding_amount, void_at) —
+      // this query 400'd on every call, so `inv` was always null and this
+      // handler always returned a false "not found", meaning Swish payment
+      // initiation from the student portal has never actually worked.
       const { data: inv } = await supabase
         .from('invoices')
-        .select('id, total_sek')
+        .select('id, outstanding_amount')
         .eq('id', invoiceId)
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
-        .in('status', ['issued', 'overdue'])
-        .is('deleted_at', null)
+        .in('status', ['issued', 'overdue', 'partially_paid'])
+        .is('void_at', null)
         .maybeSingle();
 
       if (!inv) return fail(404, 'Invoice not found or already paid');
@@ -1025,7 +1112,7 @@ Deno.serve((req: Request) =>
           student_id,
           invoice_id: invoiceId,
           provider:   'swish',
-          amount_sek: (inv as { total_sek: number }).total_sek,
+          amount_sek: (inv as { outstanding_amount: number }).outstanding_amount,
           status:     'initiated',
           expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
         })
@@ -1046,11 +1133,8 @@ Deno.serve((req: Request) =>
       const invoiceId = body?.invoice_id;
       if (!invoiceId) return fail(400, 'invoice_id required');
 
-      // Verify invoice belongs to this student. total_sek/deleted_at are not
-      // real columns on invoices (total_amount/outstanding_amount, void_at) —
-      // this query 400'd on every call, so `inv` was always null and this
-      // handler always returned a false "not found", meaning Stripe payment
-      // initiation from the student portal has never actually worked.
+      // Verify invoice belongs to this student (see the Swish handler above
+      // for why total_sek/deleted_at were broken here too).
       const { data: inv } = await supabase
         .from('invoices')
         .select('id, outstanding_amount, invoice_number')
@@ -1150,6 +1234,170 @@ Deno.serve((req: Request) =>
       });
 
       return ok({ session_url: stripeData.url, payment_request_id: prId }, 201);
+    }
+
+    // ── POST /payments/nets/checkout — create Nets Easy payment ──────────────
+    // Nets' model differs from Stripe's in ways that matter, not cosmetically:
+    //   - Auth is a Bearer secret key against test.api.dibspayment.eu / api.dibspayment.eu
+    //     (two separate hostnames per environment, not one host + key prefix).
+    //   - There is no dashboard-configured webhook: each payment registers its
+    //     own webhook URL + a shared-secret "authorization" string (8-32
+    //     alphanumeric chars) that Nets echoes back verbatim in the
+    //     Authorization header of every callback — verified by nets-webhook
+    //     as a direct string comparison, not an HMAC signature.
+    //   - "checkout.charge: true" reserves AND captures in one step (the
+    //     Stripe-equivalent immediate-payment behavior); Nets then fires both
+    //     payment.checkout.completed (checkout form finished) and
+    //     payment.charge.created.v2 (money actually captured) — settlement
+    //     must wait for the latter, since a completed checkout can still fail
+    //     to charge.
+    if (req.method === 'POST' && path === '/payments/nets/checkout') {
+      const body      = await req.json().catch(() => null) as { invoice_id?: string } | null;
+      const invoiceId = body?.invoice_id;
+      if (!invoiceId) return fail(400, 'invoice_id required');
+
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, outstanding_amount, invoice_number')
+        .eq('id', invoiceId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .in('status', ['issued', 'overdue', 'partially_paid'])
+        .is('void_at', null)
+        .maybeSingle();
+
+      if (!inv) return fail(404, 'Invoice not found or already paid');
+
+      const { data: orgRow } = await supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', organization_id)
+        .maybeSingle();
+
+      const settings = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
+      const storedSecretKey = settings['nets_secret_key'] as string | undefined;
+      const netsSecretKey = storedSecretKey !== undefined
+        ? await decryptCredential(storedSecretKey)
+        : (Deno.env.get('NETS_SECRET_KEY') ?? '');
+
+      if (!netsSecretKey) return fail(503, 'Nets-betalning är inte konfigurerad för denna skola');
+
+      // Each org gets its own webhook authorization secret, generated once and
+      // reused for every payment — Nets requires this per payment-creation
+      // call (there is no dashboard-level webhook secret to configure ahead
+      // of time the way Stripe's is).
+      let webhookSecret: string;
+      const storedWebhookSecret = settings['nets_webhook_secret'] as string | undefined;
+      if (storedWebhookSecret !== undefined) {
+        webhookSecret = await decryptCredential(storedWebhookSecret);
+      } else {
+        webhookSecret = crypto.randomUUID().replace(/-/g, '');
+        await supabase
+          .from('organizations')
+          .update({ settings: { ...settings, nets_webhook_secret: await encryptCredential(webhookSecret) } })
+          .eq('id', organization_id);
+      }
+
+      const appUrl      = Deno.env.get('APP_URL') ?? 'http://localhost:5173';
+      const functionsUrl = Deno.env.get('SUPABASE_URL') ?? '';
+      const netsBase     = Deno.env.get('NETS_ENV') === 'live' ? 'https://api.dibspayment.eu' : 'https://test.api.dibspayment.eu';
+      const prId         = crypto.randomUUID();
+      const invNum       = (inv as { invoice_number: string | null }).invoice_number;
+      const amountSek    = (inv as { outstanding_amount: number }).outstanding_amount;
+      const amountMinor  = Math.round(amountSek * 100);
+      const webhookUrl   = `${functionsUrl}/functions/v1/nets-webhook/${organization_id}`;
+
+      const netsRes = await fetch(`${netsBase}/v1/payments`, {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${netsSecretKey}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({
+          order: {
+            items: [{
+              reference:        invoiceId,
+              name:              `Faktura ${invNum ?? invoiceId.slice(0, 8)}`,
+              quantity:          1,
+              unit:              'st',
+              unitPrice:         amountMinor,
+              taxRate:           0,
+              taxAmount:         0,
+              netTotalAmount:    amountMinor,
+              grossTotalAmount:  amountMinor,
+            }],
+            amount:    amountMinor,
+            currency:  'SEK',
+            reference: prId,
+          },
+          checkout: {
+            integrationType: 'HostedPaymentPage',
+            returnUrl:       `${appUrl}/portal/konto?payment=success&req=${prId}`,
+            cancelUrl:       `${appUrl}/portal/konto?payment=cancelled`,
+            termsUrl:        `${appUrl}/legal/terms`,
+            charge:          true,
+          },
+          notifications: {
+            webHooks: [
+              { eventName: 'payment.checkout.completed', url: webhookUrl, authorization: webhookSecret },
+              { eventName: 'payment.charge.created.v2',  url: webhookUrl, authorization: webhookSecret },
+            ],
+          },
+        }),
+      });
+
+      const netsData = await netsRes.json() as { paymentId?: string; hostedPaymentPageUrl?: string; message?: string };
+
+      if (!netsRes.ok || !netsData.paymentId) {
+        logger.error('student-portal: Nets payment creation failed', {
+          status: netsRes.status, error: netsData.message,
+        });
+        return fail(502, 'Payment provider error — please try again');
+      }
+
+      const paymentRequestRow = {
+        id:                  prId,
+        organization_id,
+        student_id,
+        invoice_id:          invoiceId,
+        provider:            'nets',
+        provider_session_id: netsData.paymentId,
+        amount_sek:          amountSek,
+        status:              'pending',
+        return_url:          `${appUrl}/portal/konto`,
+        expires_at:          new Date(Date.now() + 30 * 60_000).toISOString(),
+        metadata:            { nets_payment_id: netsData.paymentId },
+      };
+
+      let { error: prErr } = await supabase.from('payment_requests').insert(paymentRequestRow);
+
+      if (prErr) {
+        // The Nets checkout session already exists at this point (real,
+        // live, capable of accepting a real payment) — if the tracking row
+        // never gets created, the payment.charge.created.v2 webhook (which
+        // looks this row up by id/provider_session_id) will find nothing
+        // when the student actually pays, silently losing the payment: the
+        // invoice never gets marked paid and no payment record is ever
+        // created, even though Nets captured real money. A transient DB
+        // blip is retryable, so retry once before giving up rather than
+        // silently handing the client an untrackable payment link.
+        logger.error('student-portal: payment_request insert failed, retrying once', { error: prErr.message, pr_id: prId });
+        const retry = await supabase.from('payment_requests').insert(paymentRequestRow);
+        prErr = retry.error;
+      }
+
+      if (prErr) {
+        logger.error('student-portal: payment_request insert failed after retry — refusing to hand out an untrackable Nets session', {
+          error: prErr.message, pr_id: prId, nets_payment_id: netsData.paymentId,
+        });
+        return fail(502, 'Kunde inte förbereda betalningen — försök igen');
+      }
+
+      logger.info('student-portal: Nets checkout created', {
+        org_id: organization_id, student_id, invoice_id: invoiceId, pr_id: prId,
+      });
+
+      return ok({ session_url: netsData.hostedPaymentPageUrl, payment_request_id: prId }, 201);
     }
 
     // ── GET /payments/requests/:id — poll payment request status ─────────────
@@ -1450,18 +1698,22 @@ Deno.serve((req: Request) =>
       return ok(withUrls);
     }
 
-    // ── GET /notifications — student's received notification history ──────────
+    // ── GET /notifications — student's canonical notification history ─────────
+    // (Notification Center, Version 1.1) — no longer reminder-only: every
+    // business event the Communication Engine creates a canonical record
+    // for (bookings, waitlist, invoices, reminders, ...) appears here,
+    // regardless of which delivery channels succeeded/failed/are disabled.
     if (req.method === 'GET' && path === '/notifications') {
       const url_    = new URL(req.url);
       const limit   = Math.min(Number(url_.searchParams.get('limit') ?? '40'), 50);
 
       const { data: notifs, error: nErr } = await supabase
         .from('notifications')
-        .select('id, subject, body, template_key, channel, status, created_at, reference_type, reference_id, metadata')
+        .select('id, subject, body, template_key, channel, status, category, priority, deep_link_identifier, read_at, created_at, reference_type, reference_id, metadata')
         .eq('organization_id', organization_id)
         .eq('recipient_id', student_id)
         .eq('recipient_type', 'student')
-        .eq('status', 'sent')
+        .is('archived_at', null)
         .order('created_at', { ascending: false })
         .limit(limit);
 
@@ -1471,57 +1723,147 @@ Deno.serve((req: Request) =>
       }
 
       type NotifRow = {
-        id:             string;
-        subject:        string | null;
-        body:           string | null;
-        template_key:   string;
-        channel:        string;
-        status:         string;
-        created_at:     string;
-        reference_type: string | null;
-        reference_id:   string | null;
-        metadata:       Record<string, unknown>;
+        id:                   string;
+        subject:              string | null;
+        body:                 string | null;
+        template_key:         string;
+        channel:              string;
+        status:               string;
+        category:             string | null;
+        priority:             string;
+        deep_link_identifier: string | null;
+        read_at:              string | null;
+        created_at:           string;
+        reference_type:       string | null;
+        reference_id:         string | null;
+        metadata:             Record<string, unknown>;
       };
 
       return ok((notifs ?? []) as NotifRow[]);
     }
 
+    // ── GET /notifications/unread-count — lightweight badge poll ──────────────
+    if (req.method === 'GET' && path === '/notifications/unread-count') {
+      const { count, error: cErr } = await supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organization_id)
+        .eq('recipient_id', student_id)
+        .eq('recipient_type', 'student')
+        .is('read_at', null)
+        .is('archived_at', null);
+
+      if (cErr) return fail(500, 'Failed to fetch unread count');
+      return ok({ count: count ?? 0 });
+    }
+
+    // ── PATCH /notifications/read-all — mark all of the student's notifications read ──
+    if (req.method === 'PATCH' && path === '/notifications/read-all') {
+      const { error: raErr } = await supabase
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('organization_id', organization_id)
+        .eq('recipient_id', student_id)
+        .eq('recipient_type', 'student')
+        .is('read_at', null);
+
+      if (raErr) return fail(500, 'Failed to mark notifications read');
+      return ok({ success: true });
+    }
+
+    // ── PATCH /notifications/:id/read — mark one notification read ────────────
+    const notifReadMatch = path.match(/^\/notifications\/([0-9a-f-]+)\/read$/);
+    if (req.method === 'PATCH' && notifReadMatch) {
+      const notifId = notifReadMatch[1] as string;
+
+      const { data, error: rErr } = await supabase
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('id', notifId)
+        .eq('organization_id', organization_id)
+        .eq('recipient_id', student_id)
+        .eq('recipient_type', 'student')
+        .select('id')
+        .maybeSingle();
+
+      if (rErr) return fail(500, 'Failed to mark notification read');
+      if (!data) return fail(404, 'Notification not found');
+      return ok({ success: true });
+    }
+
     // ── GET /packages — student's active lesson packages ─────────────────────
+    // Reads student_package_assignments, not student_packages — the latter's
+    // quantity_consumed is never updated by the consumption pipeline (lesson
+    // completion writes lessons_used on the assignments row only; see
+    // 20260720000006_sync_purchase_package_to_assignments.sql), so it always
+    // reads back 0 regardless of actual usage. Assignments rows also only
+    // exist once a sale is real, so unfinished/never-issued draft purchases
+    // — which student_packages carries forever — don't leak through here.
     if (req.method === 'GET' && path === '/packages') {
       const { data: pkgs, error: pkgsErr } = await supabase
-        .from('student_packages')
-        .select(`
-          id, quantity_granted, quantity_consumed, quantity_expired,
-          expires_at, purchased_at, status,
-          package_offerings!offering_id ( name, category )
-        `)
+        .from('student_package_assignments')
+        .select('id, package_name, lesson_category, package_quantity, lessons_used, expires_at, assigned_at, status')
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
-        .in('status', ['active', 'exhausted'])
-        .order('purchased_at', { ascending: false })
+        .eq('status', 'active')
+        .order('assigned_at', { ascending: false })
         .limit(20);
 
       if (pkgsErr) return fail(500, 'Failed to fetch packages');
 
       type PkgRow = {
-        id: string; quantity_granted: number; quantity_consumed: number;
-        quantity_expired: number; expires_at: string | null; purchased_at: string; status: string;
-        package_offerings: { name: string; category: string } | null;
+        id: string; package_name: string; lesson_category: string | null;
+        package_quantity: number; lessons_used: number;
+        expires_at: string | null; assigned_at: string; status: string;
       };
 
       const result = ((pkgs ?? []) as PkgRow[]).map(p => ({
         id:                 p.id,
-        name:               p.package_offerings?.name ?? 'Paket',
-        category:           p.package_offerings?.category ?? null,
-        quantity_granted:   p.quantity_granted,
-        quantity_consumed:  p.quantity_consumed,
-        quantity_remaining: Math.max(0, p.quantity_granted - p.quantity_consumed - p.quantity_expired),
+        name:               p.package_name,
+        category:           p.lesson_category,
+        quantity_granted:   p.package_quantity,
+        quantity_consumed:  p.lessons_used,
+        quantity_remaining: Math.max(0, p.package_quantity - p.lessons_used),
         expires_at:         p.expires_at,
-        purchased_at:       p.purchased_at,
+        purchased_at:       p.assigned_at,
         status:             p.status,
       }));
 
       return ok(result);
+    }
+
+    // ── POST /push/register — register or refresh an FCM device token ────────
+    if (req.method === 'POST' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RegisterPushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Valid device token required');
+
+      const result = await registerPushToken(
+        supabase,
+        {
+          organizationId: organization_id,
+          ownerColumn:    'student_id',
+          ownerId:        student_id,
+          token:          parsed.data.token,
+          platform:       parsed.data.platform,
+          userAgent:      req.headers.get('User-Agent'),
+        },
+        parsed.data.previous_token,
+      );
+
+      if ('error' in result) return fail(500, result.error);
+      return ok({ id: result.id });
+    }
+
+    // ── DELETE /push/register — revoke a device token (logout / unsubscribe) ─
+    if (req.method === 'DELETE' && path === '/push/register') {
+      const body   = await req.json().catch(() => null);
+      const parsed = RevokePushTokenSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'token_id required');
+
+      const result = await revokePushToken(supabase, organization_id, 'student_id', student_id, parsed.data.token_id, 'client_unsubscribed');
+      if ('error' in result) return fail(500, result.error);
+      return ok({ revoked: true });
     }
 
     return fail(404, 'Route not found');

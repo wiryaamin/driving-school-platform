@@ -4,100 +4,166 @@
 
 /*
   ─── Design Token Definitions ───────────────────────────────────────────────
-  Primary brand color: Swedish Blue (#006AA7)
+  Primary brand: Trafikcloud — Primary Navy #0F2C59, Primary Blue #2B7DE9.
   All CSS variables follow shadcn/ui convention.
+
+  Note on --primary vs --primary-light: the official brand blue (#2B7DE9,
+  hsl(214 81% 54%)) only reaches ~4.0:1 contrast against white text — enough
+  for large text/UI components (WCAG AA's 3:1 bar) but short of the 4.5:1 bar
+  for normal text. --primary-light carries the literal brand blue verbatim
+  for large surfaces, charts, and decorative use; --primary itself is a
+  slightly deepened rendition of the same hue/saturation (~5.2:1 against
+  white) so every existing `bg-primary text-primary-foreground` button/link
+  in the app stays accessible without changing which class names anything
+  uses. --primary-dark is the literal brand navy.
 */
 
 @layer base {
   :root {
     /* Core */
     --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --foreground: 217 33% 11%;
 
     /* Card */
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 217 33% 11%;
 
     /* Popover */
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 217 33% 11%;
 
-    /* Primary — Swedish Blue */
-    --primary: 207 100% 33%;
+    /* Primary — Trafikcloud Blue (see accessibility note above) */
+    --primary: 214 81% 46%;
     --primary-foreground: 210 40% 98%;
+    --primary-hover: 214 81% 40%;
+    --primary-active: 214 81% 35%;
+    --primary-light: 214 81% 54%;  /* literal brand blue #2B7DE9 */
+    --primary-dark: 216 71% 20%;   /* literal brand navy #0F2C59 */
 
     /* Secondary */
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 216 25% 95%;
+    --secondary-foreground: 217 33% 11%;
 
     /* Muted */
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 216 25% 95%;
+    --muted-foreground: 217 16% 47%;
 
     /* Accent */
-    --accent: 210 40% 96%;
-    --accent-foreground: 222 47% 11%;
+    --accent: 216 25% 95%;
+    --accent-foreground: 217 33% 11%;
 
-    /* Destructive */
-    --destructive: 0 84% 60%;
+    /* Destructive / Status */
+    --destructive: 0 72% 51%;
     --destructive-foreground: 210 40% 98%;
+    --success: 161 94% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 38%;
+    --warning-foreground: 0 0% 100%;
+    --info: 200 98% 39%;
+    --info-foreground: 0 0% 100%;
 
-    /* Border / Input */
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 207 100% 33%;
+    /* Border / Input / Divider */
+    --border: 216 20% 90%;
+    --input: 216 20% 90%;
+    --divider: 216 20% 93%;
+    --ring: 214 81% 46%;
+
+    /* Surface (subtle panel distinct from a raised --card) */
+    --surface: 216 20% 98%;
+
+    /* Text hierarchy — --foreground/--muted-foreground already cover
+       Text Primary/Text Muted; this fills the missing middle tier. */
+    --foreground-secondary: 217 20% 32%;
+
+    /* Disabled / Selection */
+    --disabled: 216 15% 82%;
+    --disabled-foreground: 216 10% 55%;
+    --selection: 214 81% 92%;
 
     /* Radius */
     --radius: 0.5rem;
 
-    /* Sidebar */
-    --sidebar-background: 222 47% 11%;
+    /* Sidebar — literal brand navy */
+    --sidebar-background: 216 71% 20%;
     --sidebar-foreground: 215 20% 75%;
-    --sidebar-primary: 207 100% 45%;
+    --sidebar-primary: 214 90% 62%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 222 47% 18%;
+    --sidebar-accent: 216 55% 26%;
     --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 222 47% 18%;
+    --sidebar-border: 216 50% 24%;
 
     /* Layout */
     --sidebar-width: 280px;
     --topbar-height: 52px;
 
-    /* Portal accent colors */
+    /* Portal accent colors — differentiators for non-primary portal
+       contexts, intentionally left distinct from the primary brand blue;
+       --accent-public (the marketing site) mirrors the primary brand blue
+       exactly, matching its previous relationship to the old primary. */
     --accent-platform:   #B45309;
     --accent-student:    #684EFF;
     --accent-guardian:   #2D5BE3;
     --accent-instructor: #0F7E6B;
-    --accent-public:     #006AA7;
+    --accent-public:     #2B7DE9;
+
+    /* Elevation — a single, deliberate shadow scale (Quiet Authority Visual
+       Design Language §9/§15). Previously screenshot elevation was a hand-typed
+       arbitrary value with no reusable token; every future elevated surface
+       (screenshot frame, hover-lifted CTA) should reference one of these three
+       tiers rather than inventing a new shadow value at the point of use. */
+    --shadow-sm: 0 1px 2px hsl(222 47% 11% / 0.05);
+    --shadow-md: 0 1px 2px hsl(222 47% 11% / 0.04), 0 8px 24px hsl(222 47% 11% / 0.07);
+    --shadow-lg: 0 2px 4px hsl(222 47% 11% / 0.05), 0 20px 48px hsl(222 47% 11% / 0.10);
+    /* Reserved for screenshots layered on top of another screenshot (Hero's
+       mobile overlay, Proof's SIE4 export) — one deliberate tier deeper than
+       --shadow-lg so a floating frame reads as sitting above the frame
+       beneath it, not just placed next to it. */
+    --shadow-xl: 0 4px 8px hsl(222 47% 11% / 0.06), 0 32px 64px hsl(222 47% 11% / 0.14);
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 47% 8%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 207 100% 50%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 51%;
+    --background: 217 45% 6%;
+    --foreground: 214 40% 98%;
+    --card: 217 40% 9%;
+    --card-foreground: 214 40% 98%;
+    --popover: 217 40% 9%;
+    --popover-foreground: 214 40% 98%;
+    --primary: 214 90% 62%;
+    --primary-foreground: 217 45% 8%;
+    --primary-hover: 214 90% 68%;
+    --primary-active: 214 90% 56%;
+    --primary-light: 214 81% 54%;
+    --primary-dark: 216 55% 28%;
+    --secondary: 216 33% 17%;
+    --secondary-foreground: 214 40% 98%;
+    --muted: 216 33% 17%;
+    --muted-foreground: 216 20% 65%;
+    --accent: 216 33% 17%;
+    --accent-foreground: 214 40% 98%;
+    --destructive: 0 70% 58%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
-    --ring: 207 100% 50%;
+    --success: 158 64% 52%;
+    --success-foreground: 217 45% 8%;
+    --warning: 38 80% 55%;
+    --warning-foreground: 217 45% 8%;
+    --info: 199 80% 55%;
+    --info-foreground: 217 45% 8%;
+    --border: 216 33% 17%;
+    --input: 216 33% 17%;
+    --divider: 216 33% 22%;
+    --ring: 214 90% 62%;
+    --surface: 217 40% 11%;
+    --foreground-secondary: 216 20% 80%;
+    --disabled: 216 20% 30%;
+    --disabled-foreground: 216 15% 55%;
+    --selection: 214 60% 22%;
 
     /* Sidebar dark */
-    --sidebar-background: 222 47% 4%;
+    --sidebar-background: 216 71% 8%;
     --sidebar-foreground: 215 20% 65%;
-    --sidebar-primary: 207 100% 55%;
-    --sidebar-accent: 222 47% 10%;
-    --sidebar-border: 222 47% 10%;
+    --sidebar-primary: 214 90% 66%;
+    --sidebar-accent: 216 55% 15%;
+    --sidebar-border: 216 55% 15%;
   }
 
   * {
@@ -127,8 +193,8 @@
 
   /* Custom scrollbar */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 10px;
+    height: 10px;
   }
 
   ::-webkit-scrollbar-track {
@@ -157,10 +223,10 @@
   --fc-border-color: hsl(var(--border));
   --fc-button-bg-color: hsl(var(--primary));
   --fc-button-border-color: hsl(var(--primary));
-  --fc-button-hover-bg-color: hsl(207 100% 28%);
-  --fc-button-hover-border-color: hsl(207 100% 28%);
-  --fc-button-active-bg-color: hsl(207 100% 25%);
-  --fc-button-active-border-color: hsl(207 100% 25%);
+  --fc-button-hover-bg-color: hsl(var(--primary-hover));
+  --fc-button-hover-border-color: hsl(var(--primary-hover));
+  --fc-button-active-bg-color: hsl(var(--primary-active));
+  --fc-button-active-border-color: hsl(var(--primary-active));
   --fc-button-text-color: hsl(var(--primary-foreground));
   --fc-today-bg-color: hsl(var(--primary) / 0.06);
   --fc-neutral-bg-color: hsl(var(--muted));
@@ -289,7 +355,7 @@
 }
 
 .fc .fc-scroller::-webkit-scrollbar {
-  width: 6px;
+  width: 10px;
 }
 .fc .fc-scroller::-webkit-scrollbar-thumb {
   background-color: hsl(var(--border));

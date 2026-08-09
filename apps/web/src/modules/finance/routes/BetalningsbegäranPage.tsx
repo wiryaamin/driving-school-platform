@@ -1,13 +1,15 @@
 import { useState, useMemo } from 'react';
-import { Search, FileText, AlertCircle, Clock, ChevronRight } from 'lucide-react';
+import { Search, FileText, AlertCircle, Clock, ChevronRight, Send, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
-import { Skeleton } from '@platform/ui';
+import { Skeleton, toast } from '@platform/ui';
 import { InvoiceStatusBadge } from '../components/InvoiceStatusBadge.js';
 import { cn } from '@/lib/utils.js';
 import type { Invoice, InvoiceStatus } from '../hooks/useFinance.js';
+import { useRequestPaymentLink } from '../hooks/useFinance.js';
+import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,63 @@ function fmtDate(iso: string | null | undefined): string {
 function isOverdue(invoice: Invoice): boolean {
   if (!invoice.due_date) return false;
   return new Date(invoice.due_date) < new Date() && invoice.outstanding_amount > 0;
+}
+
+// ─── Send payment link ────────────────────────────────────────────────────────
+// Creates a real Stripe Checkout session for the invoice (payments/request —
+// staff-authenticated mirror of the student portal's own checkout creation),
+// then delivers it via the existing communications/send pipeline (opt-in
+// checks, provider dispatch, delivery logging) rather than just handing
+// staff a link to copy — closes the gap flagged in the Business Workflow
+// Execution Audit (2026-08-07): "staff cannot proactively send a payment
+// request."
+function SendPaymentLinkButton({ invoiceId }: { invoiceId: string }) {
+  const requestLink = useRequestPaymentLink();
+  const sendMessage = useSendMessage();
+  const isSending = requestLink.isPending || sendMessage.isPending;
+
+  function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (isSending) return;
+    requestLink.mutate(invoiceId, {
+      onSuccess: (result) => {
+        sendMessage.mutate(
+          {
+            channel:           'email',
+            recipient_type:    'student',
+            recipient_id:      undefined,
+            recipient_address: result.student_email,
+            subject:           `Betalningsbegäran${result.invoice_number ? ` — faktura ${result.invoice_number}` : ''}`,
+            body:
+              `Hej ${result.student_name},\n\n` +
+              `Här är en betalningslänk för din faktura` +
+              `${result.invoice_number ? ` ${result.invoice_number}` : ''} på ${result.amount_sek} kr:\n\n` +
+              `${result.session_url}\n\n` +
+              `Länken är giltig i 30 minuter.`,
+          },
+          {
+            onSuccess: () => toast({ title: 'Betalningsbegäran skickad', description: `Skickad till ${result.student_email}.` }),
+            onError:   (err) => toast({ title: 'Länk skapad men kunde inte skickas', description: err instanceof Error ? err.message : 'Kopiera länken manuellt och skicka den själv.', variant: 'destructive' }),
+          },
+        );
+      },
+      onError: (err) => {
+        toast({ title: 'Kunde inte skapa betalningslänk', description: err instanceof Error ? err.message : undefined, variant: 'destructive' });
+      },
+    });
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isSending}
+      title="Skicka betalningslänk"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border text-xs font-medium text-foreground hover:bg-accent disabled:opacity-60 transition-colors"
+    >
+      {isSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+      Skicka länk
+    </button>
+  );
 }
 
 // ─── BetalningsbegäranPage ────────────────────────────────────────────────────
@@ -297,6 +356,7 @@ export function BetalningsbegäranPage() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Förfallodatum</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wide">Kvar att betala</th>
                       <th className="px-4 py-3" />
+                      <th className="px-4 py-3" />
                     </tr>
                   </thead>
                   <tbody>
@@ -342,6 +402,9 @@ export function BetalningsbegäranPage() {
                             )}>
                               {fmtSek(inv.outstanding_amount)}
                             </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <SendPaymentLinkButton invoiceId={inv.id} />
                           </td>
                           <td className="px-4 py-3">
                             <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto" />

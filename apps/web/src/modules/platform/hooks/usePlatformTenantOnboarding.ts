@@ -35,11 +35,14 @@ const tenantOnboardingKeys = {
 // from a non-2xx Edge Function response otherwise never surfaces (see
 // modules/platform/lib/provisioningSchema.ts for why).
 
-export function useTenantOnboardingList(search?: string) {
+export function useTenantOnboardingList(search?: string, limit?: number) {
   return useQuery({
-    queryKey: [...tenantOnboardingKeys.list, search ?? ''] as const,
+    queryKey: [...tenantOnboardingKeys.list, search ?? '', limit ?? 25] as const,
     queryFn: async (): Promise<TenantOnboardingListRow[]> => {
-      const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (limit) params.set('limit', String(limit));
+      const qs = params.toString() ? `?${params.toString()}` : '';
       const { data, error } = await supabase.functions.invoke<{ data: { organizations: TenantOnboardingListRow[]; total: number } }>(
         `platform-admin/tenant-onboarding${qs}`,
         { method: 'GET' },

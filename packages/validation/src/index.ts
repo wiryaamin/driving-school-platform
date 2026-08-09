@@ -12,6 +12,20 @@ export type {
 } from './common/index.js';
 
 export {
+  PasswordPolicySchema,
+  RequestPasswordResetSchema,
+  ConfirmPasswordResetSchema,
+  InviteUserSchema,
+  INVITABLE_ROLES,
+} from './auth/index.js';
+export type {
+  RequestPasswordResetDto,
+  ConfirmPasswordResetDto,
+  InviteUserDto,
+  InvitableRole,
+} from './auth/index.js';
+
+export {
   CreateStudentSchema,
   UpdateStudentSchema,
   StudentListQuerySchema,

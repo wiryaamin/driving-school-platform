@@ -33,6 +33,10 @@ interface SchedulingCalendarProps {
   onSlotDrop?:    (info: SlotDropInfo) => void;
   isLoading?:     boolean;
   instructorMap?: Record<string, string>;
+  /** organizations.settings.schema.{start_time,end_time,show_weekends} — Schemainställningar */
+  slotMinTime?:   string;
+  slotMaxTime?:   string;
+  weekends?:      boolean;
 }
 
 // ─── Terminal statuses blocked from drag/resize ───────────────────────────────
@@ -50,6 +54,9 @@ export function SchedulingCalendar({
   onSlotDrop,
   isLoading = false,
   instructorMap,
+  slotMinTime = '06:00:00',
+  slotMaxTime = '22:00:00',
+  weekends = true,
 }: SchedulingCalendarProps) {
 
   function handleDatesSet(info: DatesSetArg) {
@@ -116,8 +123,9 @@ export function SchedulingCalendar({
         stickyHeaderDates
         nowIndicator
         dayMaxEvents={4}
-        slotMinTime="06:00:00"
-        slotMaxTime="22:00:00"
+        slotMinTime={slotMinTime}
+        slotMaxTime={slotMaxTime}
+        weekends={weekends}
         slotDuration="00:30:00"
         slotLabelInterval="01:00:00"
         scrollTime="07:00:00"

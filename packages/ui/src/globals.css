@@ -2,67 +2,101 @@
   ─── @platform/ui Design Tokens ─────────────────────────────────────────────
   CSS variable definitions only. @tailwind directives must be provided by the
   consuming application (e.g. apps/web/src/globals.css).
-  Primary brand color: Swedish Blue (#006AA7)
+  Primary brand: Trafikcloud — Primary Navy #0F2C59, Primary Blue #2B7DE9.
+  Kept in sync with apps/web/src/globals.css — see that file's header comment
+  for the accessibility rationale behind --primary vs --primary-light.
 */
 
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --foreground: 217 33% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 217 33% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 207 100% 33%;
+    --popover-foreground: 217 33% 11%;
+    --primary: 214 81% 46%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 210 40% 96%;
-    --accent-foreground: 222 47% 11%;
-    --destructive: 0 84% 60%;
+    --primary-hover: 214 81% 40%;
+    --primary-active: 214 81% 35%;
+    --primary-light: 214 81% 54%;
+    --primary-dark: 216 71% 20%;
+    --secondary: 216 25% 95%;
+    --secondary-foreground: 217 33% 11%;
+    --muted: 216 25% 95%;
+    --muted-foreground: 217 16% 47%;
+    --accent: 216 25% 95%;
+    --accent-foreground: 217 33% 11%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 207 100% 33%;
+    --success: 161 94% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 38%;
+    --warning-foreground: 0 0% 100%;
+    --info: 200 98% 39%;
+    --info-foreground: 0 0% 100%;
+    --border: 216 20% 90%;
+    --input: 216 20% 90%;
+    --divider: 216 20% 93%;
+    --ring: 214 81% 46%;
+    --surface: 216 20% 98%;
+    --foreground-secondary: 217 20% 32%;
+    --disabled: 216 15% 82%;
+    --disabled-foreground: 216 10% 55%;
+    --selection: 214 81% 92%;
     --radius: 0.5rem;
-    --sidebar-background: 222 47% 11%;
+    --sidebar-background: 216 71% 20%;
     --sidebar-foreground: 215 20% 75%;
-    --sidebar-primary: 207 100% 45%;
+    --sidebar-primary: 214 90% 62%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 222 47% 18%;
+    --sidebar-accent: 216 55% 26%;
     --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 222 47% 18%;
+    --sidebar-border: 216 50% 24%;
     --sidebar-width: 256px;
     --sidebar-collapsed-width: 64px;
     --topbar-height: 56px;
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222 47% 8%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 207 100% 50%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 51%;
+    --background: 217 45% 6%;
+    --foreground: 214 40% 98%;
+    --card: 217 40% 9%;
+    --card-foreground: 214 40% 98%;
+    --popover: 217 40% 9%;
+    --popover-foreground: 214 40% 98%;
+    --primary: 214 90% 62%;
+    --primary-foreground: 217 45% 8%;
+    --primary-hover: 214 90% 68%;
+    --primary-active: 214 90% 56%;
+    --primary-light: 214 81% 54%;
+    --primary-dark: 216 55% 28%;
+    --secondary: 216 33% 17%;
+    --secondary-foreground: 214 40% 98%;
+    --muted: 216 33% 17%;
+    --muted-foreground: 216 20% 65%;
+    --accent: 216 33% 17%;
+    --accent-foreground: 214 40% 98%;
+    --destructive: 0 70% 58%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
-    --ring: 207 100% 50%;
-    --sidebar-background: 222 47% 4%;
+    --success: 158 64% 52%;
+    --success-foreground: 217 45% 8%;
+    --warning: 38 80% 55%;
+    --warning-foreground: 217 45% 8%;
+    --info: 199 80% 55%;
+    --info-foreground: 217 45% 8%;
+    --border: 216 33% 17%;
+    --input: 216 33% 17%;
+    --divider: 216 33% 22%;
+    --ring: 214 90% 62%;
+    --surface: 217 40% 11%;
+    --foreground-secondary: 216 20% 80%;
+    --disabled: 216 20% 30%;
+    --disabled-foreground: 216 15% 55%;
+    --selection: 214 60% 22%;
+    --sidebar-background: 216 71% 8%;
     --sidebar-foreground: 215 20% 65%;
-    --sidebar-primary: 207 100% 55%;
-    --sidebar-accent: 222 47% 10%;
-    --sidebar-border: 222 47% 10%;
+    --sidebar-primary: 214 90% 66%;
+    --sidebar-accent: 216 55% 15%;
+    --sidebar-border: 216 55% 15%;
   }
 }

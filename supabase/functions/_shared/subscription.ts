@@ -84,8 +84,16 @@ export function isInGracePeriod(status: string): boolean {
 export const FEATURE_GATES: Record<string, SubscriptionTier> = {
   // Finance — starter tier
   'finance:sie4:export':          'starter',
-  'finance:vat:report':           'starter',
   'finance:ledger:read':          'starter',
+
+  // Finance — trial tier (basic VAT period tracking is one of the six
+  // mandatory Go Live Readiness Requirements — see
+  // _shared/tenant-onboarding-progress.ts finance_configuration — so it
+  // cannot require an upgrade a trial customer hasn't made yet; a trial org
+  // must be able to reach Go Live without paying first. Gating VAT period
+  // creation behind 'starter' made ready_for_go_live permanently
+  // unreachable for every new customer, since every org starts on trial).
+  'finance:vat:report':           'trial',
 
   // Finance — professional tier
   'finance:reconciliation:run':   'professional',
@@ -97,7 +105,15 @@ export const FEATURE_GATES: Record<string, SubscriptionTier> = {
 
   // Communication — starter tier
   'communication:campaigns:send': 'starter',
-  'communication:templates:manage': 'starter',
+
+  // Communication — trial tier. This key gates the entire communication
+  // module (channel setup, compose, delivery log, queue monitor, etc.).
+  // Enabling at least one channel is one of the six mandatory Go Live
+  // Readiness Requirements (finance_configuration's sibling
+  // communication_configuration — see _shared/tenant-onboarding-progress.ts),
+  // so it cannot require an upgrade a trial customer hasn't made yet, for
+  // the same reason as finance:vat:report above.
+  'communication:templates:manage': 'trial',
 
   // Reporting — starter tier
   'reports:standard':             'starter',
@@ -107,8 +123,12 @@ export const FEATURE_GATES: Record<string, SubscriptionTier> = {
   // Corporate customers — starter tier
   'corporate:customers:manage':   'starter',
 
-  // Data migration tools — professional tier
-  'admin:data-migration:run':     'professional',
+  // Data migration tools — trial tier (a prospective customer needs to be
+  // able to import their existing student/booking data during the trial to
+  // meaningfully evaluate the platform against their real setup, not just a
+  // demo org — gating this behind a paid tier would mean nobody could try it
+  // before committing).
+  'admin:data-migration:run':     'trial',
 } as const;
 
 // ─── Enforcement helpers ──────────────────────────────────────────────────────
@@ -160,6 +180,51 @@ export function requireActiveSubscription(
     return suspendedOrgResponse(ctx.correlationId, subscriptionStatus);
   }
   return null;
+}
+
+// ─── Trial expiry (grace period, then hard lock) ──────────────────────────────
+// Approved design: 7 days after trial_ends_at, access continues with a
+// warning banner (frontend-only, see apps/web/src/core/auth/trialLock.ts);
+// past that, every Edge Function call is blocked here until a platform admin
+// extends or upgrades the org. Mirrors the frontend's getTrialLockState
+// exactly — same two fields (subscription_status, trial_ends_at), same
+// 7-day constant — so both layers agree on the same instant, computed live
+// rather than from a stored flag that could drift.
+
+export const TRIAL_GRACE_PERIOD_DAYS = 7;
+
+/**
+ * Returns true once a 'trialing' org is past its 7-day grace period.
+ * Platform admins have no organizationId tied to a trial and are unaffected —
+ * callers should check ctx.isPlatformAdmin first regardless.
+ */
+export function isTrialLocked(
+  subscriptionStatus: string | null,
+  trialEndsAt: string | null
+): boolean {
+  if (subscriptionStatus !== 'trialing' || !trialEndsAt) return false;
+  const lockAt = new Date(trialEndsAt).getTime() + TRIAL_GRACE_PERIOD_DAYS * 86_400_000;
+  return Date.now() >= lockAt;
+}
+
+/**
+ * Returns a 403 TRIAL_EXPIRED Response if the org's trial has passed its
+ * grace period, or null if access is allowed. Called unconditionally from
+ * buildEdgeContext (context.ts) — every Edge Function is protected the same
+ * way JWT verification already is, with no per-handler opt-in to forget.
+ */
+export function checkTrialLock(ctx: EdgeRequestContext): Response | null {
+  if (ctx.isPlatformAdmin) return null;
+  if (!isTrialLocked(ctx.subscriptionStatus, ctx.trialEndsAt)) return null;
+
+  return new Response(
+    JSON.stringify({
+      code:      'TRIAL_EXPIRED',
+      message:   'Testperioden har gått ut. Kontakta oss för att uppgradera och återfå åtkomst.',
+      trace_id:  ctx.correlationId,
+    }),
+    { status: 403, headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': ctx.correlationId } },
+  );
 }
 
 // ─── Response builders ────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ import {
   Send, Boxes, Building2, HeartHandshake,
   UserPlus, Package, Tag, ShoppingCart, ClipboardList,
   BookOpen, Percent, Lock, FileDown, Landmark, Rocket, PieChart, FileText,
-  ChevronDown,
+  ChevronDown, ShieldCheck, Megaphone, HelpCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -135,6 +135,7 @@ export const NAVIGATION: NavSection[] = [
       { key: 'staff',           labelSv: 'Personal',         icon: UserCheck,  path: '/staff',          permission: 'instructors:instructor:read' as Permission },
       { key: 'instructor-app',  labelSv: 'LärarApp',         icon: Smartphone, path: '/instructor-app', permission: null },
       { key: 'resources',       labelSv: 'Fordon & Platser', icon: Boxes,      path: '/resources',      permission: null },
+      { key: 'regulatory',      labelSv: 'Myndighetsärenden', icon: ShieldCheck, path: '/regulatory',    permission: 'regulatory:workflow:read' as Permission },
     ],
   },
   {
@@ -144,6 +145,14 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { key: 'reports',  labelSv: 'Rapporter', icon: ChartBar,  path: '/reports',  permission: null },
       { key: 'insights', labelSv: 'Insikter',  icon: LineChart, path: '/insights', permission: null },
+    ],
+  },
+  {
+    key:     'system',
+    labelSv: 'SYSTEM',
+    items: [
+      { key: 'nyheter', labelSv: 'Nyheter', icon: Megaphone, path: '/nyheter', permission: null },
+      { key: 'teorifragor', labelSv: 'Körkortsfrågor', icon: HelpCircle, path: '/teorifragor', permission: null },
     ],
   },
 ];

@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronRight, MessageSquare, Pencil, Trash2 } from 'lucide-react';
+import { ChevronRight, MessageSquare, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, toast } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
@@ -99,8 +99,22 @@ export function GemensammaFraserPage() {
         <div>
           <h1 className="text-base font-semibold text-foreground">Gemensamma fraser</h1>
           <p className="text-sm text-muted-foreground mt-0.5 leading-relaxed">
-            Fraser som visas som snabbval för alla lärare när de kommunicerar med elever.
-            Snabbar upp återkommande meddelanden och säkerställer en konsekvent kommunikation.
+            En referenslista med korta fraser för lärare att kopiera vid manuell kommunikation med elever.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-3 text-sm">
+        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="space-y-1 text-amber-800 dark:text-amber-300">
+          <p className="font-medium">Fraserna infogas inte automatiskt som snabbval i meddelanderutan</p>
+          <p className="text-xs leading-relaxed">
+            De sparas här som en referenslista att kopiera manuellt. För mallar som går att välja direkt vid
+            utskick — gå till{' '}
+            <Link to="/communication/templates" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-200">
+              Notismallar
+            </Link>
+            .
           </p>
         </div>
       </div>

@@ -19,20 +19,22 @@
  * CLAUDE.md), so this is a deliberate, minimal, documented mirror, not an
  * accidental parallel implementation.
  *
- * Notification: on successful insert, an `event_outbox` row is enqueued via
- * the existing `insert_outbox_event()` SECURITY DEFINER function — the same
- * reliable-async-processing mechanism already used platform-wide, not a new
- * one invented for this endpoint. No `event-worker` handler is registered
- * for `demo_request.created` yet, and no email provider is called — this is
- * the "clean extension point" the epic asked for: the event exists and is
- * queryable/processable the moment a handler is written, but nothing
- * external is invoked today.
+ * Notification: on successful insert, an `event_outbox` row is still enqueued
+ * via `insert_outbox_event()` for future async processing/reporting, but it
+ * is never actually claimable as-is — it's written with `p_channel: 'email'`
+ * while `event-worker`'s own claim query only picks up `channel = 'internal'`
+ * rows (see event-worker's HANDLER_REGISTRY), so no handler could ever have
+ * fired for it. Platform Admin notification is therefore sent directly below
+ * (same direct-dispatchMessage pattern as the visitor's welcome email, same
+ * rationale: no organization_id exists yet at this stage for
+ * communication-worker's own /notify endpoint to key off).
  */
 
 import { serveCors }                                        from '../_shared/cors.ts';
 import { createServiceClient }                              from '../_shared/supabase.ts';
 import { logger }                                           from '../_shared/logger.ts';
 import { enforceIpRateLimit, getClientIp }                  from '../_shared/rate-limit.ts';
+import { dispatchMessage }                                  from '../_shared/comm-providers.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -215,6 +217,113 @@ Deno.serve(async (req) =>
     if (outboxErr) {
       logger.error('demo-requests.outbox_enqueue_failed', {
         request_id: request.id, error: outboxErr.message, correlation_id: correlationId,
+      });
+    }
+
+    // ── Welcome email ───────────────────────────────────────────────────────
+    // Sent directly via dispatchMessage rather than routed through the
+    // event_outbox/event-worker pipeline above: that pipeline only claims
+    // 'internal'-channel events today (see event-worker's HANDLER_REGISTRY),
+    // and communication-worker's own /notify endpoint requires an
+    // organization_id, which doesn't exist yet at this stage (no org has
+    // been created for this lead). A single, direct, best-effort send is the
+    // smallest correct mechanism for this one transactional email — never
+    // fails the visitor's request if sending fails, matching the outbox
+    // guard immediately above.
+    try {
+      const welcomeResult = await dispatchMessage({
+        channel:  'email',
+        provider: 'resend',
+        to:       email,
+        from:     'Trafikcloud <info@trafikcloud.se>',
+        subject:  'Välkommen till Trafikcloud – vi har tagit emot er registrering',
+        body: `
+          <div style="font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; color: #0f172a;">
+            <p style="font-size: 20px; font-weight: 700; margin-bottom: 4px;">Trafikcloud</p>
+            <h2 style="font-size: 18px; margin-top: 24px;">Vi har tagit emot er registrering</h2>
+            <p>Hej ${name},</p>
+            <p>Tack för att ni registrerat er hos Trafikcloud! Vi har tagit emot er anmälan för <strong>${schoolName}</strong> och förbereder nu er kostnadsfria provperiod.</p>
+            <p><strong>Vad händer nu?</strong></p>
+            <p>Vårt team går igenom er registrering och sätter upp er organisation i Trafikcloud. Så snart allt är klart skickar vi ett separat e-postmeddelande med en inbjudan där ni kan logga in och komma igång.</p>
+            <p>Har ni frågor under tiden är ni varmt välkomna att höra av er till oss på <a href="mailto:support@trafikcloud.se">support@trafikcloud.se</a>.</p>
+            <p>Vi ser fram emot att välkomna er till Trafikcloud!</p>
+            <p>Vänliga hälsningar,<br>Trafikcloud</p>
+          </div>
+        `.trim(),
+      });
+      if (welcomeResult.status !== 'sent') {
+        logger.error('demo-requests.welcome_email_failed', {
+          request_id: request.id, error: welcomeResult.error, correlation_id: correlationId,
+        });
+      }
+    } catch (e) {
+      logger.error('demo-requests.welcome_email_threw', {
+        request_id: request.id, error: e instanceof Error ? e.message : String(e), correlation_id: correlationId,
+      });
+    }
+
+    // ── Platform Administration notification ────────────────────────────────
+    // Two-step lookup rather than a PostgREST embedded join: platform_admins
+    // has no FK to profiles (only to auth.users, which profiles also
+    // references 1:1 but separately), so `profiles!inner(...)` embedding has
+    // no relationship to auto-detect. Best-effort, same as the welcome email
+    // above: a notification failure must never fail the visitor's
+    // already-successful registration.
+    try {
+      const { data: admins, error: adminsErr } = await db
+        .from('platform_admins')
+        .select('user_id')
+        .eq('is_active', true);
+
+      if (adminsErr) {
+        logger.error('demo-requests.platform_admin_lookup_failed', {
+          request_id: request.id, error: adminsErr.message, correlation_id: correlationId,
+        });
+      } else {
+        const adminIds = (admins ?? []).map((a) => a.user_id as string);
+        const { data: adminProfiles, error: profilesErr } = adminIds.length > 0
+          ? await db.from('profiles').select('email').in('id', adminIds)
+          : { data: [] as { email: string | null }[], error: null };
+
+        if (profilesErr) {
+          logger.error('demo-requests.platform_admin_profiles_failed', {
+            request_id: request.id, error: profilesErr.message, correlation_id: correlationId,
+          });
+        }
+
+        const recipients = (adminProfiles ?? [])
+          .map((p) => p.email)
+          .filter((e): e is string => typeof e === 'string' && e.length > 0);
+
+        for (const adminEmail of recipients) {
+          const result = await dispatchMessage({
+            channel:  'email',
+            provider: 'resend',
+            to:       adminEmail,
+            from:     'Trafikcloud <info@trafikcloud.se>',
+            subject:  `Ny registrering: ${schoolName}`,
+            body: `
+              <p>En ny trafikskola har registrerat sig för en provperiod.</p>
+              <ul>
+                <li><strong>Trafikskola:</strong> ${schoolName}</li>
+                <li><strong>Kontaktperson:</strong> ${name}</li>
+                <li><strong>E-post:</strong> ${email}</li>
+                <li><strong>Telefon:</strong> ${phone}</li>
+                <li><strong>Kommun/ort:</strong> ${municipality}</li>
+              </ul>
+              <p>Granska och godkänn registreringen i Platform Administration.</p>
+            `.trim(),
+          });
+          if (result.status !== 'sent') {
+            logger.error('demo-requests.admin_notification_failed', {
+              request_id: request.id, admin_email: adminEmail, error: result.error, correlation_id: correlationId,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      logger.error('demo-requests.admin_notification_threw', {
+        request_id: request.id, error: e instanceof Error ? e.message : String(e), correlation_id: correlationId,
       });
     }
 

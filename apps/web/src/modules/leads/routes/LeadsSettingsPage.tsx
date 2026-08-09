@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Users, Mail, Phone, Clock, CheckCircle, XCircle, MessageSquare, ExternalLink, Copy, Check } from 'lucide-react';
-import { Button, Skeleton, toast } from '@platform/ui';
+import { Users, Mail, Phone, Clock, CheckCircle, XCircle, MessageSquare, ExternalLink, Copy, Check, Settings2, FileText } from 'lucide-react';
+import { Button, Skeleton, toast, Switch } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
@@ -39,6 +40,209 @@ const FILTER_TABS: { key: LeadStatus | 'all'; label: string }[] = [
   { key: 'enrolled',  label: 'Inskriven' },
   { key: 'declined',  label: 'Avböjd'   },
 ];
+
+// ─── Form field configuration ──────────────────────────────────────────────────
+// Mirrors supabase/functions/_shared/public-booking-form-config.ts's
+// CONFIGURABLE_FIELDS exactly — kept in sync by hand (Edge Functions cannot
+// import workspace packages, so this list can't be shared at the type level).
+
+const CONFIGURABLE_FIELDS: { key: string; label: string }[] = [
+  { key: 'preferred_start_date',      label: 'Önskat startdatum' },
+  { key: 'driving_experience',        label: 'Körerfarenhet' },
+  { key: 'learner_permit_status',     label: 'Körkortstillstånd' },
+  { key: 'preferred_transmission',    label: 'Önskad växellåda' },
+  { key: 'preferred_lesson_times',    label: 'Önskade lektionstider' },
+  { key: 'preferred_language',        label: 'Önskat språk' },
+  { key: 'existing_license_category', label: 'Befintligt körkort' },
+  { key: 'training_needs',            label: 'Teori / Risk 1 / Risk 2-behov' },
+  { key: 'notes',                     label: 'Meddelande' },
+];
+
+const ALL_LICENSE_CATEGORIES = [
+  { value: 'AM',  label: 'AM — Moped klass II'     },
+  { value: 'A1',  label: 'A1 — Lätt MC'            },
+  { value: 'A2',  label: 'A2 — Mellantung MC'      },
+  { value: 'A',   label: 'A — Tung MC'             },
+  { value: 'B',   label: 'B — Personbil'           },
+  { value: 'BE',  label: 'BE — Personbil med släp' },
+  { value: 'C1',  label: 'C1 — Lätt lastbil'       },
+  { value: 'C',   label: 'C — Lastbil'             },
+  { value: 'CE',  label: 'CE — Lastbil med släp'   },
+  { value: 'D1',  label: 'D1 — Minibuss'           },
+  { value: 'D',   label: 'D — Buss'                },
+];
+
+const LANGUAGE_OPTIONS = [
+  { value: 'sv', label: 'Svenska' }, { value: 'en', label: 'English' },
+  { value: 'ar', label: 'العربية' }, { value: 'de', label: 'Deutsch' },
+  { value: 'fr', label: 'Français' }, { value: 'so', label: 'Soomaali' },
+  { value: 'ku', label: 'Kurdî' }, { value: 'fa', label: 'فارسی' },
+];
+
+interface FieldConfig { visible: boolean; required: boolean }
+interface PublicBookingFormSettings {
+  fields:                     Record<string, FieldConfig>;
+  license_categories:         string[];
+  default_preferred_language: string;
+}
+
+function defaultFormSettings(): PublicBookingFormSettings {
+  const fields: Record<string, FieldConfig> = {};
+  for (const f of CONFIGURABLE_FIELDS) fields[f.key] = { visible: true, required: false };
+  return {
+    fields,
+    license_categories:         ALL_LICENSE_CATEGORIES.map(c => c.value),
+    default_preferred_language: 'sv',
+  };
+}
+
+// ─── Form field settings panel ─────────────────────────────────────────────────
+
+function FormSettingsPanel({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<PublicBookingFormSettings>({
+    queryKey: ['settings', 'public-booking-form', orgId],
+    queryFn: async () => {
+      const { data } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      const s = ((data as unknown as { settings: Record<string, unknown> } | null)?.settings) ?? {};
+      const raw = (s['public_booking_form'] as Partial<PublicBookingFormSettings> | undefined) ?? {};
+      const defaults = defaultFormSettings();
+      return {
+        fields: { ...defaults.fields, ...(raw.fields ?? {}) },
+        license_categories:         raw.license_categories?.length ? raw.license_categories : defaults.license_categories,
+        default_preferred_language: raw.default_preferred_language ?? defaults.default_preferred_language,
+      };
+    },
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
+  const [draft, setDraft] = useState<PublicBookingFormSettings>(defaultFormSettings());
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings) setDraft(settings);
+  }, [settings]);
+
+  function updateField(key: string, patch: Partial<FieldConfig>) {
+    setDraft(prev => ({ ...prev, fields: { ...prev.fields, [key]: { ...prev.fields[key]!, ...patch } } }));
+    setDirty(true);
+  }
+  function toggleCategory(value: string) {
+    setDraft(prev => ({
+      ...prev,
+      license_categories: prev.license_categories.includes(value)
+        ? prev.license_categories.filter(c => c !== value)
+        : [...prev.license_categories, value],
+    }));
+    setDirty(true);
+  }
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const { data: cur } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      const currentSettings = ((cur as unknown as { settings: Record<string, unknown> } | null)?.settings) ?? {};
+      const { error } = await supabase.from('organizations').update({
+        settings: { ...currentSettings, public_booking_form: draft },
+      } as never).eq('id', orgId);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['settings', 'public-booking-form', orgId] });
+      setDirty(false);
+      toast({ title: 'Formulärinställningar sparade' });
+    },
+    onError: (e) => toast({ title: 'Kunde inte spara', description: e.message, variant: 'destructive' }),
+  });
+
+  if (isLoading) {
+    return <Skeleton className="h-64 w-full rounded-xl" />;
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-background p-4 space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Settings2 className="w-4 h-4" />
+            Formulärinställningar
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Styr vilka fält som visas och krävs på ert publika anmälningsformulär.
+          </p>
+        </div>
+        {dirty && (
+          <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending ? 'Sparar…' : 'Spara'}
+          </Button>
+        )}
+      </div>
+
+      {/* Per-field visible/required toggles */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Fält</p>
+        <div className="rounded-lg border border-border divide-y divide-border">
+          {CONFIGURABLE_FIELDS.map(f => {
+            const cfg = draft.fields[f.key] ?? { visible: true, required: false };
+            return (
+              <div key={f.key} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                <span className="text-sm text-foreground">{f.label}</span>
+                <div className="flex items-center gap-4 shrink-0">
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <Switch checked={cfg.visible} onCheckedChange={(v) => updateField(f.key, { visible: v, ...(!v ? { required: false } : {}) })} />
+                    Synlig
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <Switch checked={cfg.required} disabled={!cfg.visible} onCheckedChange={(v) => updateField(f.key, { required: v })} />
+                    Obligatorisk
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* License categories offered */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Körkortskategorier som erbjuds</p>
+        <div className="flex flex-wrap gap-2">
+          {ALL_LICENSE_CATEGORIES.map(c => {
+            const checked = draft.license_categories.includes(c.value);
+            return (
+              <button
+                key={c.value}
+                type="button"
+                onClick={() => toggleCategory(c.value)}
+                className={cn(
+                  'px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors',
+                  checked
+                    ? 'border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-700'
+                    : 'border-border text-muted-foreground hover:border-foreground/30',
+                )}
+              >
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Default preferred language */}
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Standardspråk</p>
+        <select
+          value={draft.default_preferred_language}
+          onChange={(e) => { setDraft(prev => ({ ...prev, default_preferred_language: e.target.value })); setDirty(true); }}
+          className="w-full max-w-xs rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+        >
+          {LANGUAGE_OPTIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -221,15 +425,26 @@ export function LeadsSettingsPage() {
       <div>
         <h2 className="text-base font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
           <Users className="w-4 h-4" />
-          Anmälningar & leads
+          Leads
           {newCount > 0 && (
             <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">{newCount}</span>
           )}
         </h2>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Hantera inkommande anmälningar från din publika bokningssida.
+          Hantera inkommande leads från ditt publika bokningsformulär.
         </p>
       </div>
+
+      {/* Cross-link — see LeadsPage.tsx for the same note; package enrollment
+          interest from the catalog is a separate, commercial flow (pricing/
+          campaign/coupon data) managed under Anmälningar, not here. */}
+      <Link
+        to="/enrollments"
+        className="flex items-center gap-2.5 rounded-xl border border-border bg-muted/30 px-3.5 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:border-foreground/20 transition-colors"
+      >
+        <FileText className="w-4 h-4 shrink-0" />
+        <span>Intresseanmälningar för paket från kurskatalogen visas under <strong className="text-foreground font-medium">Anmälningar</strong>, inte här.</span>
+      </Link>
 
       {/* Public booking URL */}
       {bookingUrl && (
@@ -253,6 +468,9 @@ export function LeadsSettingsPage() {
           </p>
         </div>
       )}
+
+      {/* Public form field configuration */}
+      {orgId && <FormSettingsPanel orgId={orgId} />}
 
       {/* Filter tabs */}
       <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-0.5 w-fit">

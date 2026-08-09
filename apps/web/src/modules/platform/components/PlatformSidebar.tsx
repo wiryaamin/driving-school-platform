@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Building2,
@@ -10,8 +10,14 @@ import {
   Shield,
   Handshake,
   Rocket,
+  Compass,
+  Megaphone,
   LogOut,
   User,
+  Cpu,
+  Mail,
+  FileCheck2,
+  LifeBuoy,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -34,6 +40,54 @@ interface NavGroup {
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
 
+// ─── Persona-based information architecture ──────────────────────────────────
+//
+// Re-evaluated against how each operational persona actually works, not how
+// the underlying pages happen to be implemented:
+//
+//   Platform Owner   → Översikt (KPIs) + Organisationer (the whole customer
+//                       lifecycle, acquisition through live) + Plattform
+//                       (own team/roles — low-frequency, kept last).
+//   Customer Success → Organisationer owns this fully: demo requests, tenant
+//                       onboarding, and the live org itself were three
+//                       separate top-level groups before, forcing CS to jump
+//                       groups mid-workflow for what is one continuous
+//                       "where is this customer in their journey" question.
+//                       Merged into one.
+//   Finance           → Fakturering, untouched — a Finance persona wants
+//                       nothing else in view, so it stays a focused,
+//                       single-item workspace rather than being folded into
+//                       Organisationer.
+//   Operations        → Drift now holds Drift + Kommunikation + Återställning
+//                       together. These were three separate top-level groups
+//                       (Driftcenter, Kommunikation, and Återställning living
+//                       inside Driftcenter) even though an Operations person
+//                       checking system health looks at queue backlog,
+//                       message deliverability, and the retry queue in the
+//                       same sitting — same underlying question ("is
+//                       anything broken right now"), asked three different
+//                       ways.
+//   Support           → Support Center, untouched (internal notes/timeline).
+//                       Per-customer recovery actions already live on
+//                       Organisationer's own org detail (Drift tab) where a
+//                       support agent is already working a specific
+//                       customer's issue — no separate stop required.
+//   Security          → Säkerhetscenter, untouched — already correctly
+//                       combined (identity/security events + audit trail).
+//   Compliance        → Efterlevnad, untouched — kept separate from Security
+//                       deliberately: the prompt treats Security and
+//                       Compliance as distinct personas, and conflating them
+//                       here would blur two different jobs-to-be-done.
+//
+// Nyheter (Announcements) moved from Support into Plattform: writing a
+// platform-wide customer announcement is a Platform Owner/administrative
+// task, not a "help this one customer" Support task — the two were sharing
+// a group only because both involve "communication," which isn't the same
+// job.
+//
+// Net effect: 10 groups → 8, every item still points at the exact same
+// existing page/route as before (backward compatible), nothing new built.
+
 const PLATFORM_NAV_GROUPS: NavGroup[] = [
   {
     label: 'ÖVERSIKT',
@@ -42,24 +96,40 @@ const PLATFORM_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'KUNDANSKAFFNING',
+    label: 'ORGANISATIONER',
     items: [
+      { key: 'onboarding', labelSv: 'Onboarding Command Center', icon: Compass, path: '/platform/onboarding' },
       { key: 'demo-requests', labelSv: 'Demoförfrågningar', icon: Handshake, path: '/platform/demo-requests' },
+      { key: 'trial-requests', labelSv: 'Testperiodsförfrågningar', icon: Mail, path: '/platform/trial-requests' },
       { key: 'tenant-onboarding', labelSv: 'Tenant Onboarding', icon: Rocket, path: '/platform/tenant-onboarding' },
-    ],
-  },
-  {
-    label: 'HANTERING',
-    items: [
       { key: 'organizations',  labelSv: 'Organisationer',   icon: Building2,   path: '/platform/organizations' },
-      { key: 'subscriptions',  labelSv: 'Prenumerationer',  icon: CreditCard,   path: '/platform/subscriptions' },
     ],
   },
   {
-    label: 'OPERATIONS',
+    label: 'FAKTURERING',
     items: [
-      { key: 'audit',    labelSv: 'Granskningslogg',    icon: ScrollText,  path: '/platform/audit' },
+      { key: 'subscriptions',  labelSv: 'Prenumerationer',  icon: CreditCard, path: '/platform/subscriptions' },
+    ],
+  },
+  {
+    label: 'SÄKERHETSCENTER',
+    items: [
       { key: 'security', labelSv: 'Säkerhetshändelser', icon: ShieldAlert, path: '/platform/security' },
+      { key: 'audit',    labelSv: 'Granskningslogg',    icon: ScrollText,  path: '/platform/audit' },
+    ],
+  },
+  {
+    label: 'EFTERLEVNAD',
+    items: [
+      { key: 'compliance', labelSv: 'Efterlevnad', icon: FileCheck2, path: '/platform/compliance' },
+    ],
+  },
+  {
+    label: 'DRIFT',
+    items: [
+      { key: 'operations', labelSv: 'Drift', icon: Cpu, path: '/platform/operations' },
+      { key: 'communications', labelSv: 'Kommunikation', icon: Mail, path: '/platform/communications' },
+      { key: 'recovery',   labelSv: 'Återställning', icon: LifeBuoy, path: '/platform/recovery' },
     ],
   },
   {
@@ -73,6 +143,7 @@ const PLATFORM_NAV_GROUPS: NavGroup[] = [
     items: [
       { key: 'admins', labelSv: 'Plattformsadmins', icon: ShieldCheck, path: '/platform/admins' },
       { key: 'roles',  labelSv: 'Roller',            icon: Shield,     path: '/platform/roles' },
+      { key: 'announcements', labelSv: 'Nyheter (TABSnytt)', icon: Megaphone, path: '/platform/announcements' },
     ],
   },
 ];
@@ -124,21 +195,18 @@ export function PlatformSidebar() {
 
       {/* Workspace header */}
       <div className="flex items-center gap-3 h-[72px] px-4 border-b border-sidebar-border shrink-0">
-        <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shrink-0">
-          <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
-            <path d="M12 2L2 7l10 5 10-5-10-5z" />
-            <path d="M2 17l10 5 10-5" />
-            <path d="M2 12l10 5 10-5" />
-          </svg>
-        </div>
-        <div className="min-w-0">
-          <span className="text-sm font-semibold text-sidebar-primary-foreground block leading-tight truncate">
-            TrafikskolaOS
+        <Link to="/platform/dashboard" className="shrink-0 block rounded-md bg-white px-2 py-1.5">
+          <span className="h-4 w-[100px] overflow-hidden block">
+            <img
+              src="/logo-v2.png"
+              alt="Trafikcloud"
+              className="block h-[75px] w-[112px] max-w-none -ml-[8px] -mt-[29px]"
+            />
           </span>
-          <span className="text-[10px] font-semibold text-primary uppercase tracking-wider leading-none mt-0.5 block">
-            Platform Admin
-          </span>
-        </div>
+        </Link>
+        <span className="text-[10px] font-semibold text-primary uppercase tracking-wider leading-none block">
+          Platform Admin
+        </span>
       </div>
 
       {/* Navigation groups */}

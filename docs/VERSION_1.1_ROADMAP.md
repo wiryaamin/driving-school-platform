@@ -56,7 +56,7 @@
 | **Extend canonical error schema to the 10 remaining functions** (`auth-hook`, `event-worker`, `guardian-portal`, `health`, `instructor-portal`, `invoices`, `public-booking`, `public-catalog`, `public-enrollment`, `switch-tenant`) | Low–Medium | Low | Medium | None blocking; natural to bundle with Category C cleanup |
 | **Documentation improvements** — resolve the unlocated ADR-002 content; keep the Handbook's Section 10 (Production Readiness History) and Section 12 (Technical Debt) current as Version 1.1 epics close | Medium | Low (governance-record quality, not functional) | Small, ongoing | None |
 | **Operational improvements** — regenerate stale `database.types.ts` (~38 `as unknown as any` casts); document frontend hosting/deployment (currently a Handbook gap) | Low–Medium | Low | Small | None |
-| **Per-tenant Person Lookup Framework provider configuration** — `ADR-008`'s `getPersonLookupProvider()` registry is env-driven (one provider for the whole deployment); a tenant selecting/crediting its own SPAR account requires per-tenant credential storage that does not exist yet | Low (not blocking — Version 1.0 ships Mock-only by design) | Low | Small–Medium (config storage + admin UI) | The first live provider integration (see Section 4, Integrations) |
+| ~~Per-tenant Person Lookup Framework provider configuration~~ — **DONE (2026-07-27), removed from backlog.** Built as the Person Lookup Framework v3.0 Sprint: `person_lookup_provider_configs` (per-tenant provider/credential/timeout/retry/cache-TTL), `person-lookup-config` Edge Function, plus caching, standardized error taxonomy, and audit logging in the same pass — see `ENTERPRISE_ARCHITECTURE_HANDBOOK_V1.0.md` Version History ("Person Lookup Framework v3.0") and `INTEGRATION_CONFIGURATION_GUIDE.md` §4.10 | N/A | N/A | N/A | Superseded — see Section 4 below for the remaining open item (commissioning the Roaring adapter against a live account) |
 
 ### Pilot Readiness Assessment reclassifications (2026-07-14)
 
@@ -71,6 +71,18 @@ The Version 1.0 Pilot Readiness Assessment surfaced additional findings beyond t
 | Success-response envelope (`buildSuccessResponse()`) never standardized even in ADR-003-compliant functions — some return an unwrapped payload instead of `{data: ...}` | Version 1.1 Backlog | Low–Medium | Medium | API-contract consistency issue, no confirmed user-facing defect |
 | 4 Edge Functions (`bankid-auth`, `identity-events`, `demo-requests`, `tenant-onboarding`) and ~9 frontend modules (public marketing site, `staff`, `guardians`, `documents`) have no corresponding ADR or Handbook inventory entry | Commercial Release Enhancement | Medium | Medium | Most significant for `bankid-auth` given its security sensitivity; substantially resolves once Action 1 (Repository Baseline Stabilization) lands these in reviewed commits |
 | No frontend-visible mobile-responsive coverage audit — 131 of 227 route files use responsive Tailwind prefixes | Version 1.1 Backlog | Low | Medium | Desktop-first B2B tool; likely weak spot is dense finance/admin tables |
+
+### Stripe Integration domain closure reclassifications (2026-07-24)
+
+The Stripe Integration domain's full governance lifecycle (`docs/DOMAIN_GOVERNANCE_PORTFOLIO.md`, `docs/COMMISSIONING_REGISTER.md`) closed with the following items explicitly confirmed out of Version 1.0 scope, not implementation gaps:
+
+| Item | Classification | Notes |
+|---|---|---|
+| Refund support | Version 1.1 Backlog | No refund path exists via Stripe today; manual/off-platform refund is the current interim process |
+| Outbound idempotency on Checkout Session creation | Version 1.1 Backlog | No `Idempotency-Key` sent to Stripe; a retried/double-clicked request could create a duplicate real Checkout Session |
+| Subscription billing | Version 1.1 Backlog | Not part of the current one-time-payment Checkout Session model |
+| Additional payment capabilities (beyond Checkout Session settlement) | Version 1.1 Backlog | No specific capability requested; named as a placeholder for future scoping |
+| Full Integration Credential Management Framework (registry, scheduled health monitoring, automatic recovery, operational dashboards) | Version 1.1 Backlog | Core lifecycle (validate/encrypt/persist/resolve) was implemented and applied to Stripe; the extended lifecycle is explicitly deferred until a third tenant-owned-credential integration justifies the investment |
 
 ### Long-term (as capacity allows, not blocking)
 
@@ -93,7 +105,7 @@ Grounded in the future-enhancement items already identified across `CLAUDE.md`'s
 | **Instructor Experience** | Student assessment recording directly in Instructor Portal; direct messaging to students; absence/time-off request submission; instructor performance analytics/leaderboard; swipe-based attendance marking; offline capability (Instructor App) | Assessment recording and direct messaging are the highest-leverage items — they close a loop the portals currently only read from |
 | **Finance & Accounting** | Stripe / Klarna / Swish integration at checkout (Public Catalog, Student Portal); guardian payment initiation | The finance/accounting *core* (ledger, VAT, SIE4, AGI) is complete and stable per Version 1.0 — this domain's Version 1.1 work is payment-method breadth, not accounting-model change, and must respect the immutability/ACR constraints in Handbook Section 5 |
 | **Reporting & Analytics** | Lead conversion funnel analytics; cohort/class learning analytics; business intelligence reporting (retention, instructor ROI, revenue by lesson type) | Reporting infrastructure exists (BAS accounting reports, SIE4 exports, booking statistics) — this is additive dashboard/aggregation work, low architectural risk |
-| **Integrations** | Swedish Transport Agency (Transportstyrelsen) API integration; Fortnox sync deepening (sync tables already exist); vehicle & fleet management; first live Person Lookup Framework provider (SPAR), including per-tenant credential configuration; Visma bookkeeping export (Accounting category); Google Calendar and Microsoft 365 sync (Scheduling category) | Transport Agency integration is the most externally-dependent item — should be scoped early to surface any API-access blockers. The Person Lookup Framework (`ADR-008`) is architecturally ready for a live provider — Version 1.0 ships Mock-only by explicit design; a live integration needs its own HTTP client, per-tenant credentials, and a regulatory review of the provider's terms of use before implementation. Visma, Google Calendar, and Microsoft 365 already have a defined landing zone in the External Services Hub (`ADR-009`, `/settings/external-services`) as `coming_soon` cards — each needs its own backend (OAuth/API client, sync tables, Edge Function routes) and per-tenant credential storage before its card can show a real `connected`/`not_connected` status |
+| **Integrations** | ~~Swedish Transport Agency (Transportstyrelsen) API integration~~ **DONE (2026-07-27) — research found no direct API exists; implemented every legitimate alternative instead: Vehicle Registry Lookup Framework (Biluppgifter.se reseller, same architecture as Person Lookup) + Manual Government Workflow Tracker for the processes with no API at all (risk-education reporting, permit renewal, instructor reporting, Trafikverket förarprov booking tracking). Remaining sub-item: obtain a live Biluppgifter sandbox key to verify field mapping**; Fortnox sync deepening (sync tables already exist); ~~vehicle & fleet management~~ **DONE — see Vehicle Registry Lookup above, built on top of Epic 3.5's existing fleet tracking**; ~~first live Person Lookup Framework provider~~ **DONE (2026-07-27) — Roaring adapter built, per-tenant credential configuration built, and commissioned live against a real sandbox account (auth model corrected from a guessed API key to the real OAuth2 client-credentials flow during commissioning)**; Visma bookkeeping export (Accounting category); Google Calendar and Microsoft 365 sync (Scheduling category) | Visma, Google Calendar, and Microsoft 365 already have a defined landing zone in the External Services Hub (`ADR-009`, `/settings/external-services`) as `coming_soon` cards — each needs its own backend (OAuth/API client, sync tables, Edge Function routes) and per-tenant credential storage before its card can show a real `connected`/`not_connected` status |
 | **Administration** | Feature flag management per subscription tier (Platform Admin); tenant impersonation UI (with audit); global announcement broadcasting; multi-branch management | Tenant impersonation must be designed against the existing `is_impersonating()` guard already present at the DB level (Handbook Section 11) — the guard is pre-activated, the UI is not yet built |
 | **Communication** | SMS & WhatsApp notification channels (framework exists, provider credentials pending); automated reminders & billing | Extends the existing multi-channel communication layer rather than replacing it |
 | **AI Capabilities** | AI-based schedule optimization; mobile app integration (broader than the existing Instructor App) | Highest uncertainty/effort items — treat as exploratory spikes, not committed roadmap items, until scoped |
@@ -103,6 +115,59 @@ Grounded in the future-enhancement items already identified across `CLAUDE.md`'s
 2. **Category C cleanup + remaining observability coverage** — closes out the PR-2 program properly before new feature surface makes it harder to isolate.
 3. **Instructor Experience: assessment recording + direct messaging** — highest leverage, contained blast radius, builds on existing portal infrastructure.
 4. **Student Experience: push notifications across the three token-based portals** — shared infrastructure, high visible value.
+   **Status (2026-07-24): Student Portal delivered.** Firebase Cloud
+   Messaging commissioned end-to-end against a real Firebase project
+   (backend HTTP v1 dispatch, browser registration/token lifecycle, real
+   device delivery — see `docs/COMMISSIONING_REGISTER.md`). Alongside this,
+   the **Unified Notification Center** was built as the cross-channel
+   foundation this item always implied: a canonical, immutable
+   `notifications` record per business event (booking/waitlist/invoice/
+   reminder), decoupled from per-channel delivery (`outbound_messages`,
+   linked via `notification_id`), with read/unread, categories, and
+   deep-link resolution. Student Portal's bell/Meddelanden page now reads
+   this directly. **Remaining for this item:** wire the identical bell
+   pattern into Guardian Portal and Instructor App (data model and API
+   shape already support it — `recipient_type` includes `'guardian'`; no
+   further schema work needed, just the equivalent portal routes + UI).
+
+   **Approved future architectural direction (not implemented yet — current
+   implementation is an accepted interim state, confirmed 2026-07-24):**
+   Today, canonical notification content is selected from one delivery
+   channel's template (preferring sms/push over email — see Handbook entry)
+   plus a small hardcoded `TRIGGER_EVENT_META` title map in
+   `communication-worker`. The target design separates these properly:
+   ```
+   Business Event → Canonical Notification Template → Push Template
+                                                      → Email Template
+                                                      → SMS Template
+   ```
+   The Notification Center should eventually own canonical business wording
+   outright (a real canonical-template source, replacing the current
+   hardcoded title map and the "borrow from sms/push" body selection);
+   delivery channels should hold only channel-specific formatting derived
+   from that same canonical text. Do not undertake this as a large refactor
+   speculatively — revisit once a second real consumer (Guardian or
+   Instructor portal) makes the current interim approach's limits concrete.
+
+   **Notification lifecycle — documented for future planning, not
+   implemented:** the schema (`read_at`, `archived_at`, `expires_at`)
+   already supports, but no UI/API exists yet for:
+   - **Archive notification** (recipient-initiated dismissal, distinct from
+     the current read/unread) — `archived_at`, column already present.
+   - **Restore notification** (undo an archive) — trivial once archive
+     exists (`archived_at = NULL`).
+   - **Soft delete** — the platform's standard `deleted_at` convention;
+     `notifications` does not currently have this column. Would need to be
+     distinguished from `archived_at` (archived = "I'm done with this, keep
+     it out of my inbox"; deleted = "should not exist for me at all").
+   - **Automatic expiry** — `expires_at` column already present; needs a
+     sweep (a `communication-worker` maintenance-tick addition, following
+     the same pattern as `claim_retry_messages`) that sets `archived_at`
+     once `expires_at` has passed. Not built.
+   - **Retention policy** — org-level configurable retention (how long
+     notifications stay before auto-archival/deletion), likely following
+     the existing `automation_rules` per-org-config pattern rather than a
+     new table. Not designed in detail; V1.x/2.x candidate.
 5. **Finance: Stripe/Klarna/Swish at checkout** — respects the frozen accounting core, extends payment collection only.
 6. **Reporting & Analytics: lead funnel + BI reporting** — additive, low architectural risk, high operational value (matches the platform's stated success metric of operational usability).
 7. **Core Platform: multi-branch reporting** — do this before Administration's multi-branch management UI, since reporting needs the underlying filtering plumbing first.

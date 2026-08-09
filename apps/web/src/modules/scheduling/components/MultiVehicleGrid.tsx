@@ -71,15 +71,17 @@ function slotHeightPx(slot: LessonSlot, hourHeight: number): number {
   return Math.max((mins / 60) * hourHeight, 14);
 }
 
+// green = free (any remaining capacity), red = booked/full, purple = blocked
+// by staff — matches MultiInstructorGrid.tsx's convention exactly.
 function slotCls(slot: LessonSlot): string {
   if (slot.status === 'cancelled') return 'bg-muted/50 text-muted-foreground/40 opacity-50';
-  if (slot.status === 'blocked')   return 'bg-red-500 hover:bg-red-600 text-white';
+  if (slot.status === 'blocked')   return 'bg-purple-500 hover:bg-purple-600 text-white';
   if (
     slot.status === 'full' ||
     slot.status === 'in_progress' ||
     slot.current_bookings >= slot.max_bookings
-  ) return 'bg-orange-400 hover:bg-orange-500 text-white';
-  return 'bg-blue-500 hover:bg-blue-600 text-white';
+  ) return 'bg-red-500 hover:bg-red-600 text-white';
+  return 'bg-green-500 hover:bg-green-600 text-white';
 }
 
 // ─── Vehicle status chip ──────────────────────────────────────────────────────
@@ -353,7 +355,7 @@ function WeekBlock({
                         const height   = slotHeightPx(slot, hourHeight);
                         const startStr = toHHMM(slot.starts_at);
                         const endStr   = toHHMM(slot.ends_at);
-                        const typeLabel = lessonTypeMap[slot.lesson_type_id] ?? '';
+                        const typeLabel = lessonTypeMap[slot.lesson_type_id ?? ''] ?? '';
                         const vLabel    = `${v.make} ${v.model} (${v.registration_number})`;
 
                         return (

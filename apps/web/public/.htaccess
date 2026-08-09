@@ -1,0 +1,58 @@
+# ─── Trafikcloud — Hostinger (Apache) SPA configuration ───────────────────────
+# Lives in apps/web/public/ so Vite copies it to the build output root
+# (dist/.htaccess) automatically — no separate upload step needed beyond
+# deploying the contents of dist/ as-is.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Force HTTPS — Hostinger issues a free SSL certificate for the domain;
+  # this assumes it is already active. Safe to remove if HTTPS is enforced
+  # at the Hostinger/DNS level instead.
+  RewriteCond %{HTTPS} off
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # trafikcloud.com is a secondary/redirect-only domain — if it is ever
+  # pointed at this same document root (e.g. as a Hostinger addon/parked
+  # domain), permanently redirect it to the canonical trafikcloud.se site.
+  # Inert (never matches) if trafikcloud.com is instead forwarded at the
+  # registrar/DNS level — see the production readiness checklist.
+  RewriteCond %{HTTP_HOST} ^(www\.)?trafikcloud\.com$ [NC]
+  RewriteRule ^ https://trafikcloud.se%{REQUEST_URI} [L,R=301]
+
+  # Serve real files as-is (hashed JS/CSS bundles, favicon, manifest.json,
+  # robots.txt, sitemap.xml, images, etc.) — do not rewrite these. Directories
+  # are intentionally NOT bypassed here: a physical public/ asset folder (e.g.
+  # public/landing/, holding landing-page images) can share its name with a
+  # client-side route (e.g. /landing). Bypassing on -d would hand a bare
+  # request for that path to Apache's own directory handling — which adds a
+  # trailing slash and then 403s (no index file in an assets-only folder)
+  # instead of falling through to index.html for React Router to handle.
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  # Everything else is a client-side React Router route (e.g. /landing,
+  # /students/123, /dashboard) — fall back to index.html so direct
+  # navigation and page refresh work instead of 404ing.
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Vite's hashed build assets (e.g. assets/index-abc123.js) are safe to cache
+# indefinitely; index.html itself must always be revalidated so a new
+# deploy is picked up on next load rather than served stale from cache.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css|svg|png|jpg|jpeg|webp|woff|woff2)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+
+  # Baseline security headers for the static frontend, matching the same
+  # intent already applied to API responses in
+  # supabase/functions/_shared/cors.ts (SECURITY_HEADERS).
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "DENY"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

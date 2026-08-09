@@ -1,15 +1,15 @@
 import { Navigate } from 'react-router-dom';
 import { useSessionStore } from '@core/store/session.store.js';
+import { getPostLoginRoute } from '@/lib/auth/jwt.js';
 
 /**
  * SmartRedirect — index redirect for the authenticated root route.
- * Platform admins without a tenant context go to /platform/dashboard.
- * Everyone else goes to /dashboard.
+ * Shares its landing-route decision with LoginPage/AcceptInvitePage
+ * (getPostLoginRoute) so all three agree: platform admins go to the platform
+ * console, instructors go to their own daily operational workspace, everyone
+ * else goes to /dashboard.
  */
 export function SmartRedirect() {
   const user = useSessionStore(s => s.user);
-  if (user?.is_platform_admin) {
-    return <Navigate to="/platform/dashboard" replace />;
-  }
-  return <Navigate to="/dashboard" replace />;
+  return <Navigate to={getPostLoginRoute(user)} replace />;
 }

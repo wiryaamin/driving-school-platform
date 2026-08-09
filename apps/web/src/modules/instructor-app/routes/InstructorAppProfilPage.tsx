@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { LogOut, Phone, Mail, Briefcase, CalendarDays, Users, Loader2, Copy, Check } from 'lucide-react';
+import { LogOut, Phone, Mail, CalendarDays, Users, Loader2, Copy, Check } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useInstructorCtx } from './InstructorAppLayout.js';
 import { useMySchedule, useMyStudents } from '../hooks/useInstructorApp.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { supabase } from '@core/api/supabase.js';
+import { InstructorStatusBadge } from '@modules/instructors/index.js';
+import type { InstructorEmploymentType } from '@platform/types';
 import { cn } from '@/lib/utils.js';
 
 const ICAL_API = `${import.meta.env.VITE_SUPABASE_URL as string}/functions/v1/instructor-ical`;
@@ -27,30 +29,6 @@ function addDaysISO(dateStr: string, n: number): string {
   const mm  = String(date.getMonth() + 1).padStart(2, '0');
   const dd  = String(date.getDate()).padStart(2, '0');
   return `${yy}-${mm}-${dd}`;
-}
-
-const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
-  active:       { label: 'Anställd',      cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' },
-  inactive:     { label: 'Inaktiv',       cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400' },
-  leave:        { label: 'Tjänstledig',   cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
-  terminated:   { label: 'Avslutad',      cls: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400' },
-  freelance:    { label: 'Konsult',       cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300' },
-};
-
-const EMPLOYMENT_LABELS: Record<string, string> = {
-  permanent:  'Tillsvidare',
-  part_time:  'Deltid',
-  freelance:  'Konsult',
-  temporary:  'Vikariat',
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_LABELS[status] ?? { label: status, cls: 'bg-gray-100 text-gray-500' };
-  return (
-    <span className={cn('text-xs font-semibold px-2.5 py-1 rounded-full', cfg.cls)}>
-      {cfg.label}
-    </span>
-  );
 }
 
 function StatCard({ icon: Icon, value, label, color }: {
@@ -120,7 +98,6 @@ export function InstructorAppProfilPage() {
 
   const initials = `${instructor.first_name.charAt(0)}${instructor.last_name.charAt(0)}`.toUpperCase();
   const fullName = `${instructor.first_name} ${instructor.last_name}`;
-  const employment = EMPLOYMENT_LABELS[instructor.employment_type] ?? instructor.employment_type;
 
   return (
     <div className="px-4 py-5 max-w-lg mx-auto space-y-5">
@@ -135,10 +112,7 @@ export function InstructorAppProfilPage() {
             <p className="text-lg font-bold text-gray-900 dark:text-gray-100 truncate">{fullName}</p>
             <p className="text-xs text-gray-500 dark:text-gray-400">{organization?.name ?? ''}</p>
             <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-              <StatusBadge status={instructor.status} />
-              {employment && (
-                <span className="text-xs text-gray-500 dark:text-gray-400">{employment}</span>
-              )}
+              <InstructorStatusBadge status={instructor.employment_type as InstructorEmploymentType} />
             </div>
           </div>
         </div>
@@ -157,12 +131,6 @@ export function InstructorAppProfilPage() {
             <div className="flex items-center gap-2.5 text-sm text-gray-700 dark:text-gray-300">
               <Mail className="w-4 h-4 text-gray-400" />
               <span className="truncate">{instructor.email}</span>
-            </div>
-          )}
-          {employment && (
-            <div className="flex items-center gap-2.5 text-sm text-gray-500 dark:text-gray-400">
-              <Briefcase className="w-4 h-4 text-gray-400" />
-              {employment}
             </div>
           )}
         </div>
@@ -199,6 +167,12 @@ export function InstructorAppProfilPage() {
           className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
         >
           Gå till admin-panelen
+        </Link>
+        <Link
+          to="/settings/finance/lesson-types"
+          className="flex items-center gap-3 px-4 py-3.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+        >
+          Lektionstyper — justera passtid
         </Link>
       </div>
 

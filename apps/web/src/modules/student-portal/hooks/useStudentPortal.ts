@@ -213,6 +213,18 @@ export async function validatePortalToken(token: string): Promise<ValidateTokenR
   return body['data'] as ValidateTokenResult;
 }
 
+// ─── Push notifications ───────────────────────────────────────────────────────
+
+export function useRegisterPushToken() {
+  return useMutation({
+    mutationFn: (input: { token: string; previousToken?: string }) =>
+      portalFetch<{ id: string }>('/push/register', {
+        method: 'POST',
+        body:   JSON.stringify({ token: input.token, previous_token: input.previousToken }),
+      }),
+  });
+}
+
 // ─── Student portal hooks ─────────────────────────────────────────────────────
 
 export function usePortalMe() {
@@ -273,10 +285,10 @@ export function usePortalBalance() {
 export function usePortalCreateBooking() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (slotId: string) =>
+    mutationFn: ({ slotId, lessonTypeId }: { slotId: string; lessonTypeId?: string }) =>
       portalFetch<{ id: string; slot_id: string; status: string; created_at: string }>('/bookings', {
         method: 'POST',
-        body:   JSON.stringify({ slot_id: slotId }),
+        body:   JSON.stringify({ slot_id: slotId, ...(lessonTypeId ? { lesson_type_id: lessonTypeId } : {}) }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['portal', 'bookings'] });
@@ -440,16 +452,20 @@ export function usePortalUnmarkComplete() {
 // ─── Notification hooks ───────────────────────────────────────────────────────
 
 export interface PortalNotification {
-  id:             string;
-  subject:        string | null;
-  body:           string | null;
-  template_key:   string;
-  channel:        string;
-  status:         string;
-  created_at:     string;
-  reference_type: string | null;
-  reference_id:   string | null;
-  metadata:       Record<string, unknown>;
+  id:                   string;
+  subject:              string | null;
+  body:                 string | null;
+  template_key:         string;
+  channel:              string;
+  status:               string;
+  category:             string | null;
+  priority:             string;
+  deep_link_identifier: string | null;
+  read_at:              string | null;
+  created_at:           string;
+  reference_type:       string | null;
+  reference_id:         string | null;
+  metadata:             Record<string, unknown>;
 }
 
 export function usePortalNotifications() {
@@ -459,6 +475,36 @@ export function usePortalNotifications() {
     enabled:  Boolean(getStoredPortalSession()),
     staleTime: 2 * 60_000,
     retry: 0,
+  });
+}
+
+export function useUnreadNotificationCount() {
+  return useQuery({
+    queryKey: ['portal', 'notifications', 'unread-count'],
+    queryFn:  () => portalFetch<{ count: number }>('/notifications/unread-count'),
+    enabled:  Boolean(getStoredPortalSession()),
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+export function useMarkNotificationRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => portalFetch<{ success: boolean }>(`/notifications/${id}/read`, { method: 'PATCH' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal', 'notifications'] });
+    },
+  });
+}
+
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => portalFetch<{ success: boolean }>('/notifications/read-all', { method: 'PATCH' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal', 'notifications'] });
+    },
   });
 }
 
@@ -613,6 +659,18 @@ export function usePortalCreateStripeCheckout() {
   return useMutation({
     mutationFn: (invoiceId: string) =>
       portalFetch<StripeCheckoutResult>('/payments/stripe/checkout', {
+        method: 'POST',
+        body:   JSON.stringify({ invoice_id: invoiceId }),
+      }),
+  });
+}
+
+/** Create a Nets Easy payment for an invoice.
+ *  Returns the hosted payment page URL — redirect the user there. */
+export function usePortalCreateNetsCheckout() {
+  return useMutation({
+    mutationFn: (invoiceId: string) =>
+      portalFetch<StripeCheckoutResult>('/payments/nets/checkout', {
         method: 'POST',
         body:   JSON.stringify({ invoice_id: invoiceId }),
       }),

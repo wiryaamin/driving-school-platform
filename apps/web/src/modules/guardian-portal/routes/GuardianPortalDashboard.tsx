@@ -309,8 +309,12 @@ function KomIgangCard() {
 type NextStep = { title: string; description: string; emoji: string; to: string };
 
 const PERMIT_NEXT_STEP: Partial<Record<string, NextStep>> = {
+  // Titles describe status, not an action the guardian can take here — the
+  // portal is read-only for booking (destination pages only offer a
+  // phone/email "contact the school" action), so "Boka..." (Book...)
+  // overpromised a capability that doesn't exist.
   risk1_completed: {
-    title:       'Boka Risk 2-utbildning',
+    title:       'Nästa steg: Risk 2-utbildning',
     description: 'Risk 1 är avklarad — nästa steg är riskutbildning del 2',
     emoji:       '🌙',
     to:          '/guardian/riskutbildning',
@@ -322,7 +326,7 @@ const PERMIT_NEXT_STEP: Partial<Record<string, NextStep>> = {
     to:          '/guardian/korkortsresa',
   },
   theory_passed: {
-    title:       'Boka uppkörning',
+    title:       'Nästa steg: Uppkörning',
     description: 'Teoriprov godkänt — sista steget är körprovet',
     emoji:       '🏆',
     to:          '/guardian/korkortsresa',

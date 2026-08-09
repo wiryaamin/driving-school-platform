@@ -179,6 +179,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
       permissions:          custom?.permissions           ?? [],
       location_ids:         custom?.location_ids          ?? [],
       subscription_tier:    custom?.subscription_tier     ?? 'trial',
+      subscription_status:  custom?.subscription_status   ?? null,
+      trial_ends_at:        custom?.trial_ends_at         ?? null,
       is_platform_admin:    custom?.is_platform_admin     ?? false,
     };
 

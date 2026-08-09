@@ -52,9 +52,9 @@ function getWeekNum(isoStr: string): number {
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
 function statusDot(slot: LessonSlot): string {
-  if (slot.status === 'cancelled' || slot.status === 'blocked') return 'bg-gray-300';
-  if (slot.status === 'in_progress') return 'bg-blue-400';
-  if (slot.current_bookings >= slot.max_bookings || slot.status === 'full') return 'bg-red-400';
+  if (slot.status === 'cancelled') return 'bg-gray-300';
+  if (slot.status === 'blocked') return 'bg-purple-400';
+  if (slot.current_bookings >= slot.max_bookings || slot.status === 'full' || slot.status === 'in_progress') return 'bg-red-400';
   if (slot.current_bookings > 0) return 'bg-amber-400';
   return 'bg-green-500';
 }
@@ -220,8 +220,8 @@ export function BookingListPage() {
       let va = '';
       let vb = '';
       if (sortField === 'lesson_type') {
-        va = lessonTypeMap[a.lesson_type_id]?.name ?? '';
-        vb = lessonTypeMap[b.lesson_type_id]?.name ?? '';
+        va = lessonTypeMap[a.lesson_type_id ?? '']?.name ?? '';
+        vb = lessonTypeMap[b.lesson_type_id ?? '']?.name ?? '';
       } else if (sortField === 'instructor') {
         va = instructorMap[a.instructor_id]?.first_name ?? '';
         vb = instructorMap[b.instructor_id]?.first_name ?? '';
@@ -397,7 +397,7 @@ export function BookingListPage() {
               ) : (
                 slots.map((slot) => {
                   const instructor  = instructorMap[slot.instructor_id];
-                  const lessonType  = lessonTypeMap[slot.lesson_type_id];
+                  const lessonType  = lessonTypeMap[slot.lesson_type_id ?? ''];
                   const isFull      = slot.current_bookings >= slot.max_bookings || slot.status === 'full';
                   const hasBookings = slot.current_bookings > 0;
 
