@@ -99,7 +99,7 @@ migration.
 |---|---|---|---|
 | `communications-sms` | SMS (46elks/Twilio/Vonage) | v2 | platform-managed |
 | `communications-email` | Email (Resend/SendGrid/Mailjet) | v2 | platform-managed |
-| `communications-whatsapp` | WhatsApp (Twilio/Meta) | v1 | frozen baseline |
+| `communications-whatsapp` | WhatsApp (Twilio/Meta) | v2 | platform-managed |
 | `communications-push` | Push (Firebase/OneSignal) | v1 | frozen baseline |
 | `communications-voice` | Voice (Twilio/46elks) | v1 | frozen baseline |
 | `payments-stripe` | Stripe | v1 | frozen baseline |
@@ -197,7 +197,22 @@ the migration itself.
 - **Verification:** WhatsApp tab UI live-verified 2026-08-09; underlying Meta token send path confirmed broken (expired token) at the same time — see known issue above.
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — platform-managed
+
+- **Tag:** `integration/communications-whatsapp/v2-platform-managed-2026-08-10`
+- **Commit:** `c9279e408c4fb175e3daaaa4e4ee2e1aea3e8693`
+- **Pre-implementation audit findings:** no WhatsApp-specific tables exist (`channel_configs` uses the exact same generic columns as sms/email); `notification_templates` has zero rows for `channel='whatsapp'` (tenant-owned or system-default) — WhatsApp messages are sent as free-form text via the Meta Cloud API's plain `text` message type, not Meta's approved-template mechanism, so there was no template-ownership question to resolve; no dedicated WhatsApp webhook Edge Function exists in this codebase. `ExternalServicesPage.tsx` was confirmed to never render a WhatsApp card (only SMS/Email appear in the "Kommunikation" section), so it needed no change.
+- **Files changed:**
+  - `apps/web/src/modules/communication/routes/ChannelSettingsPage.tsx` — generalized `isPlatformManagedProvider` to `isSms || isEmail || isWhatsapp`; provider dropdown/credential fields replaced with a platform-managed note for WhatsApp too. enabled/from_address/display_name/daily_limit unchanged. Push/Voice branches byte-identical to before.
+  - `supabase/functions/communications/index.ts` — `PLATFORM_MANAGED_CHANNELS` now `{sms, email, whatsapp}`; `PLATFORM_MANAGED_DEFAULT_PROVIDER` gained `whatsapp: 'meta'` (env-overridable via `PLATFORM_WHATSAPP_PROVIDER`). No new branch needed — the credential-ignoring/provider-preserving logic was already channel-generic from the SMS/Email migrations.
+  - `supabase/functions/_shared/comm-providers.ts` — `dispatchMessage`'s `case 'whatsapp':` now calls `dispatchTwilioWhatsapp`/`dispatchMetaWhatsapp` with an empty `creds` object instead of the org's stored credentials, forcing `cred()` to always resolve through the platform-wide `Deno.env` secret. `push`/`voice` unchanged.
+- **DB migrations:** `20260810140000_platform_managed_whatsapp_provider.sql` — adds `protect_channel_configs_whatsapp_provider_fields()` + `channel_configs_protect_whatsapp_provider` BEFORE INSERT/UPDATE trigger, structurally identical to but independent from the SMS and Email triggers (20260810120000, 20260810130000) so any one integration's DB protection can be rolled back without affecting the others. Blocks non-service-role, non-platform-admin writes to `provider`/`metadata` on the `whatsapp` row only.
+- **RLS:** unchanged — same as SMS/Email v2, the new trigger is what actually blocks the whatsapp-specific columns.
+- **Config/secrets (names only):** unchanged from v1: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`, `META_WHATSAPP_TOKEN`, `META_PHONE_NUMBER_ID` — all platform-wide Supabase Secrets. `PLATFORM_WHATSAPP_PROVIDER` (new, optional) lets the platform override the default provider (`meta`) without a code deploy; unset in production, both real tenants continue on `meta`.
+- **Known carried-forward issue (unrelated to this migration, not fixed):** the v1 entry above already documents that the platform-wide `META_WHATSAPP_TOKEN` was confirmed expired (Meta OAuth error 190) as of 2026-08-09 — an external credential-rotation issue requiring Meta Business Manager access, out of scope for this code migration. This means a live send would fail on the expired token regardless of this migration's changes; it is not a regression introduced here.
+- **Deployment requirements:** `supabase db push --linked` (migration applied), `supabase functions deploy communications --project-ref ulgsndzfksphquqakelq` (bare deploy — `verify_jwt` confirmed still `true` post-deploy, version 88), frontend rebuilt and synced to Hostinger (bundle `index-CSQWXi4n.js`, live-confirmed byte-identical for the chunk containing the new platform-managed string).
+- **Verification (2026-08-10):** both real tenants (Sara Trafikskola, Horizon TS) still have `channel_configs.whatsapp = {enabled: true, provider: 'meta', has_credentials: false}` unchanged after migration; `sms`/`email`/`push`/`voice` rows also confirmed unchanged for both tenants in the same read. `pnpm typecheck` clean. `deno check` shows only the same pre-existing, unrelated `credential-crypto.ts` error already documented for SMS/Email v2. Live E2E send test: **BLOCKED** — no authenticated real-tenant or platform-admin session was available and creating one was explicitly out of scope; not manufactured (also would have failed regardless on the known-expired `META_WHATSAPP_TOKEN` above). Strongest available alternative (byte-for-byte comparison of the live-served JS chunk against the built source) was performed instead.
+- **Rollback procedure:** `git revert c9279e408c4fb175e3daaaa4e4ee2e1aea3e8693` (or check out `integration/communications-whatsapp/v1-tenant-configurable-2026-08-10` for the application files) restores tenant-configurable WhatsApp UI/backend behavior. The DB trigger is additive and non-destructive, independent of the SMS/Email triggers — to remove it independently: `DROP TRIGGER channel_configs_protect_whatsapp_provider ON public.channel_configs; DROP FUNCTION public.protect_channel_configs_whatsapp_provider_fields();` in a new forward migration. No tenant data was altered by v2.
 
 ---
 
