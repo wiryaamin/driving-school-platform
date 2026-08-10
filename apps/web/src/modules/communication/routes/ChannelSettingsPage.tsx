@@ -127,16 +127,16 @@ function ChannelForm({
   const update = useUpdateChannelConfig();
   const meta   = CHANNEL_META[channel];
   const opts   = PROVIDER_OPTIONS[channel];
-  // SMS, Email, WhatsApp, and Push are platform-managed (ADR: platform-managed
+  // All five channels are platform-managed (ADR: platform-managed
   // integrations) — provider selection and credential entry are hidden for
-  // all four; enabled/sender/display-name/daily-limit remain
-  // tenant-configurable exactly as before. Voice rendering below is
-  // unchanged.
+  // every one; enabled/sender/display-name/daily-limit remain
+  // tenant-configurable exactly as before.
   const isSms      = channel === 'sms';
   const isEmail    = channel === 'email';
   const isWhatsapp = channel === 'whatsapp';
   const isPush     = channel === 'push';
-  const isPlatformManagedProvider = isSms || isEmail || isWhatsapp || isPush;
+  const isVoice    = channel === 'voice';
+  const isPlatformManagedProvider = isSms || isEmail || isWhatsapp || isPush || isVoice;
 
   const [enabled,           setEnabled]           = useState(config?.enabled              ?? false);
   const [provider,          setProvider]          = useState(config?.provider               ?? '');
@@ -343,7 +343,7 @@ function ChannelForm({
         </div>
       </div>
 
-      {/* Platform-managed note (SMS/Email/WhatsApp/Push only) */}
+      {/* Platform-managed note (all five channels) */}
       {isPlatformManagedProvider && (
         <div className="border-t border-border pt-4">
           <p className="text-[10px] text-muted-foreground">
@@ -353,7 +353,9 @@ function ChannelForm({
               ? 'E-postleverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
               : isWhatsapp
               ? 'WhatsApp-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
-              : 'Push-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'}
+              : isPush
+              ? 'Push-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
+              : 'Röstsamtalsleverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'}
           </p>
         </div>
       )}
@@ -460,7 +462,7 @@ export function ChannelSettingsPage() {
     <PageLayout>
       <PageHeader
         title="Kanalinställningar"
-        description="Konfigurera varje meddelandekanal med leverantör och sändningsgränser"
+        description="Aktivera meddelandekanaler och konfigurera avsändare och sändningsgränser"
         breadcrumbs={[
           { label: 'Kommunikation', href: '/communication' },
           { label: 'Kanalinställningar' },
@@ -472,8 +474,8 @@ export function ChannelSettingsPage() {
         <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-lg border border-border bg-muted/20 px-4 py-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
           <span>
-            Välj leverantör, fyll i era egna inloggningsuppgifter och adress, och spara. Uppgifterna krypteras
-            och lagras för er organisation. Aktivera sedan kanalen med reglage.
+            Alla kanaler hanteras av plattformen — inga inloggningsuppgifter behövs. Aktivera en kanal med
+            reglaget, fyll i avsändarnamn/-adress och sändningsgräns, och spara.
           </span>
         </div>
 

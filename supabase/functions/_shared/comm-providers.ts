@@ -1,11 +1,13 @@
 /**
  * Communication provider abstraction.
  *
- * Each provider first tries the organization's own credentials (entered in
- * Kanalinställningar, encrypted at rest via _shared/credential-crypto.ts —
- * same pattern as Stripe/Nets, ADR-022) and falls back to the platform-wide
- * Deno.env value (Supabase Secrets) if the tenant hasn't configured their
- * own. See getOrgChannelCredentials()/cred() below.
+ * All five channels (SMS/Email/WhatsApp/Push/Voice) are platform-managed
+ * (ADR: platform-managed integrations) — every dispatch* call below is
+ * invoked with an empty credentials object, so cred() always resolves
+ * through the platform-wide Deno.env value (Supabase Secrets). Tenants can
+ * no longer save their own provider credentials (enforced in
+ * communications/index.ts's channel PUT handler and by a per-channel DB
+ * trigger); see cred() below.
  *
  * Integrated providers:
  *   sms      → 46elks      ELKS_API_USERNAME + ELKS_API_PASSWORD
@@ -23,9 +25,6 @@
  * WhatsApp "to" field = E.164 phone number without whatsapp: prefix.
  */
 
-import { createServiceClient } from './supabase.ts';
-import { decryptCredential } from './credential-crypto.ts';
-
 export type ProviderResult = {
   status:     'sent' | 'failed' | 'queued';
   providerId: string | null;
@@ -36,35 +35,11 @@ export type ProviderResult = {
   invalidToken?: boolean;
 };
 
-// ─── Org-configured credentials ────────────────────────────────────────────────
-// channel_configs.metadata.credentials stores { ENV_VAR_NAME: 'enc:v1:...' },
-// written by communications/index.ts's channel PUT handler. Keyed by the same
-// names as the platform-wide Deno.env secrets so cred() below can fall back
-// to the platform default with a single lookup.
-
-async function getOrgChannelCredentials(organizationId: string | null, channel: string): Promise<Record<string, string>> {
-  if (!organizationId) return {};
-  try {
-    const client = createServiceClient();
-    const { data } = await client
-      .from('channel_configs')
-      .select('metadata')
-      .eq('organization_id', organizationId)
-      .eq('channel', channel)
-      .maybeSingle();
-    const stored = (data?.metadata as { credentials?: Record<string, string> } | null)?.credentials ?? {};
-    const decrypted: Record<string, string> = {};
-    for (const [key, value] of Object.entries(stored)) {
-      decrypted[key] = typeof value === 'string' ? await decryptCredential(value) : '';
-    }
-    return decrypted;
-  } catch {
-    // A lookup/decrypt failure must never block dispatch — fall through to
-    // the platform-wide env fallback (cred() below) rather than surface a
-    // confusing failure for what may just be a not-yet-configured tenant.
-    return {};
-  }
-}
+// ─── Platform credentials ───────────────────────────────────────────────────
+// Every channel is platform-managed — cred() only ever resolves the
+// platform-wide Deno.env secret now (every caller passes {} as creds). The
+// signature is unchanged so a future genuinely-org-scoped credential could
+// still be threaded through without touching every dispatch* call site.
 
 /** Org-configured value if present, else the platform-wide Supabase Secret. */
 function cred(creds: Record<string, string>, key: string): string | undefined {
@@ -661,17 +636,16 @@ export interface DispatchParams {
   from:      string | null;
   subject?:  string;
   body:      string;
-  /** Org whose Kanalinställningar-configured credentials should be tried
-   *  before the platform-wide Deno.env fallback. Omit for platform-owned
-   *  sends (e.g. demo-request/lead-capture notifications) that intentionally
-   *  always use the platform's own provider account. */
+  /** Unused by dispatchMessage() — every channel is platform-managed, so
+   *  there is no longer a per-org credential to look up. Kept on the type
+   *  (rather than removed) so every existing caller across the codebase
+   *  stays source-compatible without a signature-wide change. */
   organizationId?: string | null;
 }
 
 export async function dispatchMessage(params: DispatchParams): Promise<ProviderResult> {
-  const { channel, provider, from, subject, body, organizationId } = params;
+  const { channel, provider, from, subject, body } = params;
   const fromAddr = from ?? '';
-  const creds = await getOrgChannelCredentials(organizationId ?? null, channel);
   // Every SMS/voice/WhatsApp gateway requires E.164 ("+46701234567"), but
   // Swedish phone numbers are routinely typed/pasted in local format
   // ("0701234567") — confirmed live 2026-08-06: 46elks rejected every send
@@ -687,9 +661,9 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       // communications/index.ts's channel PUT handler and by a DB trigger),
       // but this always resolves through the platform-wide Deno.env secret
       // regardless, rather than depending on the row staying empty.
-      if (provider === '46elks') return dispatch46elksSms({}, to, fromAddr, body);
-      if (provider === 'twilio') return dispatchTwilioSms({}, to, fromAddr, body);
-      if (provider === 'vonage') return dispatchVonageSms({}, to, fromAddr, body);
+      if (provider === '46elks') return await dispatch46elksSms({}, to, fromAddr, body);
+      if (provider === 'twilio') return await dispatchTwilioSms({}, to, fromAddr, body);
+      if (provider === 'vonage') return await dispatchVonageSms({}, to, fromAddr, body);
       break;
     case 'email':
       // Email is platform-managed (ADR: platform-managed integrations) — a
@@ -697,9 +671,9 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       // communications/index.ts's channel PUT handler and by a DB trigger),
       // but this always resolves through the platform-wide Deno.env secret
       // regardless, rather than depending on the row staying empty.
-      if (provider === 'resend')    return dispatchResend({}, to, fromAddr, subject, body);
-      if (provider === 'sendgrid')  return dispatchSendGrid({}, to, fromAddr, subject, body);
-      if (provider === 'mailjet')   return dispatchMailjet({}, to, fromAddr, subject, body);
+      if (provider === 'resend')    return await dispatchResend({}, to, fromAddr, subject, body);
+      if (provider === 'sendgrid')  return await dispatchSendGrid({}, to, fromAddr, subject, body);
+      if (provider === 'mailjet')   return await dispatchMailjet({}, to, fromAddr, subject, body);
       break;
     case 'whatsapp':
       // WhatsApp is platform-managed (ADR: platform-managed integrations) — a
@@ -707,8 +681,8 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       // communications/index.ts's channel PUT handler and by a DB trigger),
       // but this always resolves through the platform-wide Deno.env secret
       // regardless, rather than depending on the row staying empty.
-      if (provider === 'twilio') return dispatchTwilioWhatsapp({}, to, fromAddr, body);
-      if (provider === 'meta')   return dispatchMetaWhatsapp({}, to, body);
+      if (provider === 'twilio') return await dispatchTwilioWhatsapp({}, to, fromAddr, body);
+      if (provider === 'meta')   return await dispatchMetaWhatsapp({}, to, body);
       break;
     case 'push':
       // Push is platform-managed (ADR: platform-managed integrations) — a
@@ -717,12 +691,17 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       // but this always resolves through the platform-wide Deno.env secret
       // regardless, rather than depending on the row staying empty. `to` is
       // a recipient device token/player_id, not a credential — unaffected.
-      if (provider === 'firebase')  return dispatchFirebase({}, to, subject, body);
-      if (provider === 'onesignal') return dispatchOneSignal({}, to, subject, body);
+      if (provider === 'firebase')  return await dispatchFirebase({}, to, subject, body);
+      if (provider === 'onesignal') return await dispatchOneSignal({}, to, subject, body);
       break;
     case 'voice':
-      if (provider === '46elks') return dispatch46elksVoice(creds, to, fromAddr, body);
-      if (provider === 'twilio') return dispatchTwilioVoice(creds, to, fromAddr, body);
+      // Voice is platform-managed (ADR: platform-managed integrations) — a
+      // tenant can no longer save their own Voice credentials (enforced in
+      // communications/index.ts's channel PUT handler and by a DB trigger),
+      // but this always resolves through the platform-wide Deno.env secret
+      // regardless, rather than depending on the row staying empty.
+      if (provider === '46elks') return await dispatch46elksVoice({}, to, fromAddr, body);
+      if (provider === 'twilio') return await dispatchTwilioVoice({}, to, fromAddr, body);
       break;
   }
 
