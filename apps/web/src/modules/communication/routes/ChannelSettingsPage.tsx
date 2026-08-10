@@ -127,13 +127,15 @@ function ChannelForm({
   const update = useUpdateChannelConfig();
   const meta   = CHANNEL_META[channel];
   const opts   = PROVIDER_OPTIONS[channel];
-  // SMS and Email are platform-managed (ADR: platform-managed integrations) —
-  // provider selection and credential entry are hidden for both; enabled/
-  // sender/display-name/daily-limit remain tenant-configurable exactly as
-  // before. WhatsApp/Push/Voice rendering below is unchanged.
-  const isSms  = channel === 'sms';
-  const isEmail = channel === 'email';
-  const isPlatformManagedProvider = isSms || isEmail;
+  // SMS, Email, and WhatsApp are platform-managed (ADR: platform-managed
+  // integrations) — provider selection and credential entry are hidden for
+  // all three; enabled/sender/display-name/daily-limit remain
+  // tenant-configurable exactly as before. Push/Voice rendering below is
+  // unchanged.
+  const isSms      = channel === 'sms';
+  const isEmail    = channel === 'email';
+  const isWhatsapp = channel === 'whatsapp';
+  const isPlatformManagedProvider = isSms || isEmail || isWhatsapp;
 
   const [enabled,           setEnabled]           = useState(config?.enabled              ?? false);
   const [provider,          setProvider]          = useState(config?.provider               ?? '');
@@ -340,13 +342,15 @@ function ChannelForm({
         </div>
       </div>
 
-      {/* Platform-managed note (SMS/Email only) */}
+      {/* Platform-managed note (SMS/Email/WhatsApp only) */}
       {isPlatformManagedProvider && (
         <div className="border-t border-border pt-4">
           <p className="text-[10px] text-muted-foreground">
             {isSms
               ? 'SMS-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
-              : 'E-postleverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'}
+              : isEmail
+              ? 'E-postleverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
+              : 'WhatsApp-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'}
           </p>
         </div>
       )}

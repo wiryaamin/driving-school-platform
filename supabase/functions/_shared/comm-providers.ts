@@ -702,8 +702,13 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       if (provider === 'mailjet')   return dispatchMailjet({}, to, fromAddr, subject, body);
       break;
     case 'whatsapp':
-      if (provider === 'twilio') return dispatchTwilioWhatsapp(creds, to, fromAddr, body);
-      if (provider === 'meta')   return dispatchMetaWhatsapp(creds, to, body);
+      // WhatsApp is platform-managed (ADR: platform-managed integrations) — a
+      // tenant can no longer save their own WhatsApp credentials (enforced in
+      // communications/index.ts's channel PUT handler and by a DB trigger),
+      // but this always resolves through the platform-wide Deno.env secret
+      // regardless, rather than depending on the row staying empty.
+      if (provider === 'twilio') return dispatchTwilioWhatsapp({}, to, fromAddr, body);
+      if (provider === 'meta')   return dispatchMetaWhatsapp({}, to, body);
       break;
     case 'push':
       if (provider === 'firebase')  return dispatchFirebase(creds, to, subject, body);
