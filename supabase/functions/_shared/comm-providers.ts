@@ -711,8 +711,14 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       if (provider === 'meta')   return dispatchMetaWhatsapp({}, to, body);
       break;
     case 'push':
-      if (provider === 'firebase')  return dispatchFirebase(creds, to, subject, body);
-      if (provider === 'onesignal') return dispatchOneSignal(creds, to, subject, body);
+      // Push is platform-managed (ADR: platform-managed integrations) — a
+      // tenant can no longer save their own Push credentials (enforced in
+      // communications/index.ts's channel PUT handler and by a DB trigger),
+      // but this always resolves through the platform-wide Deno.env secret
+      // regardless, rather than depending on the row staying empty. `to` is
+      // a recipient device token/player_id, not a credential — unaffected.
+      if (provider === 'firebase')  return dispatchFirebase({}, to, subject, body);
+      if (provider === 'onesignal') return dispatchOneSignal({}, to, subject, body);
       break;
     case 'voice':
       if (provider === '46elks') return dispatch46elksVoice(creds, to, fromAddr, body);

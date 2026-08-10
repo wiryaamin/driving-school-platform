@@ -49,16 +49,17 @@ const CHANNELS   = ['email', 'sms', 'whatsapp', 'push', 'voice'] as const;
 const STATUSES   = ['queued', 'sending', 'sent', 'delivered', 'failed', 'bounced', 'cancelled'] as const;
 const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
 
-// SMS, Email, and WhatsApp are platform-managed (ADR: platform-managed
+// SMS, Email, WhatsApp, and Push are platform-managed (ADR: platform-managed
 // integrations) — tenants no longer select a provider or enter credentials
-// for any of the three. The channel PUT handler below ignores any
+// for any of the four. The channel PUT handler below ignores any
 // body.provider/body.credentials for these channels and always preserves
-// the platform-configured provider instead. Push/Voice are unaffected.
-const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms', 'email', 'whatsapp']);
+// the platform-configured provider instead. Voice is unaffected.
+const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms', 'email', 'whatsapp', 'push']);
 const PLATFORM_MANAGED_DEFAULT_PROVIDER: Partial<Record<Channel, string>> = {
   sms:      Deno.env.get('PLATFORM_SMS_PROVIDER')      ?? '46elks',
   email:    Deno.env.get('PLATFORM_EMAIL_PROVIDER')    ?? 'resend',
   whatsapp: Deno.env.get('PLATFORM_WHATSAPP_PROVIDER') ?? 'meta',
+  push:     Deno.env.get('PLATFORM_PUSH_PROVIDER')     ?? 'firebase',
 };
 
 // ─── Provider credential fields ────────────────────────────────────────────────
@@ -273,7 +274,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       const isPlatformManaged = PLATFORM_MANAGED_CHANNELS.has(channel);
 
-      // SMS/Email/WhatsApp's provider and credentials are platform-managed — any
+      // SMS/Email/WhatsApp/Push's provider and credentials are platform-managed — any
       // tenant-supplied value in the request body is ignored outright (never
       // encrypted, never stored). Falls through with nextMetadata/nextProvider
       // left at their existing/platform-default values below.
@@ -305,7 +306,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         nextMetadata = { ...existingMetadata, credentials: nextCreds, credentials_masked: nextMasked };
       }
 
-      // SMS/Email/WhatsApp's provider is platform-controlled — never accept a
+      // SMS/Email/WhatsApp/Push's provider is platform-controlled — never accept a
       // tenant-supplied value (or an omitted one) as authority; always
       // preserve whatever the platform already set (falling back to the
       // platform default provider the very first time a row is provisioned
