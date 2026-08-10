@@ -98,7 +98,7 @@ migration.
 | Key | Integration | Current version | Status |
 |---|---|---|---|
 | `communications-sms` | SMS (46elks/Twilio/Vonage) | v2 | platform-managed |
-| `communications-email` | Email (Resend/SendGrid/Mailjet) | v1 | frozen baseline |
+| `communications-email` | Email (Resend/SendGrid/Mailjet) | v2 | platform-managed |
 | `communications-whatsapp` | WhatsApp (Twilio/Meta) | v1 | frozen baseline |
 | `communications-push` | Push (Firebase/OneSignal) | v1 | frozen baseline |
 | `communications-voice` | Voice (Twilio/46elks) | v1 | frozen baseline |
@@ -164,7 +164,21 @@ the migration itself.
 - **Verification:** N/A for this checkpoint (no dedicated live test run this session; email sends were exercised indirectly via password-reset/welcome emails throughout this session on the Resend platform fallback).
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — platform-managed
+
+- **Tag:** `integration/communications-email/v2-platform-managed-2026-08-10`
+- **Commit:** `695dc4aa927af22faa0b9b9c363642146163fb68`
+- **Files changed:**
+  - `apps/web/src/modules/communication/routes/ChannelSettingsPage.tsx` — generalized SMS's `isSms` gate to `isPlatformManagedProvider = isSms || isEmail`; provider dropdown/credential fields replaced with a platform-managed note for both SMS and Email. enabled/from_address/display_name/daily_limit and the existing sender-domain validation (`UNVERIFIABLE_EMAIL_DOMAINS`, `EMAIL_PRIMARY_KEY_FIELD`/`senderDomainInvalid`) untouched — the "own API key + trafikcloud.se" branch is now structurally unreachable (credential input no longer exists) but was left in place rather than removed, per "preserve existing validation behavior." WhatsApp/Push/Voice branches unchanged.
+  - `apps/web/src/modules/settings/routes/ExternalServicesPage.tsx` — `ChannelCard`'s `isPlatformManagedProvider` now covers `sms || email`; provider readout hidden and a platform-managed note shown for both.
+  - `supabase/functions/communications/index.ts` — `PLATFORM_MANAGED_CHANNELS` now `{sms, email}`; `PLATFORM_MANAGED_DEFAULT_PROVIDER` map added (`sms: '46elks'`, `email: 'resend'`, both env-overridable via `PLATFORM_SMS_PROVIDER`/`PLATFORM_EMAIL_PROVIDER`) generalizing the single `PLATFORM_SMS_PROVIDER` constant from v1. The credential-ignoring and provider-preserving logic was already channel-generic (`isPlatformManaged`-gated) from the SMS migration, so no duplicate branch was needed.
+  - `supabase/functions/_shared/comm-providers.ts` — `dispatchMessage`'s `case 'email':` now calls `dispatchResend`/`dispatchSendGrid`/`dispatchMailjet` with an empty `creds` object instead of the org's stored credentials, forcing `cred()` to always resolve through the platform-wide `Deno.env` secret. `whatsapp`/`push`/`voice` unchanged.
+- **DB migrations:** `20260810130000_platform_managed_email_provider.sql` — adds `protect_channel_configs_email_provider_fields()` + `channel_configs_protect_email_provider` BEFORE INSERT/UPDATE trigger, structurally identical to but **independent from** the SMS trigger (`protect_channel_configs_sms_provider_fields`, 20260810120000) so either integration's DB protection can be rolled back without affecting the other. Blocks any non-service-role, non-platform-admin INSERT/UPDATE from setting/changing `channel_configs.provider` or `.metadata` on the `email` row only. Append-only — does not edit `20260725000004_channel_configs_rls_hardening.sql` or the SMS migration.
+- **RLS:** unchanged (same as SMS v2 — `channel_configs_insert`/`_update` still nominally permit org_owner/org_admin/org_manager row-level writes; the new trigger is what blocks the email-specific columns).
+- **Config/secrets (names only):** unchanged from v1: `RESEND_API_KEY`, `SENDGRID_API_KEY`, `MAILJET_API_KEY`, `MAILJET_SECRET_KEY` — all platform-wide Supabase Secrets. `PLATFORM_EMAIL_PROVIDER` (new, optional) lets the platform override the default provider (`resend`) without a code deploy; unset in production, so both real tenants continue on `resend` exactly as before.
+- **Deployment requirements:** `supabase db push --linked` (migration applied), `supabase functions deploy communications --project-ref ulgsndzfksphquqakelq` (bare deploy — `verify_jwt` confirmed still `true` post-deploy, version 87), frontend rebuilt and synced to Hostinger (bundle `index-Dh1rYF5s.js`, live-confirmed byte-identical for the two chunks containing the new platform-managed strings).
+- **Verification (2026-08-10):** both real tenants (Sara Trafikskola, Horizon TS) still have `channel_configs.email = {enabled: true, provider: 'resend', has_credentials: false}` unchanged after migration — dispatch continues to resolve through the platform secret with no functional regression; `sms`/`whatsapp`/`push`/`voice` rows also confirmed unchanged for both tenants in the same read. `pnpm typecheck` clean. `deno check` on the two touched Edge Functions shows only the same pre-existing, unrelated `credential-crypto.ts` lib-version error already documented for SMS v2 (not introduced by this change). Live E2E send test: **BLOCKED** — no authenticated real-tenant or platform-admin session was available in this environment and creating one was explicitly out of scope; not manufactured. Strongest available alternative (byte-for-byte comparison of the live-served JS chunks against the built source) was performed instead.
+- **Rollback procedure:** `git revert 695dc4aa927af22faa0b9b9c363642146163fb68` (or check out `integration/communications-email/v1-tenant-configurable-2026-08-10` for the 4 application files) restores tenant-configurable email UI/backend behavior. The DB trigger is additive and non-destructive, independent of the SMS trigger — to remove it independently: `DROP TRIGGER channel_configs_protect_email_provider ON public.channel_configs; DROP FUNCTION public.protect_channel_configs_email_provider_fields();` in a new forward migration (never edit `20260810130000` after it's applied). No tenant data was altered by v2, so rollback is purely a code/trigger reversal.
 
 ---
 
