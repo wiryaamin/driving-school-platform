@@ -101,16 +101,19 @@ migration.
 | `communications-email` | Email (Resend/SendGrid/Mailjet) | v2 | platform-managed |
 | `communications-whatsapp` | WhatsApp (Twilio/Meta) | v2 | platform-managed |
 | `communications-push` | Push (Firebase/OneSignal) | v2 | platform-managed |
-| `communications-voice` | Voice (Twilio/46elks) | v1 | frozen baseline |
+| `communications-voice` | Voice (Twilio/46elks) | v2 | platform-managed |
 | `payments-stripe` | Stripe | v1 | frozen baseline |
 | `payments-nets` | Nets | v1 | frozen baseline |
 | `person-lookup` | Person Lookup (Roaring/Mock) | v1 | frozen baseline |
 | `vehicle-registry` | Vehicle Registry (Biluppgifter.se/Mock) | v1 | frozen baseline |
 | `accounting-fortnox` | Fortnox | v1 | frozen baseline — audit recommends excluding from this migration; tracked anyway for completeness |
 
-All ten `v1` tags point at the same commit — nothing has changed yet. This
-register is the scaffolding the migration will populate, not a record of
-the migration itself.
+All ten `v1` tags remain pointing at the frozen baseline commit
+(`c8c23db`) — none were retargeted. The five `communications-*` units have
+each been migrated to platform-managed `v2` (SMS, Email, WhatsApp, Push,
+Voice, in that order, 2026-08-10/11); the five payment/lookup/accounting
+units remain at `v1` pending a separate decision on whether/how to migrate
+them.
 
 ---
 
@@ -263,7 +266,26 @@ the migration itself.
 - **Verification:** not exercised this session — carried from prior baseline unchanged. Lowest-usage channel per the audit (no evidence of active tenant use).
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — platform-managed
+
+- **Tag:** `integration/communications-voice/v2-platform-managed-2026-08-10`
+- **Commit:** `dbe8d5bb23d8f3226e8f8b9936b421d87f4cdb16`
+- **Pre-implementation audit findings:** Voice in this codebase is outbound-only text-to-speech (TTS) via 46elks (reusing the same `ELKS_API_USERNAME`/`PASSWORD` platform secret as SMS) or Twilio (reusing the same `TWILIO_ACCOUNT_SID`/`AUTH_TOKEN`/`PHONE_NUMBER` platform secret as SMS/WhatsApp), delivered via an inline TwiML `<Say>`. No telephone-number provisioning/ownership table exists anywhere in the schema; for the Twilio path, caller ID was already hard-coded to prefer the platform's own `TWILIO_PHONE_NUMBER` secret over any tenant `from_address` (`dispatchTwilioVoice`: `cred(creds,'TWILIO_PHONE_NUMBER') ?? from`) — already effectively platform-controlled before this migration. No call recording, no inbound calling, no call routing, no voicemail, and no dedicated webhook/callback function exist for voice anywhere in this codebase (confirmed by exhaustive search). Both real tenants: `enabled=false, provider=null, from_address=null, has_credentials=false` — voice has never been activated by either. Zero call history (`outbound_messages`) and zero `notification_templates` rows (tenant-owned or system-default) exist for `channel='voice'`. No STOP condition from the audit checklist (tenant credentials, telephone-number ownership, caller-ID conflict, recording ownership, inbound-call architecture, webhook ownership) applied — none of those features exist to conflict with platform-managed Voice.
+- **Files changed:**
+  - `apps/web/src/modules/communication/routes/ChannelSettingsPage.tsx` — generalized `isPlatformManagedProvider` to include `isVoice` (now all five channels). Provider dropdown/credential fields replaced with a platform-managed note for Voice too. The top-of-page banner (previously accurate for whichever channels were still tenant-configurable) was rewritten now that it would otherwise describe a capability — "select a provider, enter your own credentials" — that no longer exists for any of the five cards on the page.
+  - `supabase/functions/communications/index.ts` — `PLATFORM_MANAGED_CHANNELS` now `{sms, email, whatsapp, push, voice}` (all channels); `PLATFORM_MANAGED_DEFAULT_PROVIDER` gained `voice: '46elks'` (env-overridable via `PLATFORM_VOICE_PROVIDER`), chosen to match SMS's already-proven-live 46elks credentials since voice has never been activated by a real tenant and so has no existing value to preserve. No new branch needed — logic was already channel-generic.
+  - `supabase/functions/_shared/comm-providers.ts` — `dispatchMessage`'s `case 'voice':` now calls `dispatch46elksVoice`/`dispatchTwilioVoice` with an empty `creds` object. With all five channels now hardcoding `{}`, the per-org credential lookup (`getOrgChannelCredentials`, and its `createServiceClient`/`decryptCredential` imports) had zero remaining callers and was removed rather than left as a dead DB round-trip + decrypt attempt on every single dispatch call. This left `dispatchMessage` with no direct `await` in its own body (deno-lint `require-await`) — fixed honestly by awaiting each `return dispatch*(...)` tail call rather than suppressing the rule.
+  - `supabase/functions/communication-worker/index.ts` — **not modified** (zero diff), but **redeployed** alongside `communications` so the `comm-providers.ts` shared-file change is live on both dispatch paths that matter. Audited all six `dispatchMessage` callers across the codebase: `communication-worker` is the only one besides `communications` that passes `organizationId` (the queue/rule-triggered dispatch path); `demo-requests`, `platform-admin`, `public-booking`, `public-enrollment`, and `trial-signup` all omit it (platform-owned sends), so their behavior is provably identical whether their bundled `comm-providers.ts` is stale or fresh — left un-redeployed as genuinely unaffected, not as an oversight.
+  - `apps/web/src/modules/settings/routes/ExternalServicesPage.tsx` — **not touched**, confirmed it never rendered a Voice card.
+- **DB migrations:** `20260811100000_platform_managed_voice_provider.sql` — adds `protect_channel_configs_voice_provider_fields()` + `channel_configs_protect_voice_provider` BEFORE INSERT/UPDATE trigger, structurally identical to but independent from the SMS/Email/WhatsApp/Push triggers (20260810120000/130000/140000/150000) so any one integration's DB protection can be rolled back without affecting the others. Blocks non-service-role, non-platform-admin writes to `provider`/`metadata` on the `voice` row only.
+- **RLS:** unchanged — same as the other four v2 migrations, the new trigger is what actually blocks the voice-specific columns.
+- **Config/secrets (names only):** unchanged from v1: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `ELKS_API_USERNAME`, `ELKS_API_PASSWORD` — all platform-wide Supabase Secrets, all already shared with SMS/WhatsApp. `PLATFORM_VOICE_PROVIDER` (new, optional) lets the platform override the default provider (`46elks`) without a code deploy; unset in production.
+- **Deployment requirements:** `supabase db push --linked` (migration applied), `supabase functions deploy communications --project-ref ulgsndzfksphquqakelq` (bare deploy — `verify_jwt` confirmed still `true`, version 90) and `supabase functions deploy communication-worker --no-verify-jwt --project-ref ulgsndzfksphquqakelq` (`--no-verify-jwt` preserved its correct `false` setting, version 86), frontend rebuilt and synced to Hostinger (bundle `index-CiNQOS0u.js`, live-confirmed byte-identical for the chunk containing the new platform-managed voice string and the updated banner text).
+- **Verification (2026-08-10/11):** both real tenants (Sara Trafikskola, Horizon TS) still have `channel_configs.voice = {enabled: false, provider: null, has_credentials: false}` unchanged after migration (voice has never been activated by either); `sms`/`email`/`whatsapp`/`push` rows also confirmed unchanged for both tenants in the same read. `pnpm typecheck` clean. `deno check` shows only the same pre-existing, unrelated `credential-crypto.ts` error already documented for the other four v2 migrations. `deno lint` on both touched files: clean (the `require-await` issue introduced by removing the dead credential lookup was fixed, not suppressed). Live E2E call test: **BLOCKED** — no authenticated real-tenant/platform-admin session and no valid test scenario exists (voice disabled, no telephone number configured, for either real tenant); not manufactured. Strongest available alternative (byte-for-byte comparison of the live-served JS chunk against the built source) was performed instead.
+- **Provider credential status:** platform-wide `ELKS_API_USERNAME`/`PASSWORD` are presumed valid (SMS live-tested successfully this session on the same credentials); `TWILIO_*` credentials were not independently verified — neither was exercised by a real voice call this migration.
+- **Telephone-number status:** no telephone numbers were purchased, released, transferred, or otherwise modified — none exist as a provisioned resource in this codebase to begin with.
+- **Recording status:** not applicable — no recording feature exists in this codebase.
+- **Rollback procedure:** `git revert dbe8d5bb23d8f3226e8f8b9936b421d87f4cdb16` (or check out `integration/communications-voice/v1-tenant-configurable-2026-08-10` for the application files) restores tenant-configurable Voice UI/backend behavior — note this would also revert the `getOrgChannelCredentials` removal, restoring the per-org credential-lookup code path for all five channels (harmless either way, since no tenant has ever stored one). The DB trigger is additive and non-destructive, independent of the other four triggers — to remove it independently: `DROP TRIGGER channel_configs_protect_voice_provider ON public.channel_configs; DROP FUNCTION public.protect_channel_configs_voice_provider_fields();` in a new forward migration. No tenant data was altered by v2.
 
 ---
 
