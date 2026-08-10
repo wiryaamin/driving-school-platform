@@ -682,9 +682,14 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
 
   switch (channel) {
     case 'sms':
-      if (provider === '46elks') return dispatch46elksSms(creds, to, fromAddr, body);
-      if (provider === 'twilio') return dispatchTwilioSms(creds, to, fromAddr, body);
-      if (provider === 'vonage') return dispatchVonageSms(creds, to, fromAddr, body);
+      // SMS is platform-managed (ADR: platform-managed integrations) — a
+      // tenant can no longer save their own SMS credentials (enforced in
+      // communications/index.ts's channel PUT handler and by a DB trigger),
+      // but this always resolves through the platform-wide Deno.env secret
+      // regardless, rather than depending on the row staying empty.
+      if (provider === '46elks') return dispatch46elksSms({}, to, fromAddr, body);
+      if (provider === 'twilio') return dispatchTwilioSms({}, to, fromAddr, body);
+      if (provider === 'vonage') return dispatchVonageSms({}, to, fromAddr, body);
       break;
     case 'email':
       if (provider === 'resend')    return dispatchResend(creds, to, fromAddr, subject, body);

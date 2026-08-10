@@ -49,6 +49,14 @@ const CHANNELS   = ['email', 'sms', 'whatsapp', 'push', 'voice'] as const;
 const STATUSES   = ['queued', 'sending', 'sent', 'delivered', 'failed', 'bounced', 'cancelled'] as const;
 const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
 
+// SMS is platform-managed (ADR: platform-managed integrations) — tenants no
+// longer select a provider or enter credentials for it. The channel PUT
+// handler below ignores any body.provider/body.credentials for this channel
+// and always preserves the platform-configured provider instead. Every
+// other channel (email/whatsapp/push/voice) is unaffected.
+const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms']);
+const PLATFORM_SMS_PROVIDER = Deno.env.get('PLATFORM_SMS_PROVIDER') ?? '46elks';
+
 // ─── Provider credential fields ────────────────────────────────────────────────
 // The set of env-var-named credential fields Kanalinställningar lets a tenant
 // configure per provider, mirroring comm-providers.ts's Deno.env reads exactly
@@ -249,7 +257,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       // say, never silently drops a previously-saved API key.
       const { data: existing } = await supabase
         .from('channel_configs')
-        .select('metadata')
+        .select('provider, metadata')
         .eq('organization_id', orgId)
         .eq('channel', channel)
         .maybeSingle();
@@ -259,7 +267,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       const existingMasked   = existingMetadata.credentials_masked ?? {};
       let nextMetadata: ChannelMetadata = existingMetadata;
 
-      if (body.credentials && Object.keys(body.credentials).length > 0) {
+      const isPlatformManaged = PLATFORM_MANAGED_CHANNELS.has(channel);
+
+      // SMS's provider and credentials are platform-managed — any
+      // tenant-supplied value in the request body is ignored outright (never
+      // encrypted, never stored). Falls through with nextMetadata/nextProvider
+      // left at their existing/platform-default values below.
+      if (!isPlatformManaged && body.credentials && Object.keys(body.credentials).length > 0) {
         if (!credentialCryptoConfigured()) {
           return err(ctx, 'Kryptering är inte konfigurerad på plattformen', 503, 'CRYPTO_NOT_CONFIGURED');
         }
@@ -287,13 +301,21 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         nextMetadata = { ...existingMetadata, credentials: nextCreds, credentials_masked: nextMasked };
       }
 
+      // SMS's provider is platform-controlled — never accept a tenant-supplied
+      // value (or an omitted one) as authority; always preserve whatever the
+      // platform already set (falling back to the platform default provider
+      // the very first time a row is provisioned for an org).
+      const nextProvider = isPlatformManaged
+        ? (existing?.provider ?? PLATFORM_SMS_PROVIDER)
+        : (body.provider ?? null);
+
       const { data, error } = await supabase
         .from('channel_configs')
         .upsert({
           organization_id: orgId,
           channel,
           enabled:         body.enabled      ?? false,
-          provider:        body.provider     ?? null,
+          provider:        nextProvider,
           from_address:    body.from_address ?? null,
           display_name:    body.display_name ?? null,
           daily_limit:     body.daily_limit  ?? 500,

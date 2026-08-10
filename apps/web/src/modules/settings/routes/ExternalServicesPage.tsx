@@ -446,16 +446,21 @@ function ChannelCard({
   const config = configs?.find((c) => c.channel === channel);
   const resolved = isError ? resolveIntegrationStatusError(error) : null;
   const status: StatusKind = resolved?.status ?? ((config?.enabled && config.provider) ? 'connected' : 'not_connected');
+  // SMS's provider is platform-managed (ADR: platform-managed integrations) —
+  // don't surface which provider is behind it to the tenant. Email is
+  // unaffected and keeps showing its tenant-chosen provider as before.
+  const isPlatformManagedProvider = channel === 'sms';
 
   return (
     <IntegrationCard
       icon={icon}
       title={title}
       description={description}
-      provider={config?.provider ?? undefined}
+      provider={isPlatformManagedProvider ? undefined : (config?.provider ?? undefined)}
       status={status}
       loading={isLoading}
       statusMessage={resolved?.message}
+      note={isPlatformManagedProvider ? 'SMS-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola.' : undefined}
       actions={
         <Button variant="outline" size="sm" className="w-full gap-1.5" asChild>
           <Link to="/communication/settings">
