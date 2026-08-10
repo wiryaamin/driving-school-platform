@@ -127,11 +127,13 @@ function ChannelForm({
   const update = useUpdateChannelConfig();
   const meta   = CHANNEL_META[channel];
   const opts   = PROVIDER_OPTIONS[channel];
-  // SMS is platform-managed (ADR: platform-managed integrations) — provider
-  // selection and credential entry are hidden; enabled/sender/display-name/
-  // daily-limit remain tenant-configurable exactly as before. Every other
-  // channel's rendering below is unchanged.
+  // SMS and Email are platform-managed (ADR: platform-managed integrations) —
+  // provider selection and credential entry are hidden for both; enabled/
+  // sender/display-name/daily-limit remain tenant-configurable exactly as
+  // before. WhatsApp/Push/Voice rendering below is unchanged.
   const isSms  = channel === 'sms';
+  const isEmail = channel === 'email';
+  const isPlatformManagedProvider = isSms || isEmail;
 
   const [enabled,           setEnabled]           = useState(config?.enabled              ?? false);
   const [provider,          setProvider]          = useState(config?.provider               ?? '');
@@ -167,7 +169,7 @@ function ChannelForm({
     || (config.display_name        ?? '') !== displayName
     || String(config.daily_limit)         !== dailyLimit
     || dirtyCredFields;
-  const invalidEnabledWithoutProvider = !isSms && enabled && !provider;
+  const invalidEnabledWithoutProvider = !isPlatformManagedProvider && enabled && !provider;
   const senderTooLong = channel === 'sms'
     && fromAddress.trim() !== ''
     && !isPhoneLikeSender(fromAddress)
@@ -233,7 +235,7 @@ function ChannelForm({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground">{meta.label}</p>
           <p className="text-xs text-muted-foreground">
-            {isSms
+            {isPlatformManagedProvider
               ? (enabled ? 'Aktiverad — leverantör hanteras av plattformen' : 'Inaktiverad')
               : (enabled ? (provider ? `Via ${provider}` : 'Aktiverad — välj leverantör') : 'Inaktiverad')}
           </p>
@@ -260,7 +262,7 @@ function ChannelForm({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
           <label className="text-xs font-medium text-foreground">Leverantör</label>
-          {isSms ? (
+          {isPlatformManagedProvider ? (
             <div className="h-9 flex items-center px-3 text-sm text-muted-foreground border border-dashed border-border rounded-md bg-muted/30">
               Hanteras av plattformen
             </div>
@@ -338,18 +340,19 @@ function ChannelForm({
         </div>
       </div>
 
-      {/* Platform-managed note (SMS only) */}
-      {isSms && (
+      {/* Platform-managed note (SMS/Email only) */}
+      {isPlatformManagedProvider && (
         <div className="border-t border-border pt-4">
           <p className="text-[10px] text-muted-foreground">
-            SMS-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här.
-            Kontakta plattformens support för att verifiera anslutningsstatus.
+            {isSms
+              ? 'SMS-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'
+              : 'E-postleverantören hanteras på plattformsnivå och kan inte konfigureras per skola här. Kontakta plattformens support för att verifiera anslutningsstatus.'}
           </p>
         </div>
       )}
 
       {/* Credentials */}
-      {!isSms && hints.length > 0 && (
+      {!isPlatformManagedProvider && hints.length > 0 && (
         <div className="border-t border-border pt-4 space-y-3">
           <p className="text-xs font-medium text-foreground flex items-center gap-1.5">
             <KeyRound className="w-3.5 h-3.5 text-muted-foreground" />
@@ -414,7 +417,7 @@ function ChannelForm({
         {!enabled && (
           <p className="text-[10px] text-muted-foreground">Aktivera kanalen och spara för att kunna skicka test.</p>
         )}
-        {!isSms && !provider && enabled && (
+        {!isPlatformManagedProvider && !provider && enabled && (
           <p className="text-[10px] text-amber-600 dark:text-amber-400">Välj leverantör och spara innan test.</p>
         )}
       </div>

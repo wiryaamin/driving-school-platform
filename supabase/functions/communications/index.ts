@@ -49,13 +49,16 @@ const CHANNELS   = ['email', 'sms', 'whatsapp', 'push', 'voice'] as const;
 const STATUSES   = ['queued', 'sending', 'sent', 'delivered', 'failed', 'bounced', 'cancelled'] as const;
 const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
 
-// SMS is platform-managed (ADR: platform-managed integrations) — tenants no
-// longer select a provider or enter credentials for it. The channel PUT
-// handler below ignores any body.provider/body.credentials for this channel
-// and always preserves the platform-configured provider instead. Every
-// other channel (email/whatsapp/push/voice) is unaffected.
-const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms']);
-const PLATFORM_SMS_PROVIDER = Deno.env.get('PLATFORM_SMS_PROVIDER') ?? '46elks';
+// SMS and Email are platform-managed (ADR: platform-managed integrations) —
+// tenants no longer select a provider or enter credentials for either. The
+// channel PUT handler below ignores any body.provider/body.credentials for
+// these channels and always preserves the platform-configured provider
+// instead. WhatsApp/Push/Voice are unaffected.
+const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms', 'email']);
+const PLATFORM_MANAGED_DEFAULT_PROVIDER: Partial<Record<Channel, string>> = {
+  sms:   Deno.env.get('PLATFORM_SMS_PROVIDER')   ?? '46elks',
+  email: Deno.env.get('PLATFORM_EMAIL_PROVIDER') ?? 'resend',
+};
 
 // ─── Provider credential fields ────────────────────────────────────────────────
 // The set of env-var-named credential fields Kanalinställningar lets a tenant
@@ -269,7 +272,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
 
       const isPlatformManaged = PLATFORM_MANAGED_CHANNELS.has(channel);
 
-      // SMS's provider and credentials are platform-managed — any
+      // SMS/Email's provider and credentials are platform-managed — any
       // tenant-supplied value in the request body is ignored outright (never
       // encrypted, never stored). Falls through with nextMetadata/nextProvider
       // left at their existing/platform-default values below.
@@ -301,12 +304,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         nextMetadata = { ...existingMetadata, credentials: nextCreds, credentials_masked: nextMasked };
       }
 
-      // SMS's provider is platform-controlled — never accept a tenant-supplied
-      // value (or an omitted one) as authority; always preserve whatever the
-      // platform already set (falling back to the platform default provider
-      // the very first time a row is provisioned for an org).
+      // SMS/Email's provider is platform-controlled — never accept a
+      // tenant-supplied value (or an omitted one) as authority; always
+      // preserve whatever the platform already set (falling back to the
+      // platform default provider the very first time a row is provisioned
+      // for an org).
       const nextProvider = isPlatformManaged
-        ? (existing?.provider ?? PLATFORM_SMS_PROVIDER)
+        ? (existing?.provider ?? PLATFORM_MANAGED_DEFAULT_PROVIDER[channel] ?? null)
         : (body.provider ?? null);
 
       const { data, error } = await supabase

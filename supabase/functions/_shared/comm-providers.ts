@@ -692,9 +692,14 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       if (provider === 'vonage') return dispatchVonageSms({}, to, fromAddr, body);
       break;
     case 'email':
-      if (provider === 'resend')    return dispatchResend(creds, to, fromAddr, subject, body);
-      if (provider === 'sendgrid')  return dispatchSendGrid(creds, to, fromAddr, subject, body);
-      if (provider === 'mailjet')   return dispatchMailjet(creds, to, fromAddr, subject, body);
+      // Email is platform-managed (ADR: platform-managed integrations) — a
+      // tenant can no longer save their own email credentials (enforced in
+      // communications/index.ts's channel PUT handler and by a DB trigger),
+      // but this always resolves through the platform-wide Deno.env secret
+      // regardless, rather than depending on the row staying empty.
+      if (provider === 'resend')    return dispatchResend({}, to, fromAddr, subject, body);
+      if (provider === 'sendgrid')  return dispatchSendGrid({}, to, fromAddr, subject, body);
+      if (provider === 'mailjet')   return dispatchMailjet({}, to, fromAddr, subject, body);
       break;
     case 'whatsapp':
       if (provider === 'twilio') return dispatchTwilioWhatsapp(creds, to, fromAddr, body);

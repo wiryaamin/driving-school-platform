@@ -446,10 +446,11 @@ function ChannelCard({
   const config = configs?.find((c) => c.channel === channel);
   const resolved = isError ? resolveIntegrationStatusError(error) : null;
   const status: StatusKind = resolved?.status ?? ((config?.enabled && config.provider) ? 'connected' : 'not_connected');
-  // SMS's provider is platform-managed (ADR: platform-managed integrations) —
-  // don't surface which provider is behind it to the tenant. Email is
-  // unaffected and keeps showing its tenant-chosen provider as before.
-  const isPlatformManagedProvider = channel === 'sms';
+  // SMS and Email's provider are platform-managed (ADR: platform-managed
+  // integrations) — don't surface which provider is behind either one to
+  // the tenant. WhatsApp/Push/Voice cards elsewhere on this page are
+  // unaffected.
+  const isPlatformManagedProvider = channel === 'sms' || channel === 'email';
 
   return (
     <IntegrationCard
@@ -460,7 +461,9 @@ function ChannelCard({
       status={status}
       loading={isLoading}
       statusMessage={resolved?.message}
-      note={isPlatformManagedProvider ? 'SMS-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola.' : undefined}
+      note={isPlatformManagedProvider
+        ? `${channel === 'sms' ? 'SMS' : 'E-post'}-leverantören hanteras på plattformsnivå och kan inte konfigureras per skola.`
+        : undefined}
       actions={
         <Button variant="outline" size="sm" className="w-full gap-1.5" asChild>
           <Link to="/communication/settings">
