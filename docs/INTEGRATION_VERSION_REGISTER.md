@@ -97,7 +97,7 @@ migration.
 
 | Key | Integration | Current version | Status |
 |---|---|---|---|
-| `communications-sms` | SMS (46elks/Twilio/Vonage) | v1 | frozen baseline |
+| `communications-sms` | SMS (46elks/Twilio/Vonage) | v2 | platform-managed |
 | `communications-email` | Email (Resend/SendGrid/Mailjet) | v1 | frozen baseline |
 | `communications-whatsapp` | WhatsApp (Twilio/Meta) | v1 | frozen baseline |
 | `communications-push` | Push (Firebase/OneSignal) | v1 | frozen baseline |
@@ -132,7 +132,21 @@ the migration itself.
 - **Verification:** live-confirmed 2026-08-10 — `dispatchMessage` successfully sent a real SMS via the platform-wide 46elks fallback for a real tenant (Horizon TS).
 - **Rollback procedure:** N/A — this is the baseline, nothing to roll back to yet.
 
-### v2 — *(pending — not yet started)*
+### v2 — platform-managed
+
+- **Tag:** `integration/communications-sms/v2-platform-managed-2026-08-10`
+- **Commit:** `b14fb4e2ab045e404fbb686fd23851eaa7699777`
+- **Files changed:**
+  - `apps/web/src/modules/communication/routes/ChannelSettingsPage.tsx` — SMS branch only: provider dropdown and credential fields replaced with a platform-managed note; enabled/from_address/display_name/daily_limit unchanged. Email/WhatsApp/Push/Voice branches byte-identical to v1.
+  - `apps/web/src/modules/settings/routes/ExternalServicesPage.tsx` — `ChannelCard`'s `channel === 'sms'` branch hides the provider readout and adds a platform-managed note. `email` instantiation unchanged.
+  - `supabase/functions/communications/index.ts` — channel PUT handler: for `channel === 'sms'`, ignores `body.provider`/`body.credentials` outright (never encrypted, never stored) and always preserves the existing/platform-default provider (`PLATFORM_SMS_PROVIDER`, defaults to `46elks`). Other channels' PUT logic unchanged.
+  - `supabase/functions/_shared/comm-providers.ts` — `dispatchMessage`'s `case 'sms':` now calls the three SMS provider functions with an empty `creds` object instead of the org's stored credentials, forcing `cred()` to always resolve through the platform-wide `Deno.env` secret. Every other case (`email`/`whatsapp`/`push`/`voice`) unchanged.
+- **DB migrations:** `20260810120000_platform_managed_sms_provider.sql` — adds `protect_channel_configs_sms_provider_fields()` + `channel_configs_protect_sms_provider` BEFORE INSERT/UPDATE trigger. Blocks any non-service-role, non-platform-admin INSERT/UPDATE from setting/changing `channel_configs.provider` or `.metadata` on the `sms` row. Defense-in-depth against a direct PostgREST write bypassing the Edge Function (which already ignores those fields for SMS); `enabled`/`from_address`/`display_name`/`daily_limit` and all non-sms rows are unaffected. Append-only — does not edit `20260725000004_channel_configs_rls_hardening.sql`.
+- **RLS:** unchanged (`channel_configs_insert`/`_update` policies still exist and still nominally permit org_owner/org_admin/org_manager row-level writes to any channel — the new trigger is what actually blocks the SMS-specific columns now).
+- **Config/secrets (names only):** unchanged from v1: `ELKS_API_USERNAME`, `ELKS_API_PASSWORD`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, `VONAGE_API_KEY`, `VONAGE_API_SECRET` — all platform-wide Supabase Secrets. `PLATFORM_SMS_PROVIDER` (new, optional) lets the platform override the default provider (`46elks`) without a code deploy; unset in production, so both real tenants continue on `46elks` exactly as before.
+- **Deployment requirements:** `supabase db push --linked` (migration applied), `supabase functions deploy communications --project-ref ulgsndzfksphquqakelq` (bare deploy — `verify_jwt` confirmed still `true` post-deploy), frontend rebuilt and synced to Hostinger (bundle `index-CXfY8C-i.js`, live-confirmed).
+- **Verification (2026-08-10):** both real tenants (Sara Trafikskola, Horizon TS) still have `channel_configs.sms = {enabled: true, provider: '46elks', has_credentials: false}` unchanged after migration — dispatch continues to resolve through the platform secret with no functional regression. `pnpm typecheck` clean. `deno check` on the two touched Edge Functions shows only a pre-existing, unrelated `credential-crypto.ts` lib-version error (confirmed present on the pre-change commit via `git stash`, not introduced by this change).
+- **Rollback procedure:** `git revert b14fb4e2ab045e404fbb686fd23851eaa7699777` (or check out `integration/communications-sms/v1-tenant-configurable-2026-08-10` for the 4 application files) restores tenant-configurable SMS UI/backend behavior. The DB trigger is additive and non-destructive — to remove it independently without touching application code: `DROP TRIGGER channel_configs_protect_sms_provider ON public.channel_configs; DROP FUNCTION public.protect_channel_configs_sms_provider_fields();` in a new forward migration (never edit `20260810120000` after it's applied). No tenant data was altered by v2, so rollback is purely a code/trigger reversal.
 
 ---
 
