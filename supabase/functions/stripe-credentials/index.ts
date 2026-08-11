@@ -45,6 +45,19 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code = 'E
   return buildErrorResponse(ctx, status, code, message);
 }
 
+// Dual-level payment architecture: a Stripe key present on this org can be
+// either TrafikCloud's shared pilot/test default (copied at provisioning,
+// see _shared/trial-provisioning.ts, flagged settings.stripe_pilot_configuration
+// = true) or the tenant's own, deliberately-entered credential. The frontend
+// must never present the former as the latter — this three-state value is
+// how it tells them apart without needing to inspect the credential itself.
+type StripeState = 'not_connected' | 'pilot' | 'tenant_owned';
+
+function computeStripeState(configured: boolean, isPilot: boolean): StripeState {
+  if (!configured) return 'not_connected';
+  return isPilot ? 'pilot' : 'tenant_owned';
+}
+
 // Same permission already gating other organization-wide administrative
 // settings actions (data-migration, guardian-portal management) — no new
 // permission introduced.
@@ -96,13 +109,16 @@ async function handleGet(client: any, orgId: string, ctx: EdgeRequestContext): P
   if (error || !data) return err(ctx, 'Organisation hittades inte', 404, 'NOT_FOUND');
 
   const settings = (data.settings ?? {}) as Record<string, unknown>;
+  const configured = typeof settings['stripe_secret_key'] === 'string' && settings['stripe_secret_key'] !== '';
+  const isPilot     = settings['stripe_pilot_configuration'] === true;
 
   return json({
     data: {
-      stripe_secret_key_configured:     typeof settings['stripe_secret_key'] === 'string' && settings['stripe_secret_key'] !== '',
+      stripe_secret_key_configured:     configured,
       stripe_secret_key_masked:         (settings['stripe_secret_key_masked'] as string | undefined) ?? null,
       stripe_webhook_secret_configured: typeof settings['stripe_webhook_secret'] === 'string' && settings['stripe_webhook_secret'] !== '',
       stripe_webhook_secret_masked:     (settings['stripe_webhook_secret_masked'] as string | undefined) ?? null,
+      stripe_state:                     computeStripeState(configured, isPilot),
     },
   });
 }
@@ -141,11 +157,18 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     if (secretKeyInput === '') {
       delete next['stripe_secret_key'];
       delete next['stripe_secret_key_masked'];
+      // Nothing configured any more — a stale pilot flag would otherwise
+      // keep reporting "pilot" for a key that no longer exists.
+      delete next['stripe_pilot_configuration'];
     } else {
       const validation = await verifyStripeSecretKey(secretKeyInput);
       if (!validation.ok) return err(ctx, validation.error ?? 'Ogiltig nyckel', 422, 'VALIDATION_FAILED');
       next['stripe_secret_key']        = await encryptCredential(secretKeyInput);
       next['stripe_secret_key_masked'] = maskCredential(secretKeyInput);
+      // The tenant just deliberately entered their own key — this can never
+      // be TrafikCloud's pilot/test configuration again, even if a pilot
+      // default was copied in at provisioning.
+      next['stripe_pilot_configuration'] = false;
     }
   }
 
@@ -167,12 +190,14 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     .eq('id', orgId);
   if (updateErr) return err(ctx, 'Kunde inte spara', 500, 'UPDATE_FAILED');
 
+  const nowConfigured = typeof next['stripe_secret_key'] === 'string';
   return json({
     data: {
-      stripe_secret_key_configured:     typeof next['stripe_secret_key'] === 'string',
+      stripe_secret_key_configured:     nowConfigured,
       stripe_secret_key_masked:         (next['stripe_secret_key_masked'] as string | undefined) ?? null,
       stripe_webhook_secret_configured: typeof next['stripe_webhook_secret'] === 'string',
       stripe_webhook_secret_masked:     (next['stripe_webhook_secret_masked'] as string | undefined) ?? null,
+      stripe_state:                     computeStripeState(nowConfigured, next['stripe_pilot_configuration'] === true),
     },
   });
 }

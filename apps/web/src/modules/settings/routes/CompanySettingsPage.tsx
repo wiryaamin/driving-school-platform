@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight } from 'lucide-react';
+import { Building2, ChevronRight, AlertTriangle, ShieldCheck, XCircle } from 'lucide-react';
 import {
   Button, Skeleton,
   Card, CardContent, CardHeader, CardTitle, CardFooter,
@@ -88,6 +88,49 @@ function validateSocial(f: FormFields): Record<string, string> {
   if (f.tiktok    && !urlRe.test(f.tiktok))    e['tiktok']    = 'Ange en giltig URL (börjar med https://).';
   if (f.youtube   && !urlRe.test(f.youtube))   e['youtube']   = 'Ange en giltig URL (börjar med https://).';
   return e;
+}
+
+// ─── Payment provider state banner ─────────────────────────────────────────────
+// Dual-level payment architecture: makes it impossible to mistake TrafikCloud's
+// shared pilot/test default for the school's own connected account.
+
+function PaymentProviderStateBanner({
+  provider, state,
+}: {
+  provider: 'Stripe' | 'Nets';
+  state:    'not_connected' | 'pilot' | 'tenant_owned';
+}) {
+  if (state === 'pilot') {
+    return (
+      <div className="flex items-start gap-2 text-xs rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 px-3 py-2">
+        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div>
+          <p className="font-medium text-amber-800 dark:text-amber-300">TrafikClouds pilot-/testkonfiguration är aktiv.</p>
+          <p className="text-amber-700 dark:text-amber-400">
+            Detta är ett testkonto från TrafikCloud och inte er skolas eget {provider}-konto.
+            Ange era egna uppgifter nedan för att koppla ert eget konto.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (state === 'tenant_owned') {
+    return (
+      <div className="flex items-start gap-2 text-xs rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2">
+        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+        <p className="font-medium text-emerald-800 dark:text-emerald-300">Er skolas {provider}-konto är anslutet.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2 text-xs rounded-lg border border-border bg-muted/20 px-3 py-2">
+      <XCircle className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+      <div>
+        <p className="font-medium text-foreground">{provider} är inte anslutet.</p>
+        <p className="text-muted-foreground">Anslut er skolas {provider}-konto för att ta emot betalningar.</p>
+      </div>
+    </div>
+  );
 }
 
 // ─── CompanySettingsPage ──────────────────────────────────────────────────────
@@ -249,11 +292,17 @@ export function CompanySettingsPage() {
   // (ADR-022: server-side, encrypted, write-only from the client's
   // perspective). Saved through the dedicated stripe-credentials function,
   // not a direct table write, unlike the rest of this page's fields.
+  // 'pilot' = TrafikCloud's shared test/pilot default (copied at
+  // provisioning), never the school's own account. 'tenant_owned' = the
+  // school entered its own key. See stripe-credentials/index.ts.
+  type PaymentProviderState = 'not_connected' | 'pilot' | 'tenant_owned';
+
   interface StripeCredentialStatus {
     stripe_secret_key_configured:     boolean;
     stripe_secret_key_masked:         string | null;
     stripe_webhook_secret_configured: boolean;
     stripe_webhook_secret_masked:     string | null;
+    stripe_state:                     PaymentProviderState;
   }
 
   const { data: stripeStatus, isLoading: stripeStatusLoading } = useQuery<StripeCredentialStatus | null>({
@@ -298,6 +347,7 @@ export function CompanySettingsPage() {
     nets_secret_key_masked:       string | null;
     nets_checkout_key_configured: boolean;
     nets_checkout_key_masked:     string | null;
+    nets_state:                   PaymentProviderState;
   }
 
   const { data: netsStatus, isLoading: netsStatusLoading } = useQuery<NetsCredentialStatus | null>({
@@ -582,6 +632,10 @@ export function CompanySettingsPage() {
           <div className="space-y-3 pt-4 border-t border-border">
             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Stripe (kortbetalning)</p>
 
+            {!stripeStatusLoading && stripeStatus && (
+              <PaymentProviderStateBanner provider="Stripe" state={stripeStatus.stripe_state} />
+            )}
+
             {/* Secret Key */}
             <div className="space-y-1.5">
               <Label htmlFor="stripe_secret_key_input">Stripe Secret Key</Label>
@@ -663,6 +717,11 @@ export function CompanySettingsPage() {
           {/* Nets */}
           <div className="space-y-3 pt-4 border-t border-border">
             <p className="text-xs font-semibold text-foreground uppercase tracking-wide">Nets</p>
+
+            {!netsStatusLoading && netsStatus && (
+              <PaymentProviderStateBanner provider="Nets" state={netsStatus.nets_state} />
+            )}
+
             <p className="text-[11px] text-amber-700 dark:text-amber-400">
               Ingen kortbetalning via Nets är kopplad till kassan ännu — uppgifterna nedan sparas säkert
               för framtida bruk men används inte i utcheckningsflödet i denna version.

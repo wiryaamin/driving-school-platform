@@ -37,6 +37,19 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code = 'E
   return buildErrorResponse(ctx, status, code, message);
 }
 
+// Dual-level payment architecture: a Nets key present on this org can be
+// either TrafikCloud's shared pilot/test default (copied at provisioning,
+// see _shared/trial-provisioning.ts, flagged settings.nets_pilot_configuration
+// = true) or the tenant's own, deliberately-entered credential. The frontend
+// must never present the former as the latter — this three-state value is
+// how it tells them apart without needing to inspect the credential itself.
+type NetsState = 'not_connected' | 'pilot' | 'tenant_owned';
+
+function computeNetsState(configured: boolean, isPilot: boolean): NetsState {
+  if (!configured) return 'not_connected';
+  return isPilot ? 'pilot' : 'tenant_owned';
+}
+
 // Same permission already gating organization-wide administrative settings
 // actions (stripe-credentials, data-migration) — no new permission introduced.
 const REQUIRED_PERMISSION = 'administration:organization:update';
@@ -74,13 +87,16 @@ async function handleGet(client: any, orgId: string, ctx: EdgeRequestContext): P
   if (error || !data) return err(ctx, 'Organisation hittades inte', 404, 'NOT_FOUND');
 
   const settings = (data.settings ?? {}) as Record<string, unknown>;
+  const configured = typeof settings['nets_secret_key'] === 'string' && settings['nets_secret_key'] !== '';
+  const isPilot     = settings['nets_pilot_configuration'] === true;
 
   return json({
     data: {
-      nets_secret_key_configured:   typeof settings['nets_secret_key'] === 'string' && settings['nets_secret_key'] !== '',
+      nets_secret_key_configured:   configured,
       nets_secret_key_masked:       (settings['nets_secret_key_masked'] as string | undefined) ?? null,
       nets_checkout_key_configured: typeof settings['nets_checkout_key'] === 'string' && settings['nets_checkout_key'] !== '',
       nets_checkout_key_masked:     (settings['nets_checkout_key_masked'] as string | undefined) ?? null,
+      nets_state:                   computeNetsState(configured, isPilot),
     },
   });
 }
@@ -119,11 +135,18 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     if (secretKeyInput === '') {
       delete next['nets_secret_key'];
       delete next['nets_secret_key_masked'];
+      // Nothing configured any more — a stale pilot flag would otherwise
+      // keep reporting "pilot" for a key that no longer exists.
+      delete next['nets_pilot_configuration'];
     } else {
       const validation = verifyFormat(secretKeyInput);
       if (!validation.ok) return err(ctx, validation.error ?? 'Ogiltigt värde', 422, 'VALIDATION_FAILED');
       next['nets_secret_key']        = await encryptCredential(secretKeyInput);
       next['nets_secret_key_masked'] = maskCredential(secretKeyInput);
+      // The tenant just deliberately entered their own key — this can never
+      // be TrafikCloud's pilot/test configuration again, even if a pilot
+      // default was copied in at provisioning.
+      next['nets_pilot_configuration'] = false;
     }
   }
 
@@ -136,6 +159,10 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
       if (!validation.ok) return err(ctx, validation.error ?? 'Ogiltigt värde', 422, 'VALIDATION_FAILED');
       next['nets_checkout_key']        = await encryptCredential(checkoutKeyInput);
       next['nets_checkout_key_masked'] = maskCredential(checkoutKeyInput);
+      // Same as the secret key above — entering their own checkout key is
+      // also a deliberate tenant-ownership action, in case a tenant ever
+      // updates this field independently of the secret key.
+      next['nets_pilot_configuration'] = false;
     }
   }
 
@@ -145,12 +172,14 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     .eq('id', orgId);
   if (updateErr) return err(ctx, 'Kunde inte spara', 500, 'UPDATE_FAILED');
 
+  const nowConfigured = typeof next['nets_secret_key'] === 'string';
   return json({
     data: {
-      nets_secret_key_configured:   typeof next['nets_secret_key'] === 'string',
+      nets_secret_key_configured:   nowConfigured,
       nets_secret_key_masked:       (next['nets_secret_key_masked'] as string | undefined) ?? null,
       nets_checkout_key_configured: typeof next['nets_checkout_key'] === 'string',
       nets_checkout_key_masked:     (next['nets_checkout_key_masked'] as string | undefined) ?? null,
+      nets_state:                   computeNetsState(nowConfigured, next['nets_pilot_configuration'] === true),
     },
   });
 }
