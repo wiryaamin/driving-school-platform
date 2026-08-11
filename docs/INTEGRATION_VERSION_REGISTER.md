@@ -102,8 +102,8 @@ migration.
 | `communications-whatsapp` | WhatsApp (Twilio/Meta) | v2 | platform-managed |
 | `communications-push` | Push (Firebase/OneSignal) | v2 | platform-managed |
 | `communications-voice` | Voice (Twilio/46elks) | v2 | platform-managed |
-| `payments-stripe` | Stripe | v1 | frozen baseline |
-| `payments-nets` | Nets | v1 | frozen baseline |
+| `payments-stripe` | Stripe | v2 | dual-level (tenant-owned + identified pilot) |
+| `payments-nets` | Nets | v2 | dual-level (tenant-owned + identified pilot) |
 | `person-lookup` | Person Lookup (Roaring/Mock) | v1 | frozen baseline |
 | `vehicle-registry` | Vehicle Registry (Biluppgifter.se/Mock) | v1 | frozen baseline |
 | `accounting-fortnox` | Fortnox | v1 | frozen baseline — audit recommends excluding from this migration; tracked anyway for completeness |
@@ -111,9 +111,14 @@ migration.
 All ten `v1` tags remain pointing at the frozen baseline commit
 (`c8c23db`) — none were retargeted. The five `communications-*` units have
 each been migrated to platform-managed `v2` (SMS, Email, WhatsApp, Push,
-Voice, in that order, 2026-08-10/11); the five payment/lookup/accounting
-units remain at `v1` pending a separate decision on whether/how to migrate
-them.
+Voice, in that order, 2026-08-10/11). `payments-stripe`/`payments-nets`
+were explicitly confirmed (2026-08-11) to be **dual-level** integrations,
+architecturally distinct from the platform-managed communications
+pattern — each tenant owns its own account, with an explicitly-identified
+shared pilot/test default rather than a platform-owned credential; no
+tag/checkpoint was created for their `v2` (not requested for that task).
+`person-lookup`/`vehicle-registry`/`accounting-fortnox` remain at `v1`
+pending separate decisions.
 
 ---
 
@@ -308,7 +313,26 @@ them.
 - **Verification:** N/A for this checkpoint.
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — dual-level (tenant-owned + explicitly-identified pilot default)
+
+**Approved architectural decision (2026-08-11), superseding the "fully platform-managed" direction considered earlier:** Stripe and Nets are **dual-level** payment integrations, not platform-managed like SMS/Email/WhatsApp/Push/Voice.
+
+- **PLATFORM:** TrafikCloud may have its own Stripe/Nets account, reserved for future TrafikCloud-owned/platform transactions. **Not implemented** — no such flow exists in this codebase (confirmed by audit; `_shared/subscription.ts` explicitly does not handle billing, and `subscription_tier` is only ever changed by manual Platform Admin action).
+- **TENANT:** each tenant may independently configure its own Stripe/Nets account, established under its own commercial agreement, using its own credentials.
+- **PILOT:** TrafikCloud may continue to provide a shared test/sandbox default for pilot/demo purposes, but it must be explicitly identified as TrafikCloud's own pilot/test configuration — never presented as the tenant's account.
+- **Business model:** tenant payment transactions belong to the tenant's own provider account and settlement. TrafikCloud does not currently take a platform transaction fee and does not act as merchant of record for tenant payments. No Stripe Connect, marketplace payments, or revenue-share functionality exists or was implemented.
+- **No tag/checkpoint created for this change** (not requested for this task, unlike the platform-managed migrations above) — see commit below.
+- **Commit:** `d1f0d054741c70771a1d187288069e8f9630479d`
+- **Files changed:**
+  - `supabase/functions/stripe-credentials/index.ts` — GET/POST now compute and return `stripe_state: 'not_connected' | 'pilot' | 'tenant_owned'` from the existing `settings.stripe_pilot_configuration` flag (already written by `trial-provisioning.ts`, previously never read anywhere). Saving a non-empty tenant key now explicitly sets `stripe_pilot_configuration = false`; clearing a key deletes the flag entirely (reverts to `not_connected`).
+  - `supabase/functions/nets-credentials/index.ts` — identical pattern for `nets_pilot_configuration`/`nets_state`. Saving either the secret key or the checkout key with a non-empty value un-pilots the whole Nets configuration (the two fields are a functional pair, not independently pilot-tracked).
+  - `apps/web/src/modules/settings/routes/CompanySettingsPage.tsx` (Stripe/Nets sections only) — new `PaymentProviderStateBanner` renders one of three states above each provider's credential fields: "Stripe/Nets är inte anslutet" (not connected), an amber "TrafikClouds pilot-/testkonfiguration är aktiv... inte er skolas eget [X]-konto" banner (pilot), or a green "Er skolas [X]-konto är anslutet" banner (tenant-owned).
+- **`_shared/trial-provisioning.ts`: inspected, not modified.** The sandbox-copy step already set `stripe_pilot_configuration`/`nets_pilot_configuration = true` correctly at copy time — the gap was entirely that nothing downstream read the flag, not that the copy itself was silent/unmarked at the data level. No change was needed there once the credential-management layer and UI were fixed to read it.
+- **DB migrations:** none — reused the existing `organizations.settings` JSONB fields exactly as the task required ("prefer reusing existing fields... do not create unnecessary database structures").
+- **RLS:** unchanged.
+- **Runtime payment resolution:** unchanged. `payments/index.ts`, `student-portal/index.ts`, `stripe-webhook`, `nets-webhook` still resolve `org's own settings value ?? platform Deno.env fallback` exactly as before — this already satisfied "tenant-owned → if present, else pilot/platform fallback" per the approved model, so it was intentionally left untouched.
+- **Verification (2026-08-11):** both real tenants confirmed unchanged (`stripe_pilot_configuration`/`nets_pilot_configuration` still `true`, credentials still the shared sandbox copy); the new state-computation logic was replicated read-only against live data and correctly resolves both to `'pilot'` for both providers. `pnpm typecheck` clean; `deno check` shows only the same pre-existing, unrelated `credential-crypto.ts` error documented throughout this session; `deno lint` found one pre-existing, unrelated unused-import warning in `stripe-credentials/index.ts` (`decryptCredential`, present before this change, confirmed via `git stash`) — not touched, out of scope. Live bundle byte-identical to the built source for the chunk containing the new banner strings. Live authenticated write test (actually saving a tenant credential): **not attempted** — no authenticated tenant session available, and doing so would require either a real Stripe/Nets key or bypassing the existing live-validation check, both out of scope/unsafe per this task's explicit production-safety constraints.
+- **Rollback procedure:** `git revert d1f0d054741c70771a1d187288069e8f9630479d` — restores the previous (pilot/owned-indistinguishable) behavior; no data was altered, so rollback is a pure code reversal.
 
 ---
 
@@ -330,7 +354,12 @@ them.
 - **Verification:** N/A for this checkpoint.
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — dual-level (tenant-owned + explicitly-identified pilot default)
+
+Same approved architectural decision, same commit, same verification as `payments-stripe` v2 above — see that entry for the full PLATFORM/TENANT/PILOT/business-model documentation, which applies identically to Nets. Nets-specific detail: `supabase/functions/nets-credentials/index.ts` now computes `nets_state` from `settings.nets_pilot_configuration`; saving either `nets_secret_key` or `nets_checkout_key` with a real value un-pilots the pair (they are tracked as one unit, not independently). No platform Nets webhook was implemented (out of scope — no platform Nets transaction flow exists to require one); the existing tenant-only `POST /nets-webhook/{organization_id}` route is unchanged.
+
+- **Commit:** `d1f0d054741c70771a1d187288069e8f9630479d`
+- **No tag/checkpoint created** — see `payments-stripe` v2 entry.
 
 ---
 
