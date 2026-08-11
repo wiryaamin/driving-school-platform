@@ -108,15 +108,12 @@ export function usePersonLookupStatus(options?: { enabled?: boolean }) {
 }
 
 // ─── Tenant configuration (External Services settings page) ───────────────────
-// Only 'mock' and 'roaring' are real, implemented providers today — every
-// other value in KNOWN_PROVIDER_NAMES (_shared/person-lookup.ts) is
-// registered but returns a clean "not implemented" result, so the UI only
-// offers the two that actually work.
+// Person Lookup is platform-managed (ADR: platform-managed integrations) —
+// provider/credentials are no longer part of this response or writable via
+// the update mutation below; only operational/business settings remain.
 
 export interface PersonLookupConfig {
-  active_provider:              string;
-  credentials_configured:       boolean;
-  base_url:                     string | null;
+  platform_managed:             true;
   timeout_ms:                   number;
   max_retries:                  number;
   retry_backoff_ms:             number;
@@ -144,10 +141,10 @@ export function usePersonLookupConfig(options?: { enabled?: boolean }) {
 }
 
 export interface UpdatePersonLookupConfigInput {
-  active_provider?: 'mock' | 'roaring';
-  client_id?:       string;
-  client_secret?:   string;
-  is_active?:       boolean;
+  is_active?:                   boolean;
+  auto_lookup_enabled?:         boolean;
+  auto_address_update_enabled?: boolean;
+  cache_ttl_seconds?:           number;
 }
 
 async function apiUpdatePersonLookupConfig(input: UpdatePersonLookupConfigInput): Promise<PersonLookupConfig> {

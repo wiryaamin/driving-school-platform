@@ -11,12 +11,13 @@
  * configured provider's name beyond what this service chooses to return.
  *
  * Responsibilities this layer owns (person-lookup.ts owns none of these):
- *   - Resolving the calling tenant's configuration (provider choice,
- *     decrypted credentials, timeout/retry policy, cache TTL, auto-lookup/
- *     auto-address-update toggles) from person_lookup_provider_configs,
- *     falling back to Mock with sane defaults for any org with no config
- *     row yet — configuring nothing must still work, same as every other
- *     integration on this platform.
+ *   - Resolving the calling tenant's operational settings (timeout/retry
+ *     policy, cache TTL, auto-lookup/auto-address-update toggles) from
+ *     person_lookup_provider_configs, falling back to sane defaults for any
+ *     org with no config row yet. Provider and credentials are platform-
+ *     managed (ADR: platform-managed integrations) — always resolved from
+ *     the platform-wide Deno.env secret, never from the tenant's row, even
+ *     when one exists — same pattern as SMS/Email/WhatsApp/Push/Voice.
  *   - Cache-first resolution (person-lookup-cache.ts), including caching
  *     'not_found' results and never caching 'unavailable' ones.
  *   - Retry with backoff + a hard timeout around the one real network call
@@ -27,7 +28,6 @@
  */
 
 import { createServiceClient } from './supabase.ts';
-import { decryptCredential } from './credential-crypto.ts';
 import { recordIdentityEvent } from './identity-events.ts';
 import { getCachedLookup, writeCacheEntry, invalidateCacheEntry } from './person-lookup-cache.ts';
 import {
@@ -76,6 +76,17 @@ const DEFAULT_CONFIG: ResolvedConfig = {
   cacheTtlSeconds:          2_592_000, // 30 days
 };
 
+// Person Lookup is platform-managed (ADR: platform-managed integrations) —
+// provider and credentials always resolve from the platform-wide secret,
+// never from a tenant's own person_lookup_provider_configs row. Tenants can
+// no longer save their own Roaring credentials (enforced in
+// person-lookup-config/index.ts's handlePost and by a DB trigger). Only
+// operational/business settings (cache TTL, auto-lookup toggles, timeout/
+// retry policy, enabled) are still read from the tenant's own row — same
+// pattern already established for SMS/Email/WhatsApp/Push/Voice in
+// comm-providers.ts.
+const PLATFORM_PERSON_LOOKUP_PROVIDER = Deno.env.get('PLATFORM_PERSON_LOOKUP_PROVIDER') ?? 'roaring';
+
 async function resolveConfig(db: Db, organizationId: string): Promise<ResolvedConfig> {
   const { data: row } = await db
     .from('person_lookup_provider_configs')
@@ -84,42 +95,14 @@ async function resolveConfig(db: Db, organizationId: string): Promise<ResolvedCo
     .eq('is_active', true)
     .maybeSingle();
 
-  if (!row) return DEFAULT_CONFIG;
+  const provider     = PLATFORM_PERSON_LOOKUP_PROVIDER;
+  const clientId     = Deno.env.get('ROARING_CLIENT_ID');
+  const clientSecret = Deno.env.get('ROARING_CLIENT_SECRET');
 
-  // credentials_encrypted holds either a plain single-secret string (a
-  // future single-API-key provider) or a JSON-encoded {clientId,
-  // clientSecret} pair (Roaring's OAuth2 client-credentials model) —
-  // decrypted once here and disambiguated by shape, so the storage layer
-  // stays a single generic encrypted column regardless of which auth
-  // model a given provider uses.
-  let apiKey: string | undefined;
-  let clientId: string | undefined;
-  let clientSecret: string | undefined;
-  if (row.credentials_encrypted) {
-    try {
-      const decrypted = await decryptCredential(row.credentials_encrypted);
-      try {
-        const parsed = JSON.parse(decrypted) as { clientId?: string; clientSecret?: string };
-        if (parsed.clientId && parsed.clientSecret) {
-          clientId = parsed.clientId;
-          clientSecret = parsed.clientSecret;
-        } else {
-          apiKey = decrypted;
-        }
-      } catch {
-        apiKey = decrypted;
-      }
-    } catch (err) {
-      logger.error('person_lookup_service.credential_decrypt_failed', {
-        org_id: organizationId, error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  if (!row) return { ...DEFAULT_CONFIG, provider, clientId, clientSecret };
 
   return {
-    provider:                 row.active_provider,
-    apiKey, clientId, clientSecret,
-    baseUrl:                  row.base_url ?? undefined,
+    provider, clientId, clientSecret,
     timeoutMs:                row.timeout_ms,
     maxRetries:               row.max_retries,
     retryBackoffMs:           row.retry_backoff_ms,

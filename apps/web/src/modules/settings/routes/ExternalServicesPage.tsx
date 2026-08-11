@@ -12,9 +12,7 @@ import {
 import { cn } from '@/lib/utils.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { resolveIntegrationStatusError, type IntegrationStatus } from '@shared/lib/integrationStatus.js';
-import {
-  usePersonLookupStatus, usePersonLookupConfig, useUpdatePersonLookupConfig,
-} from '@modules/students/hooks/usePersonLookup.js';
+import { usePersonLookupStatus } from '@modules/students/hooks/usePersonLookup.js';
 import {
   useVehicleRegistryStatus, useVehicleRegistryConfig, useUpdateVehicleRegistryConfig,
 } from '@modules/resources/hooks/useVehicleRegistryLookup.js';
@@ -162,133 +160,43 @@ const CAPABILITY_LABELS: Record<string, string> = {
   dateOfBirth:  'Födelsedatum',
 };
 
-function PersonLookupConfigDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { data: config } = usePersonLookupConfig({ enabled: open });
-  const update = useUpdatePersonLookupConfig();
-  const [provider, setProvider] = useState<'mock' | 'roaring'>('mock');
-  const [clientId, setClientId] = useState('');
-  const [clientSecret, setClientSecret] = useState('');
-
-  // Sync the provider dropdown to the current config whenever the dialog opens.
-  const [syncedFor, setSyncedFor] = useState<string | null>(null);
-  if (open && config && syncedFor !== config.active_provider) {
-    setSyncedFor(config.active_provider);
-    setProvider(config.active_provider === 'roaring' ? 'roaring' : 'mock');
-  }
-
-  async function handleSave() {
-    try {
-      await update.mutateAsync({
-        active_provider: provider,
-        ...(provider === 'roaring' && clientId && clientSecret ? { client_id: clientId, client_secret: clientSecret } : {}),
-      });
-      toast({ title: 'Personuppslag uppdaterat' });
-      setClientId(''); setClientSecret('');
-      onClose();
-    } catch (err) {
-      toast({ title: 'Kunde inte spara', variant: 'destructive', description: err instanceof Error ? err.message : undefined });
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }} aria-describedby={undefined}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Konfigurera Personuppslag</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Mock kräver ingen inloggning. Roaring kräver ett Client ID + Client Secret från er Roaring-sandlåda (developer.roaring.io).
-          </p>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">Leverantör</label>
-            <select
-              className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value as 'mock' | 'roaring')}
-            >
-              <option value="mock">Mock (testdata, ingen anslutning)</option>
-              <option value="roaring">Roaring</option>
-            </select>
-          </div>
-          {provider === 'roaring' && (
-            <>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  Client ID {config?.credentials_configured && '(lämna tomt för att behålla nuvarande)'}
-                </label>
-                <input className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-                  value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="962c8514-..." />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Client Secret</label>
-                <input className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm" type="password"
-                  value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="8523b6fa-..." />
-              </div>
-            </>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" type="button" onClick={onClose} disabled={update.isPending}>Avbryt</Button>
-          <Button type="button" onClick={() => void handleSave()} disabled={update.isPending}>
-            {update.isPending && <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />}
-            Spara
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function PersonLookupCard() {
   const { data, error, isLoading, isError, refetch, isFetching } = usePersonLookupStatus();
   const resolved = isError ? resolveIntegrationStatusError(error) : null;
   const status: StatusKind = resolved?.status ?? (data?.connected ? 'connected' : 'not_connected');
-  const [configOpen, setConfigOpen] = useState(false);
 
   return (
-    <>
-      <IntegrationCard
-        icon={Fingerprint}
-        title="Personuppslag"
-        description="Hämtar person­uppgifter vid elevregistrering (t.ex. Statens personadressregister)."
-        provider={data ? data.provider : undefined}
-        status={status}
-        loading={isLoading}
-        statusMessage={resolved?.message}
-        extra={data && (
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
-              Tillgängliga uppgifter
-            </p>
-            <div className="flex flex-wrap gap-1">
-              {Object.entries(data.capabilities)
-                .filter(([, supported]) => supported)
-                .map(([key]) => (
-                  <Badge key={key} variant="secondary" className="text-[10px] font-normal">
-                    {CAPABILITY_LABELS[key] ?? key}
-                  </Badge>
-                ))}
-            </div>
+    <IntegrationCard
+      icon={Fingerprint}
+      title="Personuppslag"
+      description="Hämtar person­uppgifter vid elevregistrering (t.ex. Statens personadressregister)."
+      status={status}
+      loading={isLoading}
+      statusMessage={resolved?.message}
+      extra={data && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
+            Tillgängliga uppgifter
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(data.capabilities)
+              .filter(([, supported]) => supported)
+              .map(([key]) => (
+                <Badge key={key} variant="secondary" className="text-[10px] font-normal">
+                  {CAPABILITY_LABELS[key] ?? key}
+                </Badge>
+              ))}
           </div>
-        )}
-        note={data?.provider === 'mock'
-          ? 'Testleverantör aktiv — konfigurera Roaring nedan för riktiga uppslag.'
-          : undefined}
-        actions={
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={() => setConfigOpen(true)}>
-              <Settings2 className="w-3.5 h-3.5" /> Konfigurera
-            </Button>
-            <Button variant="outline" size="sm" className="flex-1 gap-1.5" onClick={() => void refetch()} disabled={isFetching}>
-              {isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Testa
-            </Button>
-          </div>
-        }
-      />
-      <PersonLookupConfigDialog open={configOpen} onClose={() => setConfigOpen(false)} />
-    </>
+        </div>
+      )}
+      note="Personuppslag tillhandahålls och hanteras av TrafikCloud. Er skola behöver inte konfigurera leverantörsuppgifter."
+      actions={
+        <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => void refetch()} disabled={isFetching}>
+          {isFetching && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          Testa
+        </Button>
+      }
+    />
   );
 }
 

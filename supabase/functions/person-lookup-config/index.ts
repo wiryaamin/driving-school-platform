@@ -1,18 +1,22 @@
 /**
  * person-lookup-config — tenant configuration for the Person Lookup
- * Framework (Phase 5): active provider, encrypted credentials, timeout,
- * retry policy, auto-lookup/auto-address-update toggles, cache duration.
+ * Framework: timeout, retry policy, auto-lookup/auto-address-update
+ * toggles, cache duration, enabled.
  *
- * Mirrors nets-credentials/stripe-credentials (ADR-022) for the credential
- * field specifically — encrypted via encryptCredential(), never returned in
- * plaintext, only a masked display fragment. The rest of the config
- * (timeout/retry/toggles/cache TTL) is plain tenant-owned settings, no
- * different in sensitivity from any other operational setting on this
- * platform.
+ * Person Lookup is platform-managed (ADR: platform-managed integrations) —
+ * provider and credentials are no longer tenant-configurable. This
+ * function ignores any tenant-supplied active_provider/client_id/
+ * client_secret/api_key/base_url outright (never encrypted, never stored,
+ * never returned) and always preserves the existing (platform-default)
+ * provider value, mirroring stripe-credentials/nets-credentials's
+ * platform-managed-field handling. The remaining settings (timeout/retry/
+ * toggles/cache TTL/enabled) are plain tenant-owned operational settings,
+ * no different in sensitivity from any other setting on this platform, and
+ * remain fully tenant-configurable.
  *
  * Routes:
- *   GET  /person-lookup-config   — current config (credential masked, never plaintext)
- *   POST /person-lookup-config   — create/update config (upsert)
+ *   GET  /person-lookup-config   — current operational settings (no provider/credential fields)
+ *   POST /person-lookup-config   — update operational settings only (upsert)
  */
 
 import { serveCors }                          from '../_shared/cors.ts';
@@ -20,8 +24,6 @@ import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts
 import { createServiceClient }                from '../_shared/supabase.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { buildErrorResponse }                 from '../_shared/errors.ts';
-import { encryptCredential, maskCredential, credentialCryptoConfigured } from '../_shared/credential-crypto.ts';
-import { KNOWN_PROVIDER_NAMES } from '../_shared/person-lookup.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' };
 
@@ -46,9 +48,6 @@ function requirePerm(ctx: EdgeRequestContext): Response | null {
 }
 
 interface ConfigRow {
-  active_provider:              string;
-  credentials_encrypted:        string | null;
-  base_url:                     string | null;
   timeout_ms:                   number;
   max_retries:                  number;
   retry_backoff_ms:             number;
@@ -60,9 +59,7 @@ interface ConfigRow {
 
 function toResponseShape(row: ConfigRow | null) {
   return {
-    active_provider:              row?.active_provider ?? 'mock',
-    credentials_configured:       typeof row?.credentials_encrypted === 'string' && row.credentials_encrypted !== '',
-    base_url:                     row?.base_url ?? null,
+    platform_managed:             true,
     timeout_ms:                   row?.timeout_ms ?? 5000,
     max_retries:                  row?.max_retries ?? 2,
     retry_backoff_ms:             row?.retry_backoff_ms ?? 500,
@@ -94,34 +91,10 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     return err(ctx, 'Ogiltig JSON', 400, 'INVALID_JSON');
   }
 
-  const provider = typeof body['active_provider'] === 'string' ? body['active_provider'].trim().toLowerCase() : undefined;
-  if (provider !== undefined && !KNOWN_PROVIDER_NAMES.includes(provider as never)) {
-    return err(ctx, `Okänd leverantör. Giltiga värden: ${KNOWN_PROVIDER_NAMES.join(', ')}`, 422, 'VALIDATION_FAILED');
-  }
-
-  // Two credential shapes are accepted, matching the two auth models real
-  // providers use: a single api_key (future single-key providers), or a
-  // client_id + client_secret pair (Roaring's OAuth2 client-credentials
-  // model). Whichever is supplied is what person-lookup-service.ts's
-  // resolveConfig() disambiguates by shape when decrypting.
-  const clientId     = typeof body['client_id']     === 'string' ? body['client_id'].trim()     : undefined;
-  const clientSecret = typeof body['client_secret'] === 'string' ? body['client_secret'].trim() : undefined;
-  const apiKeyInput  = typeof body['api_key']        === 'string' ? body['api_key'].trim()       : undefined;
-
-  if (clientId !== undefined && clientSecret === undefined) {
-    return err(ctx, 'client_secret krävs tillsammans med client_id', 422, 'VALIDATION_FAILED');
-  }
-  if (clientSecret !== undefined && clientId === undefined) {
-    return err(ctx, 'client_id krävs tillsammans med client_secret', 422, 'VALIDATION_FAILED');
-  }
-
-  const credentialInput = clientId !== undefined && clientSecret !== undefined
-    ? (clientId === '' && clientSecret === '' ? '' : JSON.stringify({ clientId, clientSecret }))
-    : apiKeyInput;
-
-  if (credentialInput !== undefined && credentialInput !== '' && !credentialCryptoConfigured()) {
-    return err(ctx, 'Kryptering är inte konfigurerad på plattformen', 503, 'CRYPTO_NOT_CONFIGURED');
-  }
+  // active_provider/client_id/client_secret/api_key/base_url are
+  // deliberately not read from body anywhere below — platform-managed,
+  // silently ignored if a caller sends them, never validated, never
+  // encrypted, never stored, never returned.
 
   // Friendly validation matching the table's own CHECK constraints — without
   // this, an out-of-range value reaches the DB and fails as a generic 500
@@ -147,8 +120,13 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
 
   const next: Record<string, unknown> = {
     organization_id: orgId,
-    active_provider: provider ?? existing?.active_provider ?? 'mock',
-    base_url:        typeof body['base_url'] === 'string' ? (body['base_url'].trim() || null) : (existing?.base_url ?? null),
+    // active_provider/credentials_encrypted/base_url deliberately omitted —
+    // never included in the upsert payload, so an UPDATE leaves them
+    // completely untouched (Postgres carries the existing value forward for
+    // any column not named in the SET list) and an INSERT falls through to
+    // the column defaults ('mock', NULL, NULL) — both states the DB
+    // trigger's INSERT check already permits, since neither represents a
+    // tenant setting anything.
     timeout_ms:                  typeof body['timeout_ms'] === 'number' ? body['timeout_ms'] : (existing?.timeout_ms ?? 5000),
     max_retries:                 typeof body['max_retries'] === 'number' ? body['max_retries'] : (existing?.max_retries ?? 2),
     retry_backoff_ms:            typeof body['retry_backoff_ms'] === 'number' ? body['retry_backoff_ms'] : (existing?.retry_backoff_ms ?? 500),
@@ -158,12 +136,6 @@ async function handlePost(client: any, orgId: string, req: Request, ctx: EdgeReq
     is_active:                   typeof body['is_active'] === 'boolean' ? body['is_active'] : (existing?.is_active ?? true),
     updated_by: ctx.actorId,
   };
-
-  if (credentialInput !== undefined) {
-    next.credentials_encrypted = credentialInput === '' ? null : await encryptCredential(credentialInput);
-  } else if (existing) {
-    next.credentials_encrypted = existing.credentials_encrypted;
-  }
 
   if (!existing) next.created_by = ctx.actorId;
 
