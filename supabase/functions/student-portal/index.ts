@@ -1154,14 +1154,16 @@ Deno.serve((req: Request) =>
         .eq('id', organization_id)
         .maybeSingle();
 
+      // Dual-level payment architecture: a tenant's own (or explicitly-copied
+      // pilot) credential in organizations.settings is the only valid
+      // source. No platform Deno.env fallback here — see Payment Provider
+      // Resolution Safety Check (2026-08-11).
       const settings   = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
       const storedKey  = settings['stripe_secret_key'] as string | undefined;
       // decryptCredential() transparently handles both newly-encrypted values
       // and any pre-existing plaintext value stored before ADR-022 was
       // applied to this field — see _shared/credential-crypto.ts.
-      const stripeKey  = storedKey !== undefined
-        ? await decryptCredential(storedKey)
-        : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
+      const stripeKey  = storedKey !== undefined ? await decryptCredential(storedKey) : '';
 
       if (!stripeKey) return fail(503, 'Online card payment is not configured for this school');
 
@@ -1274,11 +1276,13 @@ Deno.serve((req: Request) =>
         .eq('id', organization_id)
         .maybeSingle();
 
+      // Dual-level payment architecture: a tenant's own (or explicitly-copied
+      // pilot) credential in organizations.settings is the only valid
+      // source. No platform Deno.env fallback here — see Payment Provider
+      // Resolution Safety Check (2026-08-11).
       const settings = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
       const storedSecretKey = settings['nets_secret_key'] as string | undefined;
-      const netsSecretKey = storedSecretKey !== undefined
-        ? await decryptCredential(storedSecretKey)
-        : (Deno.env.get('NETS_SECRET_KEY') ?? '');
+      const netsSecretKey = storedSecretKey !== undefined ? await decryptCredential(storedSecretKey) : '';
 
       if (!netsSecretKey) return fail(503, 'Nets-betalning är inte konfigurerad för denna skola');
 

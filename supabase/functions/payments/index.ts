@@ -299,11 +299,16 @@ async function handleRequestLink(req: Request, ctx: EdgeRequestContext, client: 
     .eq('id', ctx.organizationId)
     .maybeSingle();
 
+  // Dual-level payment architecture: a tenant's own (or explicitly-copied
+  // pilot) credential in organizations.settings is the only valid source.
+  // No platform Deno.env fallback here — falling back to a platform-wide
+  // secret would silently process this tenant's payment through whatever
+  // account that secret represents (including a future genuine TrafikCloud
+  // production account) with no consent step and no way for staff to tell
+  // from the UI. See Payment Provider Resolution Safety Check (2026-08-11).
   const settings  = (orgRow?.settings as Record<string, unknown> | undefined) ?? {};
   const storedKey = settings['stripe_secret_key'] as string | undefined;
-  const stripeKey = storedKey !== undefined
-    ? await decryptCredential(storedKey)
-    : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
+  const stripeKey = storedKey !== undefined ? await decryptCredential(storedKey) : '';
 
   if (!stripeKey) return fail(ctx, 503, 'PROVIDER_NOT_CONFIGURED', 'Online card payment is not configured for this school');
 

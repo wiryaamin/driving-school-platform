@@ -8,10 +8,14 @@
  *   3. Updates payment_request.status = 'completed'
  *
  * Multi-tenant signing secret resolution:
- *   Checkout session *creation* (student-portal) already supports each
- *   organization bringing its own Stripe account (organizations.settings
- *   .stripe_secret_key, falling back to the platform-wide STRIPE_SECRET_KEY).
- *   This endpoint mirrors that: an org-scoped path selects that org's own
+ *   Checkout session *creation* (student-portal, guardian-portal, staff
+ *   payment links) requires each organization to bring its own Stripe
+ *   account (organizations.settings.stripe_secret_key) — dual-level payment
+ *   architecture, no platform Deno.env fallback for the payment credential
+ *   itself (see Payment Provider Resolution Safety Check, 2026-08-11).
+ *   This endpoint's *webhook signing secret*, below, is a separate concern
+ *   and still supports a platform-wide fallback (STRIPE_WEBHOOK_SECRET) for
+ *   verifying inbound events: an org-scoped path selects that org's own
  *   webhook signing secret, so more than one tenant's Stripe account can be
  *   verified correctly — a single global secret cannot distinguish which
  *   tenant's Stripe account actually sent a given event.

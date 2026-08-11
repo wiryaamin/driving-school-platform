@@ -487,11 +487,13 @@ Deno.serve((req: Request) =>
         .eq('id', organization_id)
         .maybeSingle();
 
+      // Dual-level payment architecture: a tenant's own (or explicitly-copied
+      // pilot) credential in organizations.settings is the only valid
+      // source. No platform Deno.env fallback here — see Payment Provider
+      // Resolution Safety Check (2026-08-11).
       const settings  = ((orgRow as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
       const storedKey = settings['stripe_secret_key'] as string | undefined;
-      const stripeKey = storedKey !== undefined
-        ? await decryptCredential(storedKey)
-        : (Deno.env.get('STRIPE_SECRET_KEY') ?? '');
+      const stripeKey = storedKey !== undefined ? await decryptCredential(storedKey) : '';
 
       if (!stripeKey) return fail(503, 'Online card payment is not configured for this school');
 
