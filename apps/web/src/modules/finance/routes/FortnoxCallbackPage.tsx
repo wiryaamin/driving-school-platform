@@ -53,10 +53,11 @@ export function FortnoxCallbackPage() {
       return;
     }
 
-    // CSRF state check
-    if (savedState && returnState && savedState !== returnState) {
+    // OAuth state — mandatory, fail closed. Missing on either side, or a
+    // mismatch, is rejected rather than silently skipped.
+    if (!savedState || !returnState || savedState !== returnState) {
       setState('error');
-      setErrMsg('Ogiltigt state-parameter. Möjligt säkerhetsproblem — försök igen.');
+      setErrMsg('Ogiltigt eller saknat state-parameter. Möjligt säkerhetsproblem — försök igen.');
       return;
     }
 
@@ -68,7 +69,7 @@ export function FortnoxCallbackPage() {
             code,
             code_verifier: codeVerifier,
             redirect_uri:  redirectUri,
-            state:         returnState ?? undefined,
+            state:         returnState,
           }),
         });
         if (error) throw error;

@@ -403,7 +403,7 @@ function FortnoxCard() {
     <IntegrationCard
       icon={BookOpen}
       title="Fortnox"
-      description="Bokföringsexport samt kund- och fakturasynkronisering."
+      description="Anslutning till ert eget Fortnox-konto. Bokföringssynkronisering är inte tillgänglig ännu."
       provider={data?.method === 'oauth' ? 'OAuth 2.0' : data?.method === 'api_token' ? 'API-token' : undefined}
       status={status}
       loading={isLoading}

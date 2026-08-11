@@ -83,6 +83,20 @@ async function genCodeChallenge(verifier: string): Promise<string> {
   return b64url(hash);
 }
 
+// ─── OAuth state ──────────────────────────────────────────────────────────────
+
+/** state is always generated as "{orgId}:{uuid}" by /oauth/start. Splits and
+ *  validates both segments are well-formed UUIDs — a malformed or truncated
+ *  state (missing colon, non-UUID segment) is rejected, not just a wrong org. */
+function parseOAuthState(state: string): { orgId: string; nonce: string } | null {
+  const idx = state.indexOf(':');
+  if (idx === -1) return null;
+  const orgIdPart = state.slice(0, idx);
+  const noncePart = state.slice(idx + 1);
+  if (!UUID_RE.test(orgIdPart) || !UUID_RE.test(noncePart)) return null;
+  return { orgId: orgIdPart, nonce: noncePart };
+}
+
 // ─── Fortnox token exchange ───────────────────────────────────────────────────
 
 interface FortnoxTokenResponse {
@@ -258,10 +272,13 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         if (!body.code_verifier) return err(ctx, 'code_verifier saknas', 400, 'MISSING_VERIFIER');
         if (!body.redirect_uri)  return err(ctx, 'redirect_uri saknas', 400, 'MISSING_REDIRECT_URI');
 
-        // CSRF: state must start with orgId
-        if (body.state && !body.state.startsWith(`${orgId}:`)) {
-          return err(ctx, 'Ogiltigt state-parameter', 400, 'INVALID_STATE');
-        }
+        // OAuth state — mandatory, fail closed. Missing, malformed, or
+        // belonging to a different organization than the current session are
+        // all rejected; only an exact match on the current org continues.
+        if (!body.state) return err(ctx, 'state saknas', 400, 'MISSING_STATE');
+        const parsedState = parseOAuthState(body.state);
+        if (!parsedState) return err(ctx, 'Ogiltigt state-format', 400, 'INVALID_STATE');
+        if (parsedState.orgId !== orgId) return err(ctx, 'State tillhör fel organisation', 400, 'INVALID_STATE');
 
         const tokens = await fortnoxTokenRequest(clientId, clientSecret, {
           grant_type:    'authorization_code',
