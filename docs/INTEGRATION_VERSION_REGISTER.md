@@ -104,7 +104,7 @@ migration.
 | `communications-voice` | Voice (Twilio/46elks) | v2 | platform-managed |
 | `payments-stripe` | Stripe | v2 | dual-level (tenant-owned + identified pilot) |
 | `payments-nets` | Nets | v2 | dual-level (tenant-owned + identified pilot) |
-| `person-lookup` | Person Lookup (Roaring/Mock) | v1 | frozen baseline |
+| `person-lookup` | Person Lookup (Roaring/Mock) | v2 | platform-managed |
 | `vehicle-registry` | Vehicle Registry (Biluppgifter.se/Mock) | v1 | frozen baseline |
 | `accounting-fortnox` | Fortnox | v1 | frozen baseline — audit recommends excluding from this migration; tracked anyway for completeness |
 
@@ -117,8 +117,10 @@ architecturally distinct from the platform-managed communications
 pattern — each tenant owns its own account, with an explicitly-identified
 shared pilot/test default rather than a platform-owned credential; no
 tag/checkpoint was created for their `v2` (not requested for that task).
-`person-lookup`/`vehicle-registry`/`accounting-fortnox` remain at `v1`
-pending separate decisions.
+`person-lookup` was migrated to platform-managed `v2` on 2026-08-11
+(sixth platform-managed unit, same pattern as the five communications
+channels). `vehicle-registry`/`accounting-fortnox` remain at `v1` pending
+separate decisions.
 
 ---
 
@@ -384,7 +386,25 @@ Same approved architectural decision, same commits, same verification as `paymen
 - **Verification:** live-confirmed 2026-08-09 (OAuth2 token exchange + API call both succeed against Roaring sandbox).
 - **Rollback procedure:** N/A — baseline.
 
-### v2 — *(pending)*
+### v2 — platform-managed
+
+- **Tag:** `integration/person-lookup/v2-platform-managed-2026-08-11`
+- **Commit:** `ea3e666`
+- **Classification (audit conclusion):** "B — PLATFORM-MANAGED, REQUIRES IMPLEMENTATION FIXES." Provider (Roaring) is real and live-verified against a real sandbox account (2026-07-27 commissioning) — materially more mature than Vehicle Registry's unverified Biluppgifter integration, and a legitimate candidate for the same platform-managed pattern already applied to the five communications channels.
+- **Pre-implementation audit findings:** `person_lookup_provider_configs.credentials_encrypted` stores a tenant's Roaring OAuth2 Client ID/Secret pair (JSON-encoded, then encrypted). Both real active tenants, and all 17 rows platform-wide, held a byte-identical ciphertext copy of one sandbox source org's credential (copied at provisioning by `_shared/trial-provisioning.ts`) — no tenant had ever entered a genuinely independent credential.
+- **STOP condition encountered and resolved:** no platform Roaring secret (`ROARING_CLIENT_ID`/`ROARING_CLIENT_SECRET`) existed before this migration (confirmed via exhaustive `supabase secrets list` enumeration). Per the task's explicit instruction, implementation stopped and the user was asked how to supply it (`AskUserQuestion`); the user chose to paste the values directly. Both secrets were set via `supabase secrets set` and never re-printed after being set. Not rotated, not a new provider account — the same already-proven-live sandbox credential value.
+- **Files changed:**
+  - `supabase/functions/_shared/person-lookup-service.ts` — `resolveConfig()` now always resolves `provider`/`clientId`/`clientSecret` from `Deno.env` (`PLATFORM_PERSON_LOOKUP_PROVIDER` ?? `'roaring'`, `ROARING_CLIENT_ID`, `ROARING_CLIENT_SECRET`), never from the tenant's `person_lookup_provider_configs` row. Only operational settings (timeout/retry/cache TTL/auto-lookup toggles/enabled) still read from the tenant's row. `performPersonLookup()`/`getPersonLookupStatus()` (the only two exports `students/index.ts` calls) unchanged — no caller-side change needed.
+  - `supabase/functions/person-lookup-config/index.ts` — removed all provider/credential parsing, validation, and encryption from `handlePost`; `active_provider`/`credentials_encrypted`/`base_url` are no longer read from the request body or included in the upsert payload at all (an UPDATE leaves them untouched, an INSERT falls through to the column defaults). `toResponseShape()` now returns `platform_managed: true` instead of provider/credential fields. Removed now-unused `credential-crypto.ts` and `KNOWN_PROVIDER_NAMES` imports — this file no longer has any dependency on `credential-crypto.ts` at all.
+  - `apps/web/src/modules/students/hooks/usePersonLookup.ts` — `PersonLookupConfig`/`UpdatePersonLookupConfigInput` interfaces reduced to operational fields only, `platform_managed: true` added. `usePersonLookupByPersonnummer`/`usePersonLookupStatus` (used by `StudentForm.tsx`) untouched.
+  - `apps/web/src/modules/settings/routes/ExternalServicesPage.tsx` — removed `PersonLookupConfigDialog` entirely; `PersonLookupCard` no longer shows a "Konfigurera" button or provider name, static note explains Person Lookup is platform-managed; `status` still derived from real `usePersonLookupStatus()` data (not hardcoded).
+- **DB migrations:** `20260811120000_platform_managed_person_lookup_provider.sql` — adds `protect_person_lookup_provider_configs_fields()` + `person_lookup_provider_configs_protect_provider` BEFORE INSERT/UPDATE trigger, a sixth independent trigger (not merged with the five communications-* triggers) so this integration can be rolled back without affecting the others. INSERT branch permits the column's own default (`active_provider = 'mock'`, `credentials_encrypted`/`base_url` NULL) and blocks any other explicit value; UPDATE branch blocks any change to those three columns from a non-service-role, non-platform-admin caller.
+- **RLS:** unchanged — `person_lookup_provider_configs_insert`/`_update` still permit `org_owner`/`org_admin`/`org_manager` at the row level; the new trigger is what actually blocks the provider/credential columns specifically. `timeout_ms`/`max_retries`/`retry_backoff_ms`/`auto_lookup_enabled`/`auto_address_update_enabled`/`cache_ttl_seconds`/`is_active` remain fully tenant-writable.
+- **Config/secrets (names only):** `ROARING_CLIENT_ID`, `ROARING_CLIENT_SECRET` (new platform-wide Supabase Secrets, set this migration). `PLATFORM_PERSON_LOOKUP_PROVIDER` (new, optional) lets the platform override the default provider (`roaring`) without a code deploy; unset in production.
+- **Deployment requirements:** `supabase db push --linked` (migration applied). `supabase functions deploy person-lookup-config --project-ref ulgsndzfksphquqakelq` — first attempt incorrectly included `--no-verify-jwt` (this function requires `verify_jwt: true` per `config.toml`); caught immediately via `functions list`, corrected with a bare redeploy, re-confirmed `verify_jwt: true` (version 34). `supabase functions deploy students --project-ref ulgsndzfksphquqakelq` (bare deploy, `verify_jwt: true` confirmed, version 89). Frontend rebuilt and synced to Hostinger via FTP (110 files, including the new `usePersonLookup-BRVZ0rZ5.js` chunk); live site confirmed `200` and the new asset reachable at `https://trafikcloud.se/assets/usePersonLookup-BRVZ0rZ5.js`.
+- **Verification (2026-08-11):** `pnpm typecheck` clean (8/8 packages). `deno check person-lookup-config/index.ts` in isolation: **zero errors** (no longer depends on `credential-crypto.ts` at all, an improvement over the pre-existing baseline). `deno check students/index.ts`'s `npm:zod@3` resolution failure confirmed pre-existing and unrelated via `git stash` (identical to the already-documented Voice-migration finding). `deno lint` on both touched Deno files: clean, zero issues. All 17 `person_lookup_provider_configs` rows (both real tenants included) read-only confirmed unchanged after the migration — still `active_provider: 'roaring'`, `has_credentials: true`, now correctly non-authoritative. New trigger confirmed present and enabled (`tgenabled: 'O'`) via `pg_trigger`. Live E2E call against Roaring's real token endpoint was **not performed** — blocked by the Claude Code auto-mode safety classifier (sending a credential to an external endpoint correctly reads as a possible-exfiltration pattern); not worked around. Confidence instead rests on: this exact credential value was already live-verified against Roaring's sandbox on 2026-07-27, and `resolveConfig()`'s wiring into the unchanged provider-factory code (`person-lookup.ts`) is identical in shape to how the DB-sourced credential worked before this migration.
+- **Student Registration / personnummer-lookup regression:** not touched — `performPersonLookup()`, personnummer validation/hashing, cache architecture, duplicate detection, audit logging, and rate limiting are all unchanged; `StudentForm.tsx`'s lookup flow calls the same `usePersonLookupByPersonnummer()` hook, untouched.
+- **Rollback procedure:** `git revert ea3e666` restores tenant-configurable provider/credential UI and backend behavior. The DB trigger is additive and non-destructive, independent of the other five triggers — to remove it independently: `DROP TRIGGER person_lookup_provider_configs_protect_provider ON public.person_lookup_provider_configs; DROP FUNCTION public.protect_person_lookup_provider_configs_fields();` in a new forward migration. No tenant data was altered by v2 — all 17 existing rows are untouched.
 
 ---
 
