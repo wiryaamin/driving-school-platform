@@ -5,6 +5,7 @@ import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, toast, Textarea, ScrollArea, Skeleton } from '@platform/ui';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import type { Student } from '@modules/students/hooks/useStudents.js';
+import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
 import {
   useDocumentList,
   useDocumentUpload,
@@ -224,6 +225,7 @@ interface RejectDialogProps {
 
 function RejectDialog({ doc, onClose }: RejectDialogProps) {
   const rejectDoc = useRejectDocument();
+  const sendMessage = useSendMessage();
   const [reason, setReason] = useState('');
 
   async function handleConfirm() {
@@ -231,6 +233,31 @@ function RejectDialog({ doc, onClose }: RejectDialogProps) {
     try {
       await rejectDoc.mutateAsync({ id: doc.id, studentId: doc.student_id, reason });
       toast({ title: 'Dokument avvisat' });
+
+      // Notify the student when a reason was actually given — the reason is
+      // what makes the notification meaningful (nothing to correct
+      // otherwise). Uses the same existing student-email mechanism as the
+      // Kundhantering → Student → E-post tab; skips silently, without
+      // blocking the rejection itself, if the student has no email on file.
+      const trimmedReason = reason.trim();
+      const recipientEmail = doc.students?.email;
+      if (trimmedReason && recipientEmail) {
+        sendMessage.mutate({
+          channel:           'email',
+          recipient_type:    'student',
+          recipient_id:      doc.student_id,
+          recipient_address: recipientEmail,
+          subject:           'Ett dokument behöver kompletteras',
+          body:               `Hej,\n\nEtt dokument ni laddat upp (${CATEGORY_LABELS[doc.category]}) har avvisats och behöver kompletteras.\n\nAnledning: ${trimmedReason}\n\nLadda gärna upp ett korrigerat dokument så snart ni kan.`,
+          metadata:          { source: 'document-rejection' },
+        }, {
+          onError: () => toast({
+            title:       'Avvisningen sparades, men meddelandet till eleven kunde inte skickas',
+            variant:     'destructive',
+          }),
+        });
+      }
+
       setReason('');
       onClose();
     } catch (err) {
@@ -269,8 +296,18 @@ function RejectDialog({ doc, onClose }: RejectDialogProps) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+type StatusFilter = 'all' | 'pending_review' | 'approved' | 'rejected';
+
+const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
+  { value: 'all',            label: 'Alla' },
+  { value: 'pending_review', label: 'Att granska' },
+  { value: 'approved',       label: 'Godkända' },
+  { value: 'rejected',       label: 'Avvisade' },
+];
+
 export function DocumentsPage() {
   const [search, setSearch]           = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [uploadOpen, setUploadOpen]   = useState(false);
   const [deletingId, setDeletingId]   = useState<string | null>(null);
   const [previewUrl, setPreviewUrl]   = useState<string | null>(null);
@@ -283,6 +320,7 @@ export function DocumentsPage() {
   const { data: docs = [], isLoading } = useDocumentList();
 
   const filtered = docs.filter((d) => {
+    if (statusFilter !== 'all' && d.status !== statusFilter) return false;
     if (!search) return true;
     const q          = search.toLowerCase();
     const studentName = d.students ? `${d.students.first_name} ${d.students.last_name}`.toLowerCase() : '';
@@ -334,7 +372,10 @@ export function DocumentsPage() {
   async function handleDelete(doc: StudentDocument) {
     setDeletingId(doc.id);
     try {
-      await deleteDoc.mutateAsync({ id: doc.id, studentId: doc.student_id });
+      await deleteDoc.mutateAsync({
+        id: doc.id, studentId: doc.student_id,
+        storagePath: doc.storage_path, storageBucket: doc.storage_bucket,
+      });
       toast({ title: 'Dokument borttaget' });
     } catch (err) {
       toast({ title: 'Borttagning misslyckades', description: String(err), variant: 'destructive' });
@@ -368,8 +409,8 @@ export function DocumentsPage() {
             </div>
           }
         >
-          {/* Search bar */}
-          <div className="mb-4 flex items-center gap-2">
+          {/* Search bar + status filter */}
+          <div className="mb-4 flex flex-wrap items-center gap-2">
             <div className="relative flex-1 max-w-sm">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -378,6 +419,22 @@ export function DocumentsPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
+            </div>
+            <div className="flex items-center gap-1 rounded-md border border-input bg-background p-0.5">
+              {STATUS_FILTER_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setStatusFilter(opt.value)}
+                  className={`px-2.5 py-1.5 text-sm rounded transition-colors ${
+                    statusFilter === opt.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -390,7 +447,7 @@ export function DocumentsPage() {
               <FileText className="mb-4 h-12 w-12 text-muted-foreground" />
               <p className="font-medium text-foreground">Inga dokument hittades</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {search ? 'Prova en annan sökning.' : 'Ladda upp det första dokumentet med knappen ovan.'}
+                {search || statusFilter !== 'all' ? 'Prova en annan sökning eller filtrering.' : 'Ladda upp det första dokumentet med knappen ovan.'}
               </p>
             </div>
           ) : (

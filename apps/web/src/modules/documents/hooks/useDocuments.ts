@@ -35,7 +35,7 @@ export interface StudentDocument {
   rejection_reason: string | null;
   created_at:       string;
   updated_at:       string;
-  students?:        { id: string; first_name: string; last_name: string } | null;
+  students?:        { id: string; first_name: string; last_name: string; email: string | null } | null;
 }
 
 export interface UploadDocumentInput {
@@ -66,7 +66,7 @@ export function useDocumentList(studentId?: string) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q = (supabase as unknown as any)
         .from('student_documents')
-        .select('id, organization_id, student_id, category, status, file_name, storage_path, storage_bucket, mime_type, file_size_bytes, description, expires_at, uploaded_by, reviewed_by, reviewed_at, rejection_reason, created_at, updated_at, students(id, first_name, last_name)')
+        .select('id, organization_id, student_id, category, status, file_name, storage_path, storage_bucket, mime_type, file_size_bytes, description, expires_at, uploaded_by, reviewed_by, reviewed_at, rejection_reason, created_at, updated_at, students(id, first_name, last_name, email)')
         .is('deleted_at', null)
         .order('created_at', { ascending: false });
 
@@ -140,7 +140,19 @@ export function useDocumentDelete() {
   const qc = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, studentId }: { id: string; studentId: string }): Promise<void> => {
+    mutationFn: async ({
+      id, studentId, storagePath, storageBucket,
+    }: {
+      id: string; studentId: string; storagePath: string; storageBucket: string;
+    }): Promise<void> => {
+      // Remove the physical Storage object before soft-deleting the metadata
+      // row — matches the Student → Övrigt → Dokument delete behavior. If
+      // Storage removal fails, the mutation throws here and the DB row is
+      // left untouched (never soft-deleted while its file may still exist),
+      // so a failure is never misreported as a completed deletion.
+      const { error: storageError } = await supabase.storage.from(storageBucket).remove([storagePath]);
+      if (storageError) throw new Error(storageError.message);
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase as unknown as any)
         .from('student_documents')
