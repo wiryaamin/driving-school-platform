@@ -6,8 +6,14 @@ import { useSession } from '@shared/hooks/useSession.js';
 
 export type QuizCategory = 'trafikregler' | 'vagmarken' | 'miljo' | 'fordon' | 'riskhantering';
 export type QuizDifficulty = 'easy' | 'normal' | 'hard';
+export type QuizAnswerType = 'single' | 'multiple';
+export type QuizMediaType = 'image' | 'video';
 
 export interface QuizOption {
+  /** Stable per-option id. Existing rows predate this field — callers must
+   *  backfill it on read (see normalizeOptions in TeorifragorPage.tsx)
+   *  rather than relying on array position or text as identity. */
+  id?: string;
   text: string;
   is_correct: boolean;
 }
@@ -20,6 +26,9 @@ export interface QuizQuestion {
   options:         QuizOption[];
   explanation:     string | null;
   difficulty:      QuizDifficulty;
+  answer_type:     QuizAnswerType;
+  media_url:       string | null;
+  media_type:      QuizMediaType | null;
   is_active:       boolean;
   sort_order:       number;
   created_at:      string;
@@ -32,6 +41,9 @@ export interface UpsertQuizQuestionInput {
   options:       QuizOption[];
   explanation?:  string | null;
   difficulty:    QuizDifficulty;
+  answer_type:   QuizAnswerType;
+  media_url?:    string | null;
+  media_type?:   QuizMediaType | null;
 }
 
 // quiz_questions is not present in @platform/types' hand-maintained Database
@@ -82,6 +94,9 @@ export function useCreateQuizQuestion() {
           options:         input.options,
           explanation:     input.explanation?.trim() || null,
           difficulty:      input.difficulty,
+          answer_type:     input.answer_type,
+          media_url:       input.media_url ?? null,
+          media_type:      input.media_type ?? null,
         })
         .select('*')
         .single();
@@ -103,6 +118,9 @@ export function useUpdateQuizQuestion() {
           options:       input.options,
           explanation:   input.explanation?.trim() || null,
           difficulty:    input.difficulty,
+          answer_type:   input.answer_type,
+          media_url:     input.media_url ?? null,
+          media_type:    input.media_type ?? null,
         })
         .eq('id', id)
         .select('*')
@@ -111,6 +129,33 @@ export function useUpdateQuizQuestion() {
       return data as QuizQuestion;
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: QUIZ_QUESTIONS_KEY }),
+  });
+}
+
+// Uploads to the public quiz-question-media bucket (20260814090000), same
+// upload shape as useOrgBrandingAssets/useUploadOrgBrandingAsset — direct
+// storage.upload + getPublicUrl, no signed-URL handling needed since the
+// bucket is public and RLS already scopes writes to the caller's org folder.
+export function useUploadQuizQuestionMedia() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+
+  return useMutation({
+    mutationFn: async (file: File): Promise<{ url: string; type: QuizMediaType }> => {
+      if (!orgId) throw new Error('Ingen organisation');
+
+      const mediaType: QuizMediaType = file.type.startsWith('video/') ? 'video' : 'image';
+      const ext = file.name.includes('.') ? file.name.split('.').pop() : (mediaType === 'video' ? 'mp4' : 'png');
+      const path = `${orgId}/${crypto.randomUUID()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('quiz-question-media')
+        .upload(path, file, { contentType: file.type });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: pub } = supabase.storage.from('quiz-question-media').getPublicUrl(path);
+      return { url: pub.publicUrl, type: mediaType };
+    },
   });
 }
 
