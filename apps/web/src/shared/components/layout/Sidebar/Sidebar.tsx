@@ -4,7 +4,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users, GraduationCap, ChartBar, LineChart,
-  Calendar, List,
+  Calendar,
   Receipt, CreditCard, Wallet,
   Settings, UserCheck, Smartphone,
   Send, Boxes, Building2,
@@ -95,7 +95,6 @@ export const NAVIGATION: NavSection[] = [
     labelSv: 'PLANERING',
     items: [
       { key: 'scheduling',  labelSv: 'Bokningsschema', icon: Calendar,      path: '/scheduling',          permission: 'scheduling:booking:read' as Permission },
-      { key: 'slot-list',   labelSv: 'Passöversikt',   icon: List,          path: '/scheduling/list',     permission: 'scheduling:booking:read' as Permission },
       { key: 'classlist',   labelSv: 'Klasslista',     icon: GraduationCap, path: '/class-list',          permission: 'students:progress:read' as Permission },
     ],
   },
