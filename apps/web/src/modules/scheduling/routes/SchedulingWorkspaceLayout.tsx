@@ -16,18 +16,19 @@ import { cn } from '@/lib/utils.js';
 // while each route keeps its own real, bookmarkable URL — this is a layout
 // change only, not a routing/URL change (see SchedulingPage.tsx).
 //
-// Kunder (/students), Bevakningar (/watchlist), and Loggar (/logs) are NOT
-// nested under /scheduling/* — they are separate, independently-owned route
-// trees (Kunder especially is linked from throughout the whole app). Wrapping
-// them in this shell would mean either duplicating those pages under a new
-// nested route or relocating their real routes, both explicitly out of scope
-// here. Their tab buttons intentionally still navigate away from this
-// workspace, same as they did before this change — an honest reflection of
-// which routes actually belong to the Scheduling domain today.
+// Bevakningar (/watchlist) and Loggar (/logs) are NOT nested under
+// /scheduling/* — they are separate, independently-owned route trees.
+// Wrapping them in this shell would mean either duplicating those pages
+// under a new nested route or relocating their real routes, both explicitly
+// out of scope here. Their tab buttons intentionally still navigate away
+// from this workspace — an honest reflection of which routes actually
+// belong to the Scheduling domain today. Kunder's tab was removed entirely
+// (not just left navigating away) — it duplicated the canonical Kunder
+// entry in the main Admin sidebar (/students) without adding anything
+// scheduling-specific; that canonical entry is untouched.
 
 const MODULE_NAV_TABS = [
   { label: 'Mitt schema',    path: '/scheduling/mine'      },
-  { label: 'Kunder',         path: '/students'             },
   { label: 'Bokningsschema', path: '/scheduling'           },
   { label: 'Bokningslista',  path: '/scheduling/bokningar' },
   { label: 'Bevakningar',    path: '/watchlist'            },
