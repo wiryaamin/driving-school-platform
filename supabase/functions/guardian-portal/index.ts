@@ -111,10 +111,18 @@ async function resolveGuardianToken(req: Request): Promise<GuardianSession | nul
 // pattern above — logging must never add latency to the guardian's request.
 // No PII is logged: only UUIDs (organization/student/guardian ids) and the
 // action name.
+//
+// actor_type is always 'guardian' — the only actor this function ever logs
+// on behalf of. visibility is explicitly 'admin_only' (also the column
+// default, stated here for clarity): this is an access-audit trail for
+// staff oversight of what a guardian viewed, not a business event the
+// guardian themselves would expect to see reflected back as their own
+// activity (Business Activity Architecture, ADR-010).
 function logGuardianAccess(
   svc: ReturnType<typeof createServiceClient>,
   session: GuardianSession,
   action: string,
+  correlationId: string,
 ): void {
   void svc.rpc('insert_activity_log', {
     p_organization_id: session.organization_id,
@@ -124,6 +132,9 @@ function logGuardianAccess(
     p_entity_type:      'student',
     p_entity_id:        session.student_id,
     p_metadata:         { guardian_id: session.guardian_id },
+    p_actor_type:       'guardian',
+    p_visibility:       'admin_only',
+    p_correlation_id:   correlationId,
   }).then(({ error }: { error: { message: string } | null }) => {
     if (error) logger.error('guardian-portal: audit log write failed', { error: error.message, action });
   });
@@ -336,7 +347,7 @@ Deno.serve((req: Request) =>
       }
 
       const loc = locationRes.data as { phone: string | null; email: string | null } | null;
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_me');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_me', correlationId);
       return ok({
         guardian:     guardianRes.data,
         student:      studentRes.data,
@@ -368,7 +379,7 @@ Deno.serve((req: Request) =>
       const sorted = ((bookings ?? []) as unknown as BookingRow[]).sort((a, b) =>
         (b.lesson_slots?.starts_at ?? '').localeCompare(a.lesson_slots?.starts_at ?? ''));
 
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_bookings');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_bookings', correlationId);
       return ok(sorted);
     }
 
@@ -429,7 +440,7 @@ Deno.serve((req: Request) =>
         assigned_at: string;
       };
 
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_balance');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_balance', correlationId);
       return ok({
         balance:  balRes.data ?? { balance_sek: 0, credit_used_sek: 0, total_paid_sek: 0 },
         invoices: invRes.data ?? [],
@@ -557,7 +568,7 @@ Deno.serve((req: Request) =>
         logger.warn('guardian-portal: payment_request insert failed, proceeding without record', { prId, error: prErr.message });
       }
 
-      logGuardianAccess(svc, session, 'guardian_portal.requested_payment');
+      logGuardianAccess(svc, session, 'guardian_portal.requested_payment', correlationId);
       return ok({ session_url: stripeData.url, payment_request_id: prId }, 201);
     }
 
@@ -577,7 +588,7 @@ Deno.serve((req: Request) =>
       if (!studentRes.data) return fail(500, 'Failed to load student progress');
 
       const allBookings = (statsRes.data ?? []) as Array<{ status: string }>;
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_progress');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_progress', correlationId);
       return ok({
         ...studentRes.data,
         completed_count: allBookings.filter(b => b.status === 'completed').length,
@@ -608,7 +619,7 @@ Deno.serve((req: Request) =>
         instructors: { first_name: string; last_name: string } | null;
       };
 
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_assessments');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_assessments', correlationId);
       return ok(((data ?? []) as AssRow[]).map(a => ({
         id:              a.id,
         instructor_name: a.instructors
@@ -653,7 +664,7 @@ Deno.serve((req: Request) =>
         };
       }));
 
-      logGuardianAccess(svc, session, 'guardian_portal.viewed_documents');
+      logGuardianAccess(svc, session, 'guardian_portal.viewed_documents', correlationId);
       return ok(withUrls);
     }
 

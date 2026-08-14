@@ -120,10 +120,18 @@ async function recordHealth(
 
 function recordAudit(
   db: Db, organizationId: string, actorId: string | null, action: string, vehicleId: string | null,
-  metadata: Record<string, unknown>,
+  metadata: Record<string, unknown>, correlationId: string | null,
 ): void {
   // Fire-and-forget, same idiom as guardian-portal's logGuardianAccess() —
   // auditing must never add latency to the caller's request.
+  //
+  // actor_type: 'staff' when a real actorId is present (an authenticated
+  // staff member triggered this lookup via the UI), 'system' when it isn't
+  // (an automated/background lookup) — this mirrors the distinction the
+  // caller already makes with actorId itself, not a new inference.
+  // visibility stays 'admin_only' (the column default, passed explicitly
+  // for clarity): a vehicle registry lookup is an operational/compliance
+  // concern for staff, not a business event any portal user should see.
   void db.rpc('insert_activity_log', {
     p_organization_id: organizationId,
     p_user_id:         actorId,
@@ -132,6 +140,9 @@ function recordAudit(
     p_entity_type:      'vehicle',
     p_entity_id:        vehicleId,
     p_metadata:         metadata,
+    p_actor_type:       actorId ? 'staff' : 'system',
+    p_visibility:       'admin_only',
+    p_correlation_id:   correlationId,
   }).then(({ error }: { error: { message: string } | null }) => {
     if (error) logger.error('vehicle_registry_service.audit_write_failed', { error: error.message });
   });
@@ -143,10 +154,11 @@ export interface PerformVehicleLookupParams {
   registrationNumber: string;
   vehicleId?:         string | null; // set when looking up an existing vehicle record; null when adding a new one
   forceRefresh?:      boolean;
+  correlationId?:     string | null;
 }
 
 export async function performVehicleLookup(params: PerformVehicleLookupParams): Promise<VehicleRegistryServiceResult> {
-  const { organizationId, actorId, registrationNumber, vehicleId, forceRefresh } = params;
+  const { organizationId, actorId, registrationNumber, vehicleId, forceRefresh, correlationId } = params;
   const db = createServiceClient();
   const config = await resolveConfig(db, organizationId);
   const provider = getVehicleRegistryProvider({ provider: config.provider, apiKey: config.apiKey, baseUrl: config.baseUrl, timeoutMs: config.timeoutMs });
@@ -156,7 +168,7 @@ export async function performVehicleLookup(params: PerformVehicleLookupParams): 
   } else {
     const cached = await getCachedVehicleLookup(db, organizationId, registrationNumber, provider.getProviderName());
     if (cached) {
-      recordAudit(db, organizationId, actorId, 'vehicle_registry.cache_hit', vehicleId ?? null, { provider: provider.getProviderName(), outcome: cached.status });
+      recordAudit(db, organizationId, actorId, 'vehicle_registry.cache_hit', vehicleId ?? null, { provider: provider.getProviderName(), outcome: cached.status }, correlationId ?? null);
       return {
         status: cached.status, data: cached.data, error: null,
         provider: provider.getProviderName(), capabilities: provider.getProviderCapabilities(),
@@ -175,7 +187,7 @@ export async function performVehicleLookup(params: PerformVehicleLookupParams): 
   await recordHealth(db, organizationId, provider.getProviderName(), result.status !== 'unavailable', latencyMs, result.error ?? null);
   recordAudit(db, organizationId, actorId, 'vehicle_registry.performed', vehicleId ?? null, {
     provider: provider.getProviderName(), outcome: result.status, error_type: result.errorType ?? null, latency_ms: latencyMs,
-  });
+  }, correlationId ?? null);
 
   const nowIso = new Date().toISOString();
   await writeVehicleCacheEntry(db, organizationId, registrationNumber, provider.getProviderName(), result.status, result.data, config.cacheTtlSeconds);

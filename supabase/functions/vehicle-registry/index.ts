@@ -82,6 +82,7 @@ async function handleVehicleLookup(req: Request, ctx: EdgeRequestContext): Promi
       registrationNumber: registration_number,
       vehicleId:      vehicle_id ?? null,
       forceRefresh:   force_refresh,
+      correlationId:  ctx.correlationId,
     });
   } catch (err) {
     logger.error('vehicle_registry.lookup_failed', {
