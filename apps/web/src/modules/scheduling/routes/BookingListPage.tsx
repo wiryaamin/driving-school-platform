@@ -259,7 +259,7 @@ export function BookingListPage() {
 
   return (
     <PermissionGate permission={Permissions.SCHEDULING_READ}>
-      <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
+      <div className="flex flex-col h-full min-h-0">
 
         {/* Action toolbar */}
         <SchedulingActionToolbar onNavigate={navigate} />

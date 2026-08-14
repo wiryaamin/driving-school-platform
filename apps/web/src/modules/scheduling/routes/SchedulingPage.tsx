@@ -1,4 +1,5 @@
 import { Routes, Route } from 'react-router-dom';
+import { SchedulingWorkspaceLayout } from './SchedulingWorkspaceLayout.js';
 import { SchedulingCalendarPage } from './SchedulingCalendarPage.js';
 import { MySchedulePage } from './MySchedulePage.js';
 import { BookingListPage } from './BookingListPage.js';
@@ -14,11 +15,16 @@ import { InstructorIcalPage } from './InstructorIcalPage.js';
 export function SchedulingPage() {
   return (
     <Routes>
-      <Route index element={<SchedulingCalendarPage />} />
-      <Route path="mine" element={<MySchedulePage />} />
-      <Route path="list" element={<BookingListPage />} />
-      <Route path="bokningar" element={<BokningarPage />} />
-      <Route path="waitlist" element={<WaitlistPage />} />
+      {/* Persistent Scheduling workspace shell — same routes as before,
+          just rendered inside the shared tab-bar layout via <Outlet/>
+          instead of each page owning its own copy of the tab bar. */}
+      <Route element={<SchedulingWorkspaceLayout />}>
+        <Route index element={<SchedulingCalendarPage />} />
+        <Route path="mine" element={<MySchedulePage />} />
+        <Route path="list" element={<BookingListPage />} />
+        <Route path="bokningar" element={<BokningarPage />} />
+        <Route path="waitlist" element={<WaitlistPage />} />
+      </Route>
       <Route path="planner" element={<TrafikPlatsPage />} />
       <Route path="generation" element={<SchedulingGenerationPage />} />
       <Route path="mallar" element={<SlotTemplatesPage />} />

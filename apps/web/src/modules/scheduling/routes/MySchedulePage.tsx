@@ -430,7 +430,7 @@ export function MySchedulePage() {
 
   return (
     <>
-      <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
+      <div className="flex flex-col h-full min-h-0">
 
         {/* ── Header ────────────────────────────────────────────────────── */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-border bg-card shrink-0">
