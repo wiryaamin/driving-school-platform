@@ -550,6 +550,7 @@ export function SchedulingCalendarPage() {
     { label: 'Bokningslista',  path: '/scheduling/bokningar' },
     { label: 'Bevakningar',    path: '/watchlist'            },
     { label: 'Loggar',         path: '/logs'                 },
+    { label: 'Väntelista',     path: '/scheduling/waitlist'  },
   ] as const;
 
   // ── Sub-tabs ──────────────────────────────────────────────────────────────
