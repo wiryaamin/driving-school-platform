@@ -1317,28 +1317,32 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                             Bjud in
                           </button>
                         )}
-                        <button
-                          onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
-                          className={cn(
-                            'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
-                            notifyId === g.id
-                              ? 'bg-primary/10 text-primary border border-primary/30'
-                              : 'bg-muted text-muted-foreground hover:bg-accent',
-                          )}
-                          title="Skicka meddelande"
-                        >
-                          <Mail className="w-3 h-3" />
-                          Notifiera
-                        </button>
-                        <button
-                          onClick={() => handleGenerateToken(g)}
-                          disabled={tokenMut.isPending}
-                          className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
-                          title="Generera portallänk (manuell kopiering)"
-                        >
-                          <Link2 className="w-3 h-3" />
-                          Länk
-                        </button>
+                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                          <button
+                            onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
+                            className={cn(
+                              'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
+                              notifyId === g.id
+                                ? 'bg-primary/10 text-primary border border-primary/30'
+                                : 'bg-muted text-muted-foreground hover:bg-accent',
+                            )}
+                            title="Skicka meddelande"
+                          >
+                            <Mail className="w-3 h-3" />
+                            Notifiera
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                          <button
+                            onClick={() => handleGenerateToken(g)}
+                            disabled={tokenMut.isPending}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                            title="Generera portallänk (manuell kopiering)"
+                          >
+                            <Link2 className="w-3 h-3" />
+                            Länk
+                          </button>
+                        </PermissionGate>
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
                           <button
                             onClick={() => handleEditOpen(g)}

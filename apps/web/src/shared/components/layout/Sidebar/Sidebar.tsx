@@ -7,7 +7,7 @@ import {
   Calendar, CalendarDays, List, Clock,
   Receipt, CreditCard, Wallet,
   Settings, UserCheck, Smartphone,
-  Send, Boxes, Building2, HeartHandshake,
+  Send, Boxes, Building2,
   UserPlus, Package, Tag, ShoppingCart, ClipboardList,
   BookOpen, Percent, Lock, FileDown, Landmark, Rocket, PieChart, FileText,
   ChevronDown, ShieldCheck, Megaphone, HelpCircle,
@@ -84,7 +84,6 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { key: 'customers',      labelSv: 'Kunder',          icon: Users,          path: '/students',      permission: 'students:student:read' as Permission },
       { key: 'foretagskunder', labelSv: 'Företagskunder',  icon: Building2,      path: '/corporate',     permission: null },
-      { key: 'vardnadshavare', labelSv: 'Vårdnadshavare',  icon: HeartHandshake, path: '/guardians',     permission: null },
       { key: 'leads',          labelSv: 'Leads',           icon: UserPlus,       path: '/leads',         permission: null },
       { key: 'enrollments',    labelSv: 'Anmälningar',     icon: ClipboardList,  path: '/enrollments',   permission: 'enrollment:request:read' as Permission },
       { key: 'communication',  labelSv: 'Kommunikation',   icon: Send,           path: '/communication', permission: null },
