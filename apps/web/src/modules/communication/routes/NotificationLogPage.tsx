@@ -35,6 +35,7 @@ import {
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { formatDateShort, formatTime } from '@platform/utils';
 import {
   useNotificationList,
   useNotificationDetail,
@@ -77,9 +78,11 @@ function StatusBadge({ status }: { status: NotificationStatus }) {
 
 function channelLabel(c: string) { return CHANNEL_LABELS[c] ?? c; }
 
+// Always Europe/Stockholm, regardless of the viewer's device timezone — the
+// previous Intl-based formatter used the browser's local timezone.
 function formatTs(ts: string | null) {
   if (!ts) return '–';
-  return new Date(ts).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+  return `${formatDateShort(ts)} ${formatTime(ts)}`;
 }
 
 // ─── Notification detail sheet ────────────────────────────────────────────────

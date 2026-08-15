@@ -258,7 +258,7 @@ async function handleActivities(req: Request, ctx: EdgeRequestContext): Promise<
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   const { data: logs, count, error } = await (client as any)
     .from('activity_logs')
-    .select('id, occurred_at, user_id, user_email, action, description', { count: 'exact' })
+    .select('id, occurred_at, user_id, user_email, action, description, entity_type, entity_id', { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .order('occurred_at', { ascending: false })
     .range(fromIdx, toIdx);
@@ -279,13 +279,15 @@ async function handleActivities(req: Request, ctx: EdgeRequestContext): Promise<
 
   const result = (logs ?? []).map((l: {
     id: string; occurred_at: string; user_id: string | null; user_email: string | null;
-    action: string; description: string | null;
+    action: string; description: string | null; entity_type: string | null; entity_id: string | null;
   }) => ({
-    id:    l.id,
-    datum: l.occurred_at,
-    kund:  l.user_id ? fullName(profileMap.get(l.user_id)) : '—',
-    email: l.user_email ?? '—',
-    typ:   l.description ?? l.action,
+    id:          l.id,
+    datum:       l.occurred_at,
+    kund:        l.user_id ? fullName(profileMap.get(l.user_id)) : '—',
+    email:       l.user_email ?? '—',
+    typ:         l.description ?? l.action,
+    entity_type: l.entity_type,
+    entity_id:   l.entity_id,
   }));
 
   return pagedResp(ctx, result, count ?? 0, page, per_page);

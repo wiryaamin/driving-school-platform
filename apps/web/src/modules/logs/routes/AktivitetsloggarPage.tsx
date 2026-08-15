@@ -2,17 +2,18 @@ import { useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import { Button, DataTable } from '@platform/ui';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { useActivityLogs } from '../hooks/useLogs.js';
 import type { ActivityLogEntry } from '../hooks/useLogs.js';
 import { cn } from '@/lib/utils.js';
 
-function formatDatum(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const date = d.toLocaleDateString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Europe/Stockholm' });
-    const time = d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Stockholm' });
-    return `${date} ${time}`;
-  } catch { return iso; }
+// Always Europe/Stockholm, regardless of the viewer's device timezone.
+function DatumCell({ iso }: { iso: string }) {
+  return (
+    <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+      {formatDateShort(iso)} <span className="text-muted-foreground/60">|</span> {formatTime(iso)}
+    </span>
+  );
 }
 
 function buildColumns(): ColumnDef<ActivityLogEntry>[] {
@@ -20,11 +21,7 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
     {
       id: 'datum',
       header: 'Datum',
-      cell: ({ row }) => (
-        <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-          {formatDatum(row.original.datum)}
-        </span>
-      ),
+      cell: ({ row }) => <DatumCell iso={row.original.datum} />,
       size: 150,
       enableSorting: false,
     },
@@ -54,6 +51,22 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
       cell: ({ row }) => (
         <span className="text-sm text-foreground">{row.original.typ}</span>
       ),
+      enableSorting: false,
+    },
+    {
+      id: 'entity',
+      header: 'Objekt',
+      cell: ({ row }) => {
+        const { entity_type, entity_id } = row.original;
+        if (!entity_type) return <span className="text-sm text-muted-foreground/40">—</span>;
+        return (
+          <span className="text-xs text-muted-foreground">
+            {entity_type}
+            {entity_id ? <span className="text-muted-foreground/50"> · {entity_id.slice(0, 8)}…</span> : null}
+          </span>
+        );
+      },
+      size: 180,
       enableSorting: false,
     },
   ];

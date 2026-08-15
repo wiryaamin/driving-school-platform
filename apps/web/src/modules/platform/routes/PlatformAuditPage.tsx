@@ -8,6 +8,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePlatformAuditLog } from '../hooks/usePlatformOpsCenter.js';
 import type { AuditLogRow } from '../hooks/usePlatformOpsCenter.js';
@@ -173,9 +174,11 @@ export function PlatformAuditPage() {
     });
   }
 
+  // Always Europe/Stockholm, regardless of the viewer's device timezone —
+  // the previous inline formatter used the browser's local timezone, which
+  // could misrepresent occurred_at for a viewer outside Sweden.
   function fmtTimestamp(ts: string) {
-    const d = new Date(ts);
-    return `${d.toLocaleDateString('sv-SE')} ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`;
+    return `${formatDateShort(ts)} ${formatTime(ts)}`;
   }
 
   function truncateId(id: string | null) {

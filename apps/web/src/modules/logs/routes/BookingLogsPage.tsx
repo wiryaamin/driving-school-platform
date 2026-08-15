@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import { Button, DataTable } from '@platform/ui';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { useBookingLogs } from '../hooks/useLogs.js';
 import type { BookingLogEntry, BookingLogFilter } from '../hooks/useLogs.js';
 import { cn } from '@/lib/utils.js';
@@ -39,16 +40,16 @@ function KallaBadge({ kalla }: { kalla: string }) {
 }
 
 // ─── Date formatter ───────────────────────────────────────────────────────────
+// Always Europe/Stockholm, regardless of the viewer's device timezone — see
+// packages/utils/src/formatters/date.ts. Date and time are rendered as two
+// visually distinct parts so the event time is readable without a detail view.
 
-function formatDatum(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const date = d.toLocaleDateString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Europe/Stockholm' });
-    const time = d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
-    return `${date} ${time}`;
-  } catch {
-    return iso;
-  }
+function DatumCell({ iso }: { iso: string }) {
+  return (
+    <span className="text-xs text-muted-foreground whitespace-nowrap font-mono">
+      {formatDateShort(iso)} <span className="text-muted-foreground/60">|</span> {formatTime(iso)}
+    </span>
+  );
 }
 
 // ─── Columns ──────────────────────────────────────────────────────────────────
@@ -65,11 +66,7 @@ function buildColumns(): ColumnDef<BookingLogEntry>[] {
     {
       id: 'datum',
       header: 'Datum',
-      cell: ({ row }) => (
-        <span className="text-xs text-muted-foreground whitespace-nowrap font-mono">
-          {formatDatum(row.original.datum)}
-        </span>
-      ),
+      cell: ({ row }) => <DatumCell iso={row.original.datum} />,
       size: 140,
       enableSorting: false,
     },

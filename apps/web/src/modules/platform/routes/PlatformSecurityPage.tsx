@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ShieldAlert, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePlatformSecurityEvents } from '../hooks/usePlatformOpsCenter.js';
 import type { SecurityEvent } from '../hooks/usePlatformOpsCenter.js';
@@ -111,9 +112,10 @@ export function PlatformSecurityPage() {
     low:      (events ?? []).filter(e => e.severity === 'low').length,
   }), [events]);
 
+  // Always Europe/Stockholm, regardless of the viewer's device timezone —
+  // the previous inline formatter used the browser's local timezone.
   function fmtTs(ts: string) {
-    const d = new Date(ts);
-    return `${d.toLocaleDateString('sv-SE')} ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`;
+    return `${formatDateShort(ts)} ${formatTime(ts)}`;
   }
 
   function describeEvent(ev: SecurityEvent): string {

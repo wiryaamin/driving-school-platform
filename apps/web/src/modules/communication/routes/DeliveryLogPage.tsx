@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { RefreshCcw, RotateCcw, X, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { toast } from '@platform/ui';
+import { formatDateShort, formatTime, formatDateTime } from '@platform/utils';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
@@ -65,10 +66,13 @@ function MessageRow({
         <td className="px-4 py-3 whitespace-nowrap">
           <StatusBadge status={msg.status} />
         </td>
-        <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
-          {new Date(msg.created_at).toLocaleString('sv-SE', {
-            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-          })}
+        <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground font-mono">
+          {/* The most specific event that has actually happened for this
+              message — delivered, else sent, else just created/queued —
+              always Europe/Stockholm regardless of viewer device timezone. */}
+          {formatDateShort(msg.delivered_at ?? msg.sent_at ?? msg.created_at)}{' '}
+          <span className="text-muted-foreground/60">|</span>{' '}
+          {formatTime(msg.delivered_at ?? msg.sent_at ?? msg.created_at)}
         </td>
         <td className="px-4 py-3 whitespace-nowrap">
           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -112,9 +116,9 @@ function MessageRow({
                 <p className="text-muted-foreground">Leverantör: {msg.provider ?? '—'}</p>
                 <p className="text-muted-foreground">Leverantörs-ID: {msg.provider_message_id ?? '—'}</p>
                 <p className="text-muted-foreground">Retries: {msg.retry_count}/{msg.max_retries}</p>
-                {msg.sent_at && <p className="text-muted-foreground">Skickat: {new Date(msg.sent_at).toLocaleString('sv-SE')}</p>}
-                {msg.delivered_at && <p className="text-muted-foreground">Levererat: {new Date(msg.delivered_at).toLocaleString('sv-SE')}</p>}
-                {msg.scheduled_at && <p className="text-muted-foreground">Schemalagt: {new Date(msg.scheduled_at).toLocaleString('sv-SE')}</p>}
+                {msg.sent_at && <p className="text-muted-foreground">Skickat: {formatDateTime(msg.sent_at)}</p>}
+                {msg.delivered_at && <p className="text-muted-foreground">Levererat: {formatDateTime(msg.delivered_at)}</p>}
+                {msg.scheduled_at && <p className="text-muted-foreground">Schemalagt: {formatDateTime(msg.scheduled_at)}</p>}
               </div>
               {msg.error_message && (
                 <div>

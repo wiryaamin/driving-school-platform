@@ -2,19 +2,20 @@ import { useState, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import { Button, DataTable } from '@platform/ui';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { useCommunicationLogs } from '../hooks/useLogs.js';
 import type { CommunicationLogEntry } from '../hooks/useLogs.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// Always Europe/Stockholm, regardless of the viewer's device timezone.
 
-function formatDatum(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const date = d.toLocaleDateString('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Europe/Stockholm' });
-    const time = d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' });
-    return `${date} ${time}`;
-  } catch { return iso; }
+function DatumCell({ iso }: { iso: string }) {
+  return (
+    <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+      {formatDateShort(iso)} <span className="text-muted-foreground/60">|</span> {formatTime(iso)}
+    </span>
+  );
 }
 
 function KanalBadge({ kanal, kanalRaw }: { kanal: string; kanalRaw: string }) {
@@ -52,11 +53,7 @@ function buildColumns(): ColumnDef<CommunicationLogEntry>[] {
     {
       id: 'datum',
       header: 'Datum',
-      cell: ({ row }) => (
-        <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-          {formatDatum(row.original.datum)}
-        </span>
-      ),
+      cell: ({ row }) => <DatumCell iso={row.original.datum} />,
       size: 130,
       enableSorting: false,
     },

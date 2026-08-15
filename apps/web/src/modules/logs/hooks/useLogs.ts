@@ -18,6 +18,7 @@ export interface CommunicationLogEntry {
 
 export interface ActivityLogEntry {
   id: string; datum: string; kund: string; email: string; typ: string;
+  entity_type: string | null; entity_id: string | null;
 }
 
 export interface MissedTrainingEntry {
