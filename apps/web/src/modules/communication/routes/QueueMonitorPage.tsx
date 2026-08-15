@@ -21,6 +21,15 @@ function formatAge(iso: string | null): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
+// Backend event_type identifiers mix casing conventions (e.g. "lead.created" vs.
+// "Student.Created") depending on when each was registered — normalize to a single
+// readable style for display without touching the underlying identifier, which is
+// still used verbatim for the retry action and shown on hover for correlation with logs.
+function formatEventType(raw: string): string {
+  const spaced = raw.replace(/[._]/g, ' ').toLowerCase().trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 // ─── Channel row ──────────────────────────────────────────────────────────────
 
 function ChannelRow({
@@ -309,7 +318,7 @@ export function QueueMonitorPage() {
                 ) : (
                   (outboxHealth?.by_event_type ?? []).map((row: OutboxHealthEventType) => (
                     <tr key={row.event_type} className="hover:bg-accent/10 transition-colors">
-                      <td className="px-4 py-3 text-xs font-mono text-foreground">{row.event_type}</td>
+                      <td className="px-4 py-3 text-xs text-foreground" title={row.event_type}>{formatEventType(row.event_type)}</td>
                       <td className="px-4 py-3 text-xs font-mono text-foreground tabular-nums">{row.pending_count}</td>
                       <td className="px-4 py-3 text-xs font-mono text-foreground tabular-nums">{row.processing_count}</td>
                       <td className="px-4 py-3">
