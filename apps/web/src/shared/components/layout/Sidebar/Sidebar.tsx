@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
@@ -261,6 +261,41 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
     setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  // Scroll affordance for the operational-sections pane below — with most/all
+  // permissions granted its content (Kundhantering/Planering/Ekonomi/System
+  // items plus headers) can run taller than the pane itself, and the pane
+  // scrolls internally rather than the page, so there's otherwise no cue
+  // that SYSTEM (containing Loggar) sits below the fold. Tracked as real
+  // scroll position rather than CSS alone: a single multi-layer
+  // background-image gradient keyed to var(--sidebar-background) proved
+  // unreliable (invalid hsl(var()) usage silently drops the whole
+  // declaration in Chromium), so this uses plain scrollTop/scrollHeight math
+  // instead.
+  const navScrollRef = useRef<HTMLDivElement>(null);
+  const [navScrollState, setNavScrollState] = useState({ canScrollUp: false, canScrollDown: false });
+
+  const updateNavScrollState = useCallback(() => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    setNavScrollState({
+      canScrollUp:   el.scrollTop > 0,
+      canScrollDown: el.scrollTop < el.scrollHeight - el.clientHeight - 1,
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    updateNavScrollState();
+    el.addEventListener('scroll', updateNavScrollState, { passive: true });
+    const resizeObserver = new ResizeObserver(updateNavScrollState);
+    resizeObserver.observe(el);
+    return () => {
+      el.removeEventListener('scroll', updateNavScrollState);
+      resizeObserver.disconnect();
+    };
+  }, [updateNavScrollState]);
+
   function visibleOf(items: NavItem[]): NavItem[] {
     return items.filter((item) => {
       if (item.comingSoon) return true;
@@ -280,30 +315,30 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
 
       <div className="mx-3 h-px bg-sidebar-border shrink-0" />
 
-      {/* Scrollable operational sections.
-          With most/all permissions granted, section content (Kundhantering
-          4 + Planering 2 + Ekonomi 7 + System 3 items, plus headers) runs
-          taller than common laptop viewport heights, and this is a nested
-          scroll region (not page scroll) with an OS-hidden scrollbar on
-          macOS by default — so the last section (SYSTEM, containing
-          Loggar) can sit below the fold with no visual cue that there is
-          more to scroll to. The background-attachment trick below paints a
-          fade at whichever edge still has hidden content, and removes it
-          once scrolled to that edge — pure CSS, no layout/order change. */}
-      <div
-        className="flex-1 overflow-y-auto px-3 py-1 scrollbar-none"
-        style={{
-          backgroundImage: [
-            'linear-gradient(hsl(var(--sidebar-background)) 30%, transparent)',
-            'linear-gradient(transparent, hsl(var(--sidebar-background)) 70%) 0 100%',
-            'linear-gradient(hsla(0, 0%, 0%, 0.28), transparent)',
-            'linear-gradient(transparent, hsla(0, 0%, 0%, 0.28)) 0 100%',
-          ].join(', '),
-          backgroundRepeat: 'no-repeat',
-          backgroundSize: '100% 28px, 100% 28px, 100% 10px, 100% 10px',
-          backgroundAttachment: 'local, local, scroll, scroll',
-        }}
-      >
+      {/* Scrollable operational sections. With most/all permissions granted,
+          section content (Kundhantering 4 + Planering 2 + Ekonomi 7 +
+          System 3 items, plus headers) runs taller than common laptop
+          viewport heights, and this is a nested scroll region (not page
+          scroll) with an OS-hidden scrollbar on macOS by default — so the
+          last section (SYSTEM, containing Loggar) can sit below the fold
+          with no visual cue that there is more to scroll to. The two
+          shadow divs below are pointer-events-none overlays, pinned to the
+          pane's edges (not inside the scrolling content), toggled by real
+          scrollTop/scrollHeight state rather than CSS alone. */}
+      <div className="relative flex-1 min-h-0">
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 top-0 h-4 z-10 transition-opacity duration-150',
+            navScrollState.canScrollUp ? 'opacity-100' : 'opacity-0',
+          )}
+          style={{ background: 'linear-gradient(to bottom, rgba(0, 0, 0, 0.32), transparent)' }}
+        />
+        <div
+          ref={navScrollRef}
+          onScroll={updateNavScrollState}
+          className="h-full overflow-y-auto px-3 py-1 scrollbar-none"
+        >
         {NAVIGATION.map((section) => {
           const visibleItems = visibleOf(section.items);
           if (visibleItems.length === 0) return null;
@@ -341,6 +376,15 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
             </div>
           );
         })}
+        </div>
+        <div
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 h-4 z-10 transition-opacity duration-150',
+            navScrollState.canScrollDown ? 'opacity-100' : 'opacity-0',
+          )}
+          style={{ background: 'linear-gradient(to top, rgba(0, 0, 0, 0.32), transparent)' }}
+        />
       </div>
 
       {/* Pinned bottom anchor — Inställningar, always visible regardless of section scroll */}
