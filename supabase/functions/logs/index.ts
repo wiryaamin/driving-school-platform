@@ -57,6 +57,14 @@ const MissedExamsQuerySchema = PageSchema.extend({
   category:      z.enum(['all', 'risk1', 'risk2', 'assessment']).default('all'),
 });
 
+const AuditLogQuerySchema = PageSchema.extend({
+  actor_email: z.string().optional(),
+  entity_type: z.string().optional(),
+  operation:   z.enum(['INSERT', 'UPDATE', 'DELETE']).optional(),
+  date_from:   z.string().optional(),
+  date_to:     z.string().optional(),
+});
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 interface NameRow { first_name: string; last_name: string }
@@ -120,6 +128,44 @@ function notifStatusToLabel(st: string): string {
   if (st === 'sending')   return 'Skickas';
   if (st === 'cancelled') return 'Avbruten';
   return st;
+}
+
+const AUDIT_ENTITY_LABEL: Record<string, string> = {
+  students:              'Elev',
+  instructors:           'Lärare',
+  vehicles:              'Fordon',
+  lesson_bookings:       'Bokning',
+  lesson_slots:          'Tid',
+  package_offerings:     'Paket',
+  package_catalog:       'Paket',
+  invoices:              'Faktura',
+  payments:              'Betalning',
+  refunds:               'Återbetalning',
+  memberships:           'Medlemskap',
+  membership_roles:      'Rolltilldelning',
+  organizations:         'Organisation',
+  organization_locations: 'Plats',
+  profiles:              'Profil',
+  student_documents:     'Dokument',
+  student_notes:         'Anteckning',
+  regulatory_workflows:  'Myndighetsärende',
+};
+
+function auditEntityLabel(entityType: string): string {
+  return AUDIT_ENTITY_LABEL[entityType] ?? entityType;
+}
+
+function auditOperationVerb(operation: string): string {
+  if (operation === 'INSERT') return 'skapad';
+  if (operation === 'UPDATE') return 'uppdaterad';
+  if (operation === 'DELETE') return 'raderad';
+  return operation.toLowerCase();
+}
+
+function buildAuditHandelse(operation: string, entityType: string, actorEmail: string | null): string {
+  const entity = auditEntityLabel(entityType);
+  const verb   = auditOperationVerb(operation);
+  return actorEmail ? `${entity} ${verb} av ${actorEmail}` : `${entity} ${verb}`;
 }
 
 // ─── Handler: Booking logs ────────────────────────────────────────────────────
@@ -411,6 +457,69 @@ async function handleMissedExams(req: Request, ctx: EdgeRequestContext): Promise
   return pagedResp(ctx, result, count ?? 0, page, per_page);
 }
 
+// ─── Handler: Ändringslogg (tenant audit log) ────────────────────────────────
+//
+// audit_logs has RLS enabled with zero policies, so it is unreadable via the
+// forwarded-JWT ('authenticated') client used by every other handler in this
+// file. Reads go through a service-role client instead — tenant scope is
+// enforced here, server-side, via ctx.organizationId. The caller can never
+// supply or override the organization filter. Presentation strings (handelse,
+// modul) are built here, same as buildHandelse()/buildTillfalle() above, so
+// the frontend just renders ready Swedish text like every other Loggar tab.
+
+async function handleAuditLog(req: Request, ctx: EdgeRequestContext): Promise<Response> {
+  const guard = requirePerm(ctx, 'administration:audit:read');
+  if (guard) return guard;
+
+  const raw    = Object.fromEntries(new URL(req.url).searchParams.entries());
+  const parsed = AuditLogQuerySchema.safeParse(raw);
+  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Invalid query', parsed.error.issues);
+
+  const { page, per_page, actor_email, entity_type, operation, date_from, date_to } = parsed.data;
+  const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
+
+  const client = createSupabaseClient(req, true, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  // eslint-disable-next-line prefer-const
+  let q = (client as any)
+    .from('audit_logs')
+    .select(
+      'id, actor_id, actor_email, entity_type, entity_id, operation, table_name, old_values, new_values, changed_fields, occurred_at',
+      { count: 'exact' },
+    )
+    .eq('organization_id', ctx.organizationId)
+    .order('occurred_at', { ascending: false })
+    .range(fromIdx, toIdx);
+
+  if (actor_email) q = q.ilike('actor_email', `%${actor_email}%`);
+  if (entity_type) q = q.eq('entity_type', entity_type);
+  if (operation)   q = q.eq('operation', operation);
+  if (date_from)   q = q.gte('occurred_at', date_from);
+  if (date_to)     q = q.lt('occurred_at', `${date_to}T23:59:59.999Z`);
+
+  const { data, count, error } = await q;
+  if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
+
+  const result = (data ?? []).map((row: {
+    id: string; actor_id: string | null; actor_email: string | null;
+    entity_type: string; entity_id: string | null; operation: string; table_name: string | null;
+    old_values: Record<string, unknown> | null; new_values: Record<string, unknown> | null;
+    changed_fields: string[] | null; occurred_at: string;
+  }) => ({
+    id:             row.id,
+    datum:          row.occurred_at,
+    handelse:       buildAuditHandelse(row.operation, row.entity_type, row.actor_email),
+    anvandare:      row.actor_email ?? '—',
+    modul:          auditEntityLabel(row.entity_type),
+    operation:      row.operation,
+    entity_id:      row.entity_id,
+    changed_fields: row.changed_fields,
+    old_values:     row.old_values,
+    new_values:     row.new_values,
+  }));
+
+  return pagedResp(ctx, result, count ?? 0, page, per_page);
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 Deno.serve((req) =>
@@ -448,6 +557,7 @@ Deno.serve((req) =>
     else if (req.method === 'GET' && sub === 'activities')      { response = await handleActivities(req, ctx); }
     else if (req.method === 'GET' && sub === 'missed-training') { response = await handleMissedTraining(req, ctx); }
     else if (req.method === 'GET' && sub === 'missed-exams')    { response = await handleMissedExams(req, ctx); }
+    else if (req.method === 'GET' && sub === 'audit')           { response = await handleAuditLog(req, ctx); }
     else {
       response = new Response(
         JSON.stringify({ code: 'NOT_FOUND', message: 'Unknown logs sub-route', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),

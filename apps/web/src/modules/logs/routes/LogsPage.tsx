@@ -4,9 +4,10 @@ import { KommunikationsloggarPage } from './KommunikationsloggarPage.js';
 import { AktivitetsloggarPage } from './AktivitetsloggarPage.js';
 import { MissadeUtbildningsloggarPage } from './MissadeUtbildningsloggarPage.js';
 import { MissadeExaminationsmomentPage } from './MissadeExaminationsmomentPage.js';
+import { AndringsloggPage } from './AndringsloggPage.js';
 import { cn } from '@/lib/utils.js';
 
-type LogTab = 'booking' | 'communication' | 'activity' | 'missed_training' | 'missed_exam';
+type LogTab = 'booking' | 'communication' | 'activity' | 'missed_training' | 'missed_exam' | 'andringslogg';
 
 const TABS: { key: LogTab; label: string }[] = [
   { key: 'booking',         label: 'Bokningsloggar'            },
@@ -14,6 +15,7 @@ const TABS: { key: LogTab; label: string }[] = [
   { key: 'activity',        label: 'Aktivitetsloggar'          },
   { key: 'missed_training', label: 'Missade utbildningsloggar' },
   { key: 'missed_exam',     label: 'Missade examinationsmoment' },
+  { key: 'andringslogg',    label: 'Ändringslogg'               },
 ];
 
 export function LogsPage() {
@@ -56,6 +58,7 @@ export function LogsPage() {
       {activeTab === 'activity'        && <AktivitetsloggarPage />}
       {activeTab === 'missed_training' && <MissadeUtbildningsloggarPage />}
       {activeTab === 'missed_exam'     && <MissadeExaminationsmomentPage />}
+      {activeTab === 'andringslogg'    && <AndringsloggPage />}
     </div>
   );
 }
