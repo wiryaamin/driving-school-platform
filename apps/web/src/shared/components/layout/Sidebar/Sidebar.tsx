@@ -10,7 +10,7 @@ import {
   Send, Boxes, Building2,
   UserPlus, Package, Tag, ShoppingCart, ClipboardList,
   BookOpen, Percent, Lock, FileDown, Landmark, Rocket, PieChart, FileText,
-  ChevronDown, ShieldCheck, Megaphone, HelpCircle,
+  ChevronDown, ShieldCheck, Megaphone, HelpCircle, ScrollText,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -44,9 +44,11 @@ interface NavSection {
 // Approved IA (Tenant Workspace Sidebar Finalization): 5 sections + 3 anchors
 // (Översikt/Kom igång pinned top, Inställningar pinned bottom). Items moved to
 // contextual sub-navigation (Kursöversikt, Statistik, Passläggning, Slotmallar,
-// Bevakningar, Uppgifter, Loggar, Trafikövningsplatser, Fortnox, Dataimport,
+// Bevakningar, Uppgifter, Trafikövningsplatser, Fortnox, Dataimport,
 // Bokningsflöde, Utbildningsplaner) remain accessible from within their parent
-// modules or, for Dataimport, from the Kom igång onboarding checklist.
+// modules or, for Dataimport, from the Kom igång onboarding checklist. Loggar
+// (SYSTEM section, below) was added to top-level nav once it grew a
+// tenant-wide Ändringslogg tab alongside its scheduling-specific ones.
 
 const OVERVIEW_ITEM: NavItem = {
   key:        'dashboard',
@@ -149,6 +151,7 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { key: 'nyheter', labelSv: 'Nyheter', icon: Megaphone, path: '/nyheter', permission: null },
       { key: 'teorifragor', labelSv: 'Körkortsfrågor', icon: HelpCircle, path: '/teorifragor', permission: null },
+      { key: 'loggar', labelSv: 'Loggar', icon: ScrollText, path: '/logs', permission: null },
     ],
   },
 ];
