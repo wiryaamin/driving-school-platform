@@ -16,23 +16,23 @@ import { cn } from '@/lib/utils.js';
 // while each route keeps its own real, bookmarkable URL — this is a layout
 // change only, not a routing/URL change (see SchedulingPage.tsx).
 //
-// Bevakningar (/watchlist) and Loggar (/logs) are NOT nested under
-// /scheduling/* — they are separate, independently-owned route trees.
-// Wrapping them in this shell would mean either duplicating those pages
-// under a new nested route or relocating their real routes, both explicitly
-// out of scope here. Their tab buttons intentionally still navigate away
-// from this workspace — an honest reflection of which routes actually
-// belong to the Scheduling domain today. Kunder's tab was removed entirely
-// (not just left navigating away) — it duplicated the canonical Kunder
-// entry in the main Admin sidebar (/students) without adding anything
-// scheduling-specific; that canonical entry is untouched.
+// Bevakningar (/watchlist) is NOT nested under /scheduling/* — it's a
+// separate, independently-owned route tree. Wrapping it in this shell would
+// mean either duplicating that page under a new nested route or relocating
+// its real route, both explicitly out of scope here. Its tab button
+// intentionally still navigates away from this workspace — an honest
+// reflection of which routes actually belong to the Scheduling domain
+// today. Kunder's tab and Loggar's tab were both removed entirely (not
+// just left navigating away) for the same reason: each duplicated a
+// canonical entry already in the main Tenant Workspace sidebar (/students,
+// /logs) without adding anything scheduling-specific; those canonical
+// entries are untouched.
 
 const MODULE_NAV_TABS = [
   { label: 'Mitt schema',    path: '/scheduling/mine'      },
   { label: 'Bokningsschema', path: '/scheduling'           },
   { label: 'Bokningslista',  path: '/scheduling/bokningar' },
   { label: 'Bevakningar',    path: '/watchlist'            },
-  { label: 'Loggar',         path: '/logs'                 },
   { label: 'Väntelista',     path: '/scheduling/waitlist'  },
   { label: 'Passöversikt',   path: '/scheduling/list'      },
 ] as const;
