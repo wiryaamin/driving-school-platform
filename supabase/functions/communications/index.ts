@@ -37,11 +37,11 @@ import { buildEdgeContext, type EdgeRequestContext } from '../_shared/context.ts
 import { createServiceClient }  from '../_shared/supabase.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { requireFeature }       from '../_shared/subscription.ts';
-import { dispatchMessage }      from '../_shared/comm-providers.ts';
+import { dispatchMessage, testSmtpConnection, getOrgSmtpCredentials } from '../_shared/comm-providers.ts';
 import { applyTemplateVars }    from '../_shared/template-utils.ts';
 import { buildErrorResponse }   from '../_shared/errors.ts';
 import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
-import { encryptCredential, maskCredential, credentialCryptoConfigured } from '../_shared/credential-crypto.ts';
+import { encryptCredential, decryptCredential, maskCredential, credentialCryptoConfigured } from '../_shared/credential-crypto.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,12 @@ const ADMIN_ROLES = new Set(['org_owner', 'org_admin', 'org_manager']);
 // enter credentials for any of the five (all channels). The channel PUT
 // handler below ignores any body.provider/body.credentials for these
 // channels and always preserves the platform-configured provider instead.
+//
+// Exception (Hybrid model, Tenant SMTP Email V1, 2026-08-15, architecture
+// review same date): a tenant may opt the email channel specifically into
+// provider === EMAIL_TENANT_SMTP_PROVIDER ('smtp'), supplying their own SMTP
+// relay. Every other channel, and every other email provider value, remains
+// fully platform-managed exactly as before. See isEmailSmtpOptIn() below.
 const PLATFORM_MANAGED_CHANNELS = new Set<Channel>(['sms', 'email', 'whatsapp', 'push', 'voice']);
 const PLATFORM_MANAGED_DEFAULT_PROVIDER: Partial<Record<Channel, string>> = {
   sms:      Deno.env.get('PLATFORM_SMS_PROVIDER')      ?? '46elks',
@@ -62,6 +68,14 @@ const PLATFORM_MANAGED_DEFAULT_PROVIDER: Partial<Record<Channel, string>> = {
   push:     Deno.env.get('PLATFORM_PUSH_PROVIDER')     ?? 'firebase',
   voice:    Deno.env.get('PLATFORM_VOICE_PROVIDER')    ?? '46elks',
 };
+
+const EMAIL_TENANT_SMTP_PROVIDER = 'smtp';
+const SMTP_SECURITY_VALUES = new Set(['starttls', 'ssl']);
+const SMTP_CREDENTIAL_FIELDS = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURITY', 'SMTP_USERNAME', 'SMTP_PASSWORD'] as const;
+
+function isEmailSmtpOptIn(channel: Channel, provider: string | null | undefined): boolean {
+  return channel === 'email' && provider === EMAIL_TENANT_SMTP_PROVIDER;
+}
 
 // ─── Provider credential fields ────────────────────────────────────────────────
 // The set of env-var-named credential fields Kanalinställningar lets a tenant
@@ -78,6 +92,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<string, string[]> = {
   'firebase':  ['FIREBASE_SERVICE_ACCOUNT_JSON'],
   'onesignal': ['ONESIGNAL_APP_ID', 'ONESIGNAL_API_KEY'],
   'meta':      ['META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID'],
+  'smtp':      [...SMTP_CREDENTIAL_FIELDS],
   // Twilio's field set differs by channel (WhatsApp needs a WhatsApp-enabled
   // sender number, not the SMS/voice number) — resolved per (channel, provider).
 };
@@ -130,7 +145,7 @@ function err(ctx: EdgeRequestContext, message: string, status: number, code: str
 
 // ─── URL routing ──────────────────────────────────────────────────────────────
 
-type PathParts = { id: string | null; action: string | null; sub: string | null };
+type PathParts = { id: string | null; action: string | null; sub: string | null; extra?: string | null };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -138,13 +153,14 @@ function extractPath(req: Request): PathParts {
   const segments = new URL(req.url).pathname.split('/').filter(Boolean);
   const fnIdx    = segments.findLastIndex((s) => s === 'communications');
   const after    = segments.slice(fnIdx + 1);
-  if (after.length === 0) return { id: null, action: null, sub: null };
+  if (after.length === 0) return { id: null, action: null, sub: null, extra: null };
 
   const first  = after[0] ?? '';
   const second = after[1] ?? null;
+  const third  = after[2] ?? null;
 
-  // /channels (list) or /channels/:name (upsert)
-  if (first === 'channels') return { id: null, action: 'channels', sub: second };
+  // /channels (list), /channels/:name (upsert), or /channels/:name/test-smtp
+  if (first === 'channels') return { id: null, action: 'channels', sub: second, extra: third };
 
   // /templates or /templates/:uuid
   if (first === 'templates') {
@@ -220,7 +236,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const supabase = createServiceClient();
 
   const { method } = req;
-  const { id, action, sub } = extractPath(req);
+  const { id, action, sub, extra } = extractPath(req);
   const sp = new URL(req.url).searchParams;
 
   try {
@@ -240,7 +256,24 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       return json({ data: (data ?? []).map(withCredentialStatus) });
     }
 
-    if (action === 'channels' && sub) {
+    // Tenant SMTP "Testa anslutning" — tests the ALREADY-SAVED, encrypted
+    // config (never accepts raw credentials in the request body), so the
+    // plaintext password is never re-transmitted just to run a test.
+    if (action === 'channels' && sub === 'email' && extra === 'test-smtp') {
+      if (method !== 'POST') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
+      const role = ctx.actorRole;
+      if (!ADMIN_ROLES.has(role ?? '')) {
+        return err(ctx, 'Forbidden — requires admin, manager, or owner role', 403, 'FORBIDDEN');
+      }
+      const creds = await getOrgSmtpCredentials(orgId);
+      if (!creds) {
+        return json({ status: 'connection_failed', error: 'SMTP-uppgifter saknas eller är ofullständiga. Spara konfigurationen först.' });
+      }
+      const result = await testSmtpConnection(creds);
+      return json(result);
+    }
+
+    if (action === 'channels' && sub && !extra) {
       if (method !== 'PUT') return err(ctx, 'Method not allowed', 405, 'METHOD_NOT_ALLOWED');
       const role = ctx.actorRole;
       if (!ADMIN_ROLES.has(role ?? '')) {
@@ -273,18 +306,26 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       const existingMasked   = existingMetadata.credentials_masked ?? {};
       let nextMetadata: ChannelMetadata = existingMetadata;
 
-      const isPlatformManaged = PLATFORM_MANAGED_CHANNELS.has(channel);
+      // Hybrid model: email opting into 'smtp' is the one platform-managed
+      // channel/provider combination a tenant may configure — every other
+      // channel, and every other email provider value, is unaffected. A
+      // request that omits `provider` entirely (e.g. a partial update
+      // touching only enabled/daily_limit) preserves whatever was already
+      // saved rather than being misread as "revert to platform-managed".
+      const requestedProvider = body.provider !== undefined ? body.provider : existing?.provider ?? null;
+      const smtpOptIn = isEmailSmtpOptIn(channel, requestedProvider);
+      const isPlatformManaged = PLATFORM_MANAGED_CHANNELS.has(channel) && !smtpOptIn;
 
-      // SMS/Email/WhatsApp/Push/Voice's provider and credentials are platform-managed — any
-      // tenant-supplied value in the request body is ignored outright (never
-      // encrypted, never stored). Falls through with nextMetadata/nextProvider
-      // left at their existing/platform-default values below.
+      // SMS/WhatsApp/Push/Voice (and email unless opting into smtp) have a
+      // platform-managed provider and credentials — any tenant-supplied
+      // value in the request body is ignored outright (never encrypted,
+      // never stored). Falls through with nextMetadata/nextProvider left at
+      // their existing/platform-default values below.
       if (!isPlatformManaged && body.credentials && Object.keys(body.credentials).length > 0) {
         if (!credentialCryptoConfigured()) {
           return err(ctx, 'Kryptering är inte konfigurerad på plattformen', 503, 'CRYPTO_NOT_CONFIGURED');
         }
-        const effectiveProvider = body.provider !== undefined ? body.provider : null;
-        const allowedFields = credentialFieldsFor(channel, effectiveProvider);
+        const allowedFields = credentialFieldsFor(channel, requestedProvider);
         const nextCreds  = { ...existingCreds };
         const nextMasked = { ...existingMasked };
         for (const [field, value] of Object.entries(body.credentials)) {
@@ -296,8 +337,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             delete nextMasked[field];
           } else {
             try {
-              nextCreds[field]  = await encryptCredential(trimmed);
-              nextMasked[field] = maskCredential(trimmed);
+              nextCreds[field] = await encryptCredential(trimmed);
+              // SMTP_PASSWORD gets a pure indicator, not maskCredential()'s
+              // usual partial-reveal fragment — a genuine login password is
+              // short enough that "first 8 + last 4 characters" (fine for a
+              // 40-character API key) would expose most of it. Every other
+              // credential field, on every provider, keeps the existing
+              // partial-reveal mask unchanged.
+              nextMasked[field] = field === 'SMTP_PASSWORD' ? '••••••••' : maskCredential(trimmed);
             } catch (e) {
               console.error('[communications] channel credential encrypt failed:', field, e instanceof Error ? e.message : String(e));
               return err(ctx, `Kunde inte kryptera ${field}`, 500, 'ENCRYPT_FAILED');
@@ -307,14 +354,61 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         nextMetadata = { ...existingMetadata, credentials: nextCreds, credentials_masked: nextMasked };
       }
 
+      // Tenant SMTP config validation — required whenever this write is
+      // establishing or maintaining an smtp-opted-in email row. Security
+      // must be one of the two supported enum values; if a full field set
+      // isn't present after this write (this request's fields merged with
+      // whatever was already saved), reject rather than silently persisting
+      // an incomplete config that would only surface as a confusing dispatch
+      // failure later.
+      if (smtpOptIn) {
+        const suppliedSecurity = body.credentials?.SMTP_SECURITY;
+        if (suppliedSecurity !== undefined && !SMTP_SECURITY_VALUES.has(suppliedSecurity)) {
+          return err(ctx, 'Säkerhet måste vara STARTTLS eller SSL/TLS', 400, 'VALIDATION_ERROR');
+        }
+        const mergedCreds = nextMetadata.credentials ?? {};
+        const missing = SMTP_CREDENTIAL_FIELDS.filter((f) => !mergedCreds[f]);
+        if (missing.length > 0) {
+          return err(ctx, `SMTP-konfigurationen är ofullständig (saknas: ${missing.join(', ')})`, 400, 'VALIDATION_ERROR');
+        }
+      }
+
+      // From-address rule (architecture review Q6): for tenant SMTP, the
+      // From address must match — or share a domain with — the SMTP
+      // username, since real-world relays (Google/Microsoft/hosting
+      // providers) reject or rewrite a mismatched From. Validated
+      // server-side (not just client-side) because this is a new,
+      // stricter-than-before rule, unlike the purely cosmetic from_address
+      // checks every other channel has only ever enforced in the UI.
+      if (smtpOptIn && body.from_address?.trim()) {
+        // Compare against the plaintext username the caller just supplied in
+        // this request, if any; otherwise decrypt the already-stored one so
+        // a from_address-only update is still validated against it.
+        let usernamePlain: string | null = body.credentials?.SMTP_USERNAME ?? null;
+        if (!usernamePlain && existingCreds.SMTP_USERNAME) {
+          try { usernamePlain = await decryptCredential(existingCreds.SMTP_USERNAME); } catch { usernamePlain = null; }
+        }
+        if (usernamePlain) {
+          const fromDomain = body.from_address.trim().split('@')[1]?.toLowerCase();
+          const userDomain = usernamePlain.split('@')[1]?.toLowerCase();
+          if (!fromDomain || !userDomain || fromDomain !== userDomain) {
+            return err(ctx, 'Avsändaradressen måste tillhöra samma domän som SMTP-användarnamnet', 400, 'VALIDATION_ERROR');
+          }
+        }
+      }
+
       // SMS/Email/WhatsApp/Push/Voice's provider is platform-controlled — never accept a
       // tenant-supplied value (or an omitted one) as authority; always
       // preserve whatever the platform already set (falling back to the
       // platform default provider the very first time a row is provisioned
-      // for an org).
+      // for an org). Reverting email away from 'smtp' back to platform-
+      // managed must resolve to the real platform default, not the stale
+      // 'smtp' sentinel still sitting in `existing`.
       const nextProvider = isPlatformManaged
-        ? (existing?.provider ?? PLATFORM_MANAGED_DEFAULT_PROVIDER[channel] ?? null)
-        : (body.provider ?? null);
+        ? ((existing?.provider && existing.provider !== EMAIL_TENANT_SMTP_PROVIDER)
+            ? existing.provider
+            : PLATFORM_MANAGED_DEFAULT_PROVIDER[channel] ?? null)
+        : requestedProvider;
 
       const { data, error } = await supabase
         .from('channel_configs')

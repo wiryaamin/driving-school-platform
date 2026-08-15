@@ -1,17 +1,25 @@
 /**
  * Communication provider abstraction.
  *
- * All five channels (SMS/Email/WhatsApp/Push/Voice) are platform-managed
- * (ADR: platform-managed integrations) — every dispatch* call below is
- * invoked with an empty credentials object, so cred() always resolves
+ * SMS/WhatsApp/Push/Voice, and Email's default (Resend), are platform-managed
+ * (ADR: platform-managed integrations) — every dispatch* call for those below
+ * is invoked with an empty credentials object, so cred() always resolves
  * through the platform-wide Deno.env value (Supabase Secrets). Tenants can
- * no longer save their own provider credentials (enforced in
+ * no longer save their own provider credentials for those (enforced in
  * communications/index.ts's channel PUT handler and by a per-channel DB
  * trigger); see cred() below.
  *
+ * Exception (Hybrid model, Tenant SMTP Email V1, 2026-08-15): a tenant may
+ * opt an org's email channel into provider='smtp', supplying their own SMTP
+ * relay credentials. This is the one genuinely per-organization credential
+ * path left in this file — see getOrgSmtpCredentials()/dispatchSMTP() below.
+ * Every other channel/provider combination is unaffected.
+ *
  * Integrated providers:
  *   sms      → 46elks      ELKS_API_USERNAME + ELKS_API_PASSWORD
- *   email    → Resend       RESEND_API_KEY
+ *   email    → Resend       RESEND_API_KEY (platform-managed default)
+ *   email    → SMTP         Tenant-owned relay — SMTP_HOST/PORT/SECURITY/USERNAME/PASSWORD,
+ *                           stored per-org in channel_configs.metadata.credentials
  *   whatsapp → Twilio       TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_NUMBER
  *   whatsapp → Meta         META_WHATSAPP_TOKEN + META_PHONE_NUMBER_ID
  *   push     → Firebase     FIREBASE_SERVICE_ACCOUNT_JSON (FCM HTTP v1 — the
@@ -24,6 +32,9 @@
  * Voice calls use TTS (not conversational AI). Push "to" field = device token.
  * WhatsApp "to" field = E.164 phone number without whatsapp: prefix.
  */
+
+import { createServiceClient } from './supabase.ts';
+import { decryptCredential }   from './credential-crypto.ts';
 
 export type ProviderResult = {
   status:     'sent' | 'failed' | 'queued';
@@ -562,6 +573,248 @@ async function dispatchMailjet(creds: Record<string, string>, to: string, from: 
   } catch (e) { return caught(e); }
 }
 
+// ─── Email: Tenant SMTP (Hybrid model, Tenant SMTP Email V1) ──────────────────
+// The only per-organization credential path in this file — see the header
+// comment above. STARTTLS (587) and implicit TLS (465) only; no plaintext
+// SMTP is offered. Hand-rolled against raw Deno.connect()/connectTls()/
+// startTls() (confirmed working against the Supabase Edge Runtime via a
+// live feasibility check, 2026-08-15) rather than pulling in a client
+// library, matching this file's existing no-SDK convention.
+
+export interface SmtpCreds {
+  host:     string;
+  port:     number;
+  security: 'starttls' | 'ssl';
+  username: string;
+  password: string;
+}
+
+const SMTP_TIMEOUT_MS = 20_000;
+
+/** All five SMTP fields are stored (and were encrypted) uniformly via the
+ *  same channel_configs.metadata.credentials mechanism every other
+ *  multi-field provider (e.g. Twilio) already uses — decrypt all five. */
+export async function getOrgSmtpCredentials(organizationId: string | null): Promise<SmtpCreds | null> {
+  if (!organizationId) return null;
+  try {
+    const client = createServiceClient();
+    const { data } = await client
+      .from('channel_configs')
+      .select('metadata')
+      .eq('organization_id', organizationId)
+      .eq('channel', 'email')
+      .maybeSingle();
+    const stored = (data?.metadata as { credentials?: Record<string, string> } | null)?.credentials ?? {};
+    if (!stored.SMTP_HOST || !stored.SMTP_PORT || !stored.SMTP_SECURITY || !stored.SMTP_USERNAME || !stored.SMTP_PASSWORD) {
+      return null;
+    }
+    const host     = await decryptCredential(stored.SMTP_HOST);
+    const portStr  = await decryptCredential(stored.SMTP_PORT);
+    const security = await decryptCredential(stored.SMTP_SECURITY);
+    const username = await decryptCredential(stored.SMTP_USERNAME);
+    const password = await decryptCredential(stored.SMTP_PASSWORD);
+    const port = parseInt(portStr, 10);
+    if (!Number.isFinite(port) || (security !== 'starttls' && security !== 'ssl')) return null;
+    return { host, port, security, username, password };
+  } catch {
+    // A lookup/decrypt failure must never throw into dispatchMessage() —
+    // surfaces as missingCreds() below instead, same graceful-degradation
+    // contract as every other provider in this file.
+    return null;
+  }
+}
+
+// Structural (not nominal) type — accepts Deno.TcpConn and Deno.TlsConn
+// alike without widening either away from the specific type Deno.startTls()
+// requires (TcpConn, not the general Conn union) at the one call site that
+// needs it.
+interface SmtpSocket {
+  read(p: Uint8Array): Promise<number | null>;
+  write(p: Uint8Array): Promise<number>;
+  close(): void;
+}
+
+async function readSmtpResponse(conn: SmtpSocket): Promise<{ code: number; text: string }> {
+  const decoder = new TextDecoder();
+  const chunk = new Uint8Array(4096);
+  let buffer = '';
+  for (;;) {
+    const n = await conn.read(chunk);
+    if (n === null) break;
+    buffer += decoder.decode(chunk.subarray(0, n), { stream: true });
+    const lines = buffer.split('\r\n').filter((l) => l.length > 0);
+    const last = lines[lines.length - 1] ?? '';
+    if (/^\d{3} /.test(last)) break;      // final line of a (possibly multi-line) reply
+    if (!/^\d{3}-/.test(last)) break;      // malformed/unexpected — stop waiting rather than hang
+  }
+  return { code: parseInt(buffer.slice(0, 3), 10) || 0, text: buffer.trim() };
+}
+
+async function sendSmtpCommand(conn: SmtpSocket, command: string): Promise<{ code: number; text: string }> {
+  await conn.write(new TextEncoder().encode(command + '\r\n'));
+  return await readSmtpResponse(conn);
+}
+
+function closeSmtpSocket(conn: SmtpSocket | null): void {
+  try { conn?.close(); } catch { /* already closed or never opened */ }
+}
+
+/** RFC 5321 transparency: a line starting with "." gets an extra "." so the
+ *  lone-"." DATA terminator is never triggered by message content itself. */
+function dotStuff(body: string): string {
+  return body.replace(/\r\n/g, '\n').split('\n')
+    .map((line) => (line.startsWith('.') ? '.' + line : line))
+    .join('\r\n');
+}
+
+/** Connects to `host:port`, encrypting either immediately (implicit TLS, port
+ *  465) or via STARTTLS upgrade (port 587) — kept as two separate branches,
+ *  each returning its own connection type directly, so Deno.startTls() never
+ *  needs a cast away from the specific Deno.TcpConn it requires. */
+async function smtpConnect(creds: SmtpCreds): Promise<SmtpSocket> {
+  if (creds.security === 'ssl') {
+    const conn = await Deno.connectTls({ hostname: creds.host, port: creds.port });
+    const resp = await readSmtpResponse(conn);
+    if (resp.code !== 220) throw new Error(`Unexpected greeting: ${resp.text}`);
+    return conn;
+  }
+
+  const tcpConn = await Deno.connect({ hostname: creds.host, port: creds.port });
+  let resp = await readSmtpResponse(tcpConn);
+  if (resp.code !== 220) throw new Error(`Unexpected greeting: ${resp.text}`);
+
+  resp = await sendSmtpCommand(tcpConn, 'EHLO trafikcloud.se');
+  if (resp.code !== 250) throw new Error(`EHLO rejected: ${resp.text}`);
+
+  resp = await sendSmtpCommand(tcpConn, 'STARTTLS');
+  if (resp.code !== 220) throw new Error(`STARTTLS rejected: ${resp.text}`);
+
+  return await Deno.startTls(tcpConn, { hostname: creds.host });
+}
+
+async function smtpConnectAuth(creds: SmtpCreds): Promise<SmtpSocket> {
+  const conn = await smtpConnect(creds);
+
+  let resp = await sendSmtpCommand(conn, 'EHLO trafikcloud.se');
+  if (resp.code !== 250) throw new Error(`EHLO rejected: ${resp.text}`);
+
+  const authPayload = btoa(`\0${creds.username}\0${creds.password}`);
+  resp = await sendSmtpCommand(conn, `AUTH PLAIN ${authPayload}`);
+  if (resp.code !== 235) throw new Error(`Authentication failed: ${resp.text}`);
+
+  return conn;
+}
+
+async function dispatchSMTP(
+  creds: SmtpCreds | null,
+  to: string,
+  from: string,
+  subject: string | undefined,
+  body: string,
+): Promise<ProviderResult> {
+  if (!creds) return missingCreds('SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURITY', 'SMTP_USERNAME', 'SMTP_PASSWORD');
+
+  let conn: SmtpSocket | null = null;
+  try {
+    conn = await Promise.race([
+      smtpConnectAuth(creds),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new DOMException('SMTP handshake timed out', 'TimeoutError')), SMTP_TIMEOUT_MS)),
+    ]);
+
+    const fromAddr = from.includes('@') ? from : creds.username;
+    const fromEmailOnly = fromAddr.match(/<([^>]+)>/)?.[1] ?? fromAddr;
+
+    let resp = await sendSmtpCommand(conn, `MAIL FROM:<${fromEmailOnly}>`);
+    if (resp.code !== 250) return { status: 'failed', providerId: null, error: `smtp MAIL FROM rejected: ${resp.text}` };
+
+    resp = await sendSmtpCommand(conn, `RCPT TO:<${to}>`);
+    if (resp.code !== 250 && resp.code !== 251) return { status: 'failed', providerId: null, error: `smtp RCPT TO rejected: ${resp.text}` };
+
+    resp = await sendSmtpCommand(conn, 'DATA');
+    if (resp.code !== 354) return { status: 'failed', providerId: null, error: `smtp DATA rejected: ${resp.text}` };
+
+    const contentType = isHtmlBody(body) ? 'text/html; charset=UTF-8' : 'text/plain; charset=UTF-8';
+    const headers = [
+      `From: ${fromAddr}`,
+      `To: <${to}>`,
+      `Subject: ${subject?.trim() || '(Inget ämne)'}`,
+      `Date: ${new Date().toUTCString()}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: ${contentType}`,
+      `Content-Transfer-Encoding: 8bit`,
+    ].join('\r\n');
+
+    // RFC 5322 §2.1: the body is separated from the header section by a
+    // truly EMPTY line — i.e. two CRLFs in sequence, not one. Confirmed
+    // live (2026-08-15): joining headers with a trailing '' element only
+    // terminates the last header line once, so the body ran straight into
+    // it with no blank line; Resend's SMTP relay rejected every send with
+    // "550 Missing `html` or `text` field" because its parser couldn't
+    // locate the body. A generic/lenient MTA might have tolerated this,
+    // but it was a real spec violation either way.
+    await conn.write(new TextEncoder().encode(headers + '\r\n\r\n' + dotStuff(body) + '\r\n.\r\n'));
+    resp = await readSmtpResponse(conn);
+    if (resp.code !== 250) return { status: 'failed', providerId: null, error: `smtp send rejected: ${resp.text}` };
+
+    await sendSmtpCommand(conn, 'QUIT').catch(() => {});
+    const providerId = resp.text.match(/queued as (\S+)/i)?.[1] ?? null;
+    return { status: 'sent', providerId, error: null };
+  } catch (e) {
+    return caught(e, 'smtp');
+  } finally {
+    closeSmtpSocket(conn);
+  }
+}
+
+// ─── SMTP connection test (no message sent) ───────────────────────────────────
+// Distinct from dispatchSMTP() — used only by communications/index.ts's
+// "Testa anslutning" route. Stops after AUTH; never reaches MAIL FROM/DATA.
+
+export type SmtpTestStatus = 'ok' | 'connection_failed' | 'tls_failed' | 'auth_failed';
+export interface SmtpTestResult { status: SmtpTestStatus; error: string | null }
+
+export async function testSmtpConnection(creds: SmtpCreds): Promise<SmtpTestResult> {
+  let conn: SmtpSocket | null = null;
+  const run = async (): Promise<SmtpTestResult> => {
+    try {
+      conn = await smtpConnect(creds);
+    } catch (e) {
+      // smtpConnect() covers connect + greeting + (for STARTTLS) the pre-
+      // upgrade EHLO/STARTTLS/upgrade sequence as one unit — a thrown
+      // message containing "STARTTLS"/"EHLO after" is the TLS stage,
+      // anything else (unreachable host, bad greeting) is connection stage.
+      const message = e instanceof Error ? e.message : String(e);
+      const isTlsStage = /STARTTLS|EHLO rejected/i.test(message);
+      return { status: isTlsStage ? 'tls_failed' : 'connection_failed', error: message };
+    }
+
+    try {
+      let resp = await sendSmtpCommand(conn, 'EHLO trafikcloud.se');
+      if (resp.code !== 250) return { status: 'tls_failed', error: resp.text };
+
+      const authPayload = btoa(`\0${creds.username}\0${creds.password}`);
+      resp = await sendSmtpCommand(conn, `AUTH PLAIN ${authPayload}`);
+      if (resp.code !== 235) return { status: 'auth_failed', error: resp.text };
+
+      await sendSmtpCommand(conn, 'QUIT').catch(() => {});
+      return { status: 'ok', error: null };
+    } catch (e) {
+      return { status: 'auth_failed', error: e instanceof Error ? e.message : String(e) };
+    }
+  };
+
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<SmtpTestResult>((resolve) =>
+        setTimeout(() => resolve({ status: 'connection_failed', error: 'Anslutningen tog för lång tid.' }), SMTP_TIMEOUT_MS)),
+    ]);
+  } finally {
+    closeSmtpSocket(conn);
+  }
+}
+
 // ─── Voice: 46elks ────────────────────────────────────────────────────────────
 // Docs: https://46elks.se/docs/voice-calls
 // Secrets: ELKS_API_USERNAME, ELKS_API_PASSWORD (same as SMS)
@@ -636,15 +889,15 @@ export interface DispatchParams {
   from:      string | null;
   subject?:  string;
   body:      string;
-  /** Unused by dispatchMessage() — every channel is platform-managed, so
-   *  there is no longer a per-org credential to look up. Kept on the type
-   *  (rather than removed) so every existing caller across the codebase
-   *  stays source-compatible without a signature-wide change. */
+  /** Only read when channel==='email' && provider==='smtp' (Hybrid model,
+   *  Tenant SMTP Email V1) to look up that org's SMTP credentials — every
+   *  other channel/provider combination is platform-managed and ignores
+   *  this field. Already threaded through by every existing caller. */
   organizationId?: string | null;
 }
 
 export async function dispatchMessage(params: DispatchParams): Promise<ProviderResult> {
-  const { channel, provider, from, subject, body } = params;
+  const { channel, provider, from, subject, body, organizationId } = params;
   const fromAddr = from ?? '';
   // Every SMS/voice/WhatsApp gateway requires E.164 ("+46701234567"), but
   // Swedish phone numbers are routinely typed/pasted in local format
@@ -674,6 +927,12 @@ export async function dispatchMessage(params: DispatchParams): Promise<ProviderR
       if (provider === 'resend')    return await dispatchResend({}, to, fromAddr, subject, body);
       if (provider === 'sendgrid')  return await dispatchSendGrid({}, to, fromAddr, subject, body);
       if (provider === 'mailjet')   return await dispatchMailjet({}, to, fromAddr, subject, body);
+      // Tenant SMTP (Hybrid model) — the one genuinely per-organization
+      // credential path in this file; see getOrgSmtpCredentials() above.
+      if (provider === 'smtp') {
+        const creds = await getOrgSmtpCredentials(organizationId ?? null);
+        return await dispatchSMTP(creds, to, fromAddr, subject, body);
+      }
       break;
     case 'whatsapp':
       // WhatsApp is platform-managed (ADR: platform-managed integrations) — a

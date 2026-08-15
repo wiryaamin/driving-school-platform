@@ -281,6 +281,18 @@ export function useUpdateChannelConfig() {
   });
 }
 
+export type SmtpTestStatus = 'ok' | 'connection_failed' | 'tls_failed' | 'auth_failed';
+export interface SmtpTestResult { status: SmtpTestStatus; error: string | null }
+
+/** Tests the already-saved tenant SMTP config (Kanalinställningar must be
+ *  saved first) — never transmits the plaintext password again. */
+export function useTestSmtpConnection() {
+  return useMutation({
+    mutationFn: () =>
+      invoke<SmtpTestResult>('communications/channels/email/test-smtp', { method: 'POST' }),
+  });
+}
+
 
 // ─── Template hooks ───────────────────────────────────────────────────────────
 

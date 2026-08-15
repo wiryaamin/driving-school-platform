@@ -354,18 +354,21 @@ function ChannelCard({
   const config = configs?.find((c) => c.channel === channel);
   const resolved = isError ? resolveIntegrationStatusError(error) : null;
   const status: StatusKind = resolved?.status ?? ((config?.enabled && config.provider) ? 'connected' : 'not_connected');
-  // SMS and Email's provider are platform-managed (ADR: platform-managed
-  // integrations) — don't surface which provider is behind either one to
-  // the tenant. WhatsApp/Push/Voice cards elsewhere on this page are
-  // unaffected.
-  const isPlatformManagedProvider = channel === 'sms' || channel === 'email';
+  // SMS's provider is platform-managed (ADR: platform-managed integrations)
+  // — don't surface which provider is behind it. Email is platform-managed
+  // by default too, UNLESS the tenant has opted into their own SMTP relay
+  // (Hybrid model, Tenant SMTP Email V1) — that case should show plainly as
+  // tenant-configured, not be described as platform-managed. WhatsApp/Push/
+  // Voice cards elsewhere on this page are unaffected.
+  const isEmailSmtp = channel === 'email' && config?.provider === 'smtp';
+  const isPlatformManagedProvider = channel === 'sms' || (channel === 'email' && !isEmailSmtp);
 
   return (
     <IntegrationCard
       icon={icon}
       title={title}
       description={description}
-      provider={isPlatformManagedProvider ? undefined : (config?.provider ?? undefined)}
+      provider={isPlatformManagedProvider ? undefined : (isEmailSmtp ? 'Egen SMTP-server' : config?.provider ?? undefined)}
       status={status}
       loading={isLoading}
       statusMessage={resolved?.message}

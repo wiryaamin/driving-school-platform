@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Save, Info, Loader2, CheckCircle2, XCircle, KeyRound } from 'lucide-react';
+import { Save, Info, Loader2, CheckCircle2, XCircle, KeyRound, Plug } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
@@ -11,10 +11,17 @@ import {
   useChannelConfigs,
   useUpdateChannelConfig,
   useSendMessage,
+  useTestSmtpConnection,
   type CommChannel,
   type ChannelConfig,
+  type SmtpTestStatus,
 } from '../hooks/useCommunication.js';
 import { CHANNEL_META } from '../components/ChannelIcon.js';
+
+// Tenant SMTP (Hybrid model, Tenant SMTP Email V1) — the one email provider
+// value a tenant may actually pick and configure themselves; every other
+// provider on every channel remains platform-managed exactly as before.
+const EMAIL_TENANT_SMTP_PROVIDER = 'smtp';
 
 // ─── Provider options per channel ─────────────────────────────────────────────
 
@@ -36,7 +43,13 @@ const ENV_HINTS: Record<string, string[]> = {
   'firebase':  ['FIREBASE_SERVICE_ACCOUNT_JSON'],
   'onesignal': ['ONESIGNAL_APP_ID', 'ONESIGNAL_API_KEY'],
   'meta':      ['META_WHATSAPP_TOKEN', 'META_PHONE_NUMBER_ID'],
+  'smtp':      ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURITY', 'SMTP_USERNAME', 'SMTP_PASSWORD'],
 };
+
+const SMTP_SECURITY_OPTIONS = [
+  { value: 'starttls', label: 'STARTTLS' },
+  { value: 'ssl',      label: 'SSL/TLS' },
+];
 
 // Channel+provider overrides for cases where secrets differ (e.g. Twilio SMS vs WhatsApp)
 const CHANNEL_PROVIDER_HINTS: Partial<Record<CommChannel, Record<string, string[]>>> = {
@@ -64,6 +77,11 @@ const FIELD_LABELS: Record<string, string> = {
   ONESIGNAL_API_KEY:             'API-nyckel (OneSignal)',
   META_WHATSAPP_TOKEN:           'Åtkomsttoken (Meta)',
   META_PHONE_NUMBER_ID:          'Telefonnummer-ID (Meta)',
+  SMTP_HOST:                     'SMTP-server',
+  SMTP_PORT:                     'Port',
+  SMTP_SECURITY:                 'Säkerhet',
+  SMTP_USERNAME:                 'Användarnamn',
+  SMTP_PASSWORD:                 'Lösenord',
 };
 
 // Fields whose value should be masked while typing (genuine secrets) —
@@ -127,16 +145,17 @@ function ChannelForm({
   const update = useUpdateChannelConfig();
   const meta   = CHANNEL_META[channel];
   const opts   = PROVIDER_OPTIONS[channel];
-  // All five channels are platform-managed (ADR: platform-managed
+  // SMS/WhatsApp/Push/Voice are platform-managed (ADR: platform-managed
   // integrations) — provider selection and credential entry are hidden for
-  // every one; enabled/sender/display-name/daily-limit remain
-  // tenant-configurable exactly as before.
+  // all four; enabled/sender/display-name/daily-limit remain
+  // tenant-configurable exactly as before. Email is platform-managed too,
+  // UNLESS the tenant has opted into their own SMTP relay (Hybrid model,
+  // Tenant SMTP Email V1) — see isEmailSmtp below.
   const isSms      = channel === 'sms';
   const isEmail    = channel === 'email';
   const isWhatsapp = channel === 'whatsapp';
   const isPush     = channel === 'push';
   const isVoice    = channel === 'voice';
-  const isPlatformManagedProvider = isSms || isEmail || isWhatsapp || isPush || isVoice;
 
   const [enabled,           setEnabled]           = useState(config?.enabled              ?? false);
   const [provider,          setProvider]          = useState(config?.provider               ?? '');
@@ -149,6 +168,11 @@ function ChannelForm({
   // to the browser, only a masked display fragment (config.credentials_masked).
   const [credInputs, setCredInputs] = useState<Record<string, string>>({});
   const sendMsg = useSendMessage();
+  const testConnection = useTestSmtpConnection();
+  const [connTestResult, setConnTestResult] = useState<{ status: SmtpTestStatus; error: string | null } | null>(null);
+
+  const isEmailSmtp = isEmail && provider === EMAIL_TENANT_SMTP_PROVIDER;
+  const isPlatformManagedProvider = isSms || isWhatsapp || isPush || isVoice || (isEmail && !isEmailSmtp);
 
   // Sync when config loads
   useEffect(() => {
@@ -159,6 +183,7 @@ function ChannelForm({
       setDisplayName(config.display_name ?? '');
       setDailyLimit(String(config.daily_limit));
       setCredInputs({});
+      setConnTestResult(null);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.id]);
@@ -182,10 +207,23 @@ function ChannelForm({
   const hasOwnEmailKey = !!emailKeyField
     && ((credInputs[emailKeyField]?.trim() ?? '') !== '' || (config?.credentials_configured?.[emailKeyField] ?? false));
   const senderDomain = channel === 'email' ? emailSenderDomain(fromAddress) : null;
-  const senderDomainInvalid = channel === 'email' && !!senderDomain && (
+  // The free-mail/platform-domain guard only makes sense for Resend-style
+  // provider-account domain verification — a tenant's own SMTP relay has no
+  // such concept (a real @gmail.com From via the tenant's own Gmail SMTP
+  // account is entirely valid). SMTP has its own rule below instead.
+  const senderDomainInvalid = channel === 'email' && !isEmailSmtp && !!senderDomain && (
     UNVERIFIABLE_EMAIL_DOMAINS.has(senderDomain)
     || (hasOwnEmailKey && senderDomain === PLATFORM_DOMAIN)
   );
+
+  // SMTP From-address rule (architecture review Q6): must match — or share
+  // a domain with — the SMTP username, since real relays reject/rewrite a
+  // mismatched From. Only checkable client-side while the username is being
+  // actively typed this session (the real stored value is never sent to the
+  // browser) — the server enforces this unconditionally regardless.
+  const smtpUsernameTyped = credInputs.SMTP_USERNAME?.trim();
+  const smtpUsernameDomain = smtpUsernameTyped ? emailSenderDomain(smtpUsernameTyped) : null;
+  const smtpFromDomainInvalid = isEmailSmtp && !!senderDomain && !!smtpUsernameDomain && senderDomain !== smtpUsernameDomain;
 
   function handleTest() {
     if (!testAddr.trim() || !enabled) return;
@@ -204,6 +242,28 @@ function ChannelForm({
     );
   }
 
+  const SMTP_TEST_MESSAGES: Record<SmtpTestStatus, string> = {
+    ok:                 'SMTP-anslutningen lyckades.',
+    connection_failed:  'Kunde inte ansluta till SMTP-servern.',
+    tls_failed:         'Kunde inte upprätta en säker anslutning.',
+    auth_failed:        'Autentisering misslyckades. Kontrollera användarnamn och lösenord.',
+  };
+
+  function handleTestConnection() {
+    setConnTestResult(null);
+    testConnection.mutate(undefined, {
+      onSuccess: (result) => {
+        setConnTestResult(result);
+        if (result.status === 'ok') toast({ title: SMTP_TEST_MESSAGES.ok });
+        else toast({ title: SMTP_TEST_MESSAGES[result.status], variant: 'destructive' });
+      },
+      onError: (e) => {
+        setConnTestResult({ status: 'connection_failed', error: e instanceof Error ? e.message : null });
+        toast({ title: SMTP_TEST_MESSAGES.connection_failed, variant: 'destructive' });
+      },
+    });
+  }
+
   function handleSave() {
     const credentials = Object.fromEntries(
       Object.entries(credInputs).filter(([, v]) => v.trim() !== ''),
@@ -219,7 +279,7 @@ function ChannelForm({
         ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
       },
       {
-        onSuccess: () => { toast({ title: `${meta.label} uppdaterat` }); setCredInputs({}); },
+        onSuccess: () => { toast({ title: `${meta.label} uppdaterat` }); setCredInputs({}); setConnTestResult(null); },
         onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
       },
     );
@@ -264,8 +324,19 @@ function ChannelForm({
       {/* Form fields */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs font-medium text-foreground">Leverantör</label>
-          {isPlatformManagedProvider ? (
+          <label className="text-xs font-medium text-foreground">
+            {isEmail ? 'E-postleverantör' : 'Leverantör'}
+          </label>
+          {isEmail ? (
+            <select
+              value={provider === EMAIL_TENANT_SMTP_PROVIDER ? EMAIL_TENANT_SMTP_PROVIDER : ''}
+              onChange={(e) => setProvider(e.target.value)}
+              className="w-full h-9 text-sm px-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <option value="">TrafikskolaOS</option>
+              <option value={EMAIL_TENANT_SMTP_PROVIDER}>Min SMTP-server</option>
+            </select>
+          ) : isPlatformManagedProvider ? (
             <div className="h-9 flex items-center px-3 text-sm text-muted-foreground border border-dashed border-border rounded-md bg-muted/30">
               Hanteras av plattformen
             </div>
@@ -292,7 +363,7 @@ function ChannelForm({
             placeholder={channel === 'email' ? 'noreply@dinskola.se' : channel === 'sms' ? '+46701234567 eller Din Trafikskola' : '—'}
             className={cn(
               'w-full h-9 px-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40',
-              (senderTooLong || senderDomainInvalid) ? 'border-destructive focus:ring-destructive/40' : 'border-border',
+              (senderTooLong || senderDomainInvalid || smtpFromDomainInvalid) ? 'border-destructive focus:ring-destructive/40' : 'border-border',
             )}
           />
           {channel === 'sms' && (
@@ -304,7 +375,18 @@ function ChannelForm({
               <p className="text-[10px] text-muted-foreground">Telefonnummer eller ett textnamn på max {SMS_ALPHA_SENDER_MAX} tecken.</p>
             )
           )}
-          {channel === 'email' && (
+          {isEmailSmtp && (
+            smtpFromDomainInvalid ? (
+              <p className="text-[10px] text-destructive">
+                Avsändaradressen måste tillhöra samma domän som SMTP-användarnamnet ({smtpUsernameDomain}).
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                Måste matcha eller tillhöra samma domän som SMTP-användarnamnet.
+              </p>
+            )
+          )}
+          {channel === 'email' && !isEmailSmtp && (
             senderDomainInvalid ? (
               <p className="text-[10px] text-destructive">
                 {senderDomain === PLATFORM_DOMAIN
@@ -381,14 +463,29 @@ function ChannelForm({
                       </span>
                     )}
                   </label>
-                  <input
-                    type={isSecretField(field) ? 'password' : 'text'}
-                    value={credInputs[field] ?? ''}
-                    onChange={(e) => setCredInputs((c) => ({ ...c, [field]: e.target.value }))}
-                    placeholder={configured ? '••••••••  (ange för att ersätta)' : 'Klistra in värde'}
-                    autoComplete="off"
-                    className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
-                  />
+                  {field === 'SMTP_SECURITY' ? (
+                    <select
+                      value={credInputs.SMTP_SECURITY ?? (configured ? '' : 'starttls')}
+                      onChange={(e) => setCredInputs((c) => ({ ...c, SMTP_SECURITY: e.target.value }))}
+                      className="w-full h-9 text-sm px-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    >
+                      {configured && !credInputs.SMTP_SECURITY && <option value="">— Oförändrad —</option>}
+                      {SMTP_SECURITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type={isSecretField(field) ? 'password' : 'text'}
+                      value={credInputs[field] ?? ''}
+                      onChange={(e) => setCredInputs((c) => ({ ...c, [field]: e.target.value }))}
+                      placeholder={
+                        field === 'SMTP_PORT' && !configured ? '587'
+                        : configured ? '••••••••  (ange för att ersätta)'
+                        : 'Klistra in värde'
+                      }
+                      autoComplete="off"
+                      className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                  )}
                 </div>
               );
             })}
@@ -396,6 +493,33 @@ function ChannelForm({
           <p className="text-[10px] text-muted-foreground">
             Uppgifterna krypteras och sparas för er organisation — de visas aldrig i klartext igen efter sparande.
           </p>
+          {isEmailSmtp && (
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={testConnection.isPending || !config || config.provider !== EMAIL_TENANT_SMTP_PROVIDER}
+                onClick={handleTestConnection}
+              >
+                {testConnection.isPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Plug className="w-3.5 h-3.5 mr-1.5" />}
+                Testa anslutning
+              </Button>
+              {connTestResult && (
+                <span className={cn(
+                  'text-xs flex items-center gap-1',
+                  connTestResult.status === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive',
+                )}>
+                  {connTestResult.status === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <XCircle className="w-3.5 h-3.5 shrink-0" />}
+                  {SMTP_TEST_MESSAGES[connTestResult.status]}
+                </span>
+              )}
+            </div>
+          )}
+          {isEmailSmtp && (!config || config.provider !== EMAIL_TENANT_SMTP_PROVIDER) && (
+            <p className="text-[10px] text-amber-600 dark:text-amber-400">Spara konfigurationen innan ni testar anslutningen.</p>
+          )}
         </div>
       )}
 
@@ -440,8 +564,8 @@ function ChannelForm({
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={update.isPending || !isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid}
-            className={cn((!isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid) && 'opacity-40')}
+            disabled={update.isPending || !isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid || smtpFromDomainInvalid}
+            className={cn((!isDirty || invalidEnabledWithoutProvider || senderTooLong || senderDomainInvalid || smtpFromDomainInvalid) && 'opacity-40')}
           >
             <Save className="w-3.5 h-3.5 mr-1.5" />
             {update.isPending ? 'Sparar…' : 'Spara'}
@@ -474,8 +598,9 @@ export function ChannelSettingsPage() {
         <div className="flex items-center gap-2 text-xs text-muted-foreground rounded-lg border border-border bg-muted/20 px-4 py-2.5">
           <Info className="w-3.5 h-3.5 shrink-0" />
           <span>
-            Alla kanaler hanteras av plattformen — inga inloggningsuppgifter behövs. Aktivera en kanal med
-            reglaget, fyll i avsändarnamn/-adress och sändningsgräns, och spara.
+            SMS, WhatsApp, push och röstsamtal hanteras av plattformen — inga inloggningsuppgifter behövs.
+            E-post kan antingen hanteras av plattformen eller skickas via er egen SMTP-server. Aktivera en
+            kanal med reglaget, fyll i avsändarnamn/-adress och sändningsgräns, och spara.
           </span>
         </div>
 
