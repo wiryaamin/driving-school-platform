@@ -8,7 +8,7 @@ import {
   Receipt, CreditCard, Wallet,
   Settings, UserCheck, Smartphone,
   Send, Boxes, Building2,
-  UserPlus, Package, Tag, ShoppingCart, ClipboardList,
+  Package, Tag, ShoppingCart,
   BookOpen, Percent, Lock, FileDown, Landmark, Rocket, PieChart, FileText,
   ChevronDown, ShieldCheck, Megaphone, HelpCircle, ScrollText,
   type LucideIcon,
@@ -86,8 +86,6 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { key: 'customers',      labelSv: 'Kunder',          icon: Users,          path: '/students',      permission: 'students:student:read' as Permission },
       { key: 'foretagskunder', labelSv: 'Företagskunder',  icon: Building2,      path: '/corporate',     permission: null },
-      { key: 'leads',          labelSv: 'Leads',           icon: UserPlus,       path: '/leads',         permission: null },
-      { key: 'enrollments',    labelSv: 'Anmälningar',     icon: ClipboardList,  path: '/enrollments',   permission: 'enrollment:request:read' as Permission },
       { key: 'communication',  labelSv: 'Kommunikation',   icon: Send,           path: '/communication', permission: null },
       { key: 'documents',      labelSv: 'Dokumentarkiv',   icon: FileText,       path: '/documents',     permission: 'documents:document:read' as Permission },
     ],

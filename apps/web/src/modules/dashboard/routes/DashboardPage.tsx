@@ -1,12 +1,12 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import {
-  GraduationCap, Calendar, Receipt, TrendingUp, Users, AlertTriangle,
+  GraduationCap, Calendar, Receipt, Users, AlertTriangle,
   Clock, UserPlus, CalendarPlus, UserCheck, RefreshCcw, ChevronRight, Search, CalendarCheck,
-  MessageSquare, CalendarDays, LayoutGrid, ListFilter, Bell, SlidersHorizontal,
+  MessageSquare, CalendarDays, LayoutGrid, ListFilter, Bell, SlidersHorizontal, ClipboardList,
 } from 'lucide-react';
 import { useNavigate, Link, NavLink } from 'react-router-dom';
 import { useSession } from '@shared/hooks/useSession.js';
-import { formatTime, formatSekRounded } from '@platform/utils';
+import { formatTime } from '@platform/utils';
 import { usePermissions } from '@core/rbac/hooks.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import type { Permission } from '@core/rbac/permissions.js';
@@ -22,6 +22,8 @@ import { useQueueHealth } from '@modules/communication/hooks/useCommunication.js
 import { useRecentActivity } from '@shared/hooks/useNotificationBell.js';
 import type { Notification } from '@shared/hooks/useNotificationBell.js';
 import type { LessonSlot, Instructor } from '@platform/types';
+import { useLeadsList, deriveLeadCounts } from '@modules/leads/index.js';
+import { useEnrollmentList } from '@modules/enrollments/index.js';
 
 // ─── In-page navigation tabs ──────────────────────────────────────────────────
 
@@ -167,6 +169,15 @@ export function DashboardPage() {
   const { data: pendingBookingsData, isLoading: bookingsLoading } = useBookingList({ from: pendingFrom, to: pendingTo, per_page: 100 }, { enabled: orgReady });
   const { data: queueHealthData }    = useQueueHealth({ enabled: orgReady });
   const { data: recentActivityData, isLoading: activityLoading } = useRecentActivity(5);
+
+  // Leads / Anmälningar — same data sources as their own standalone pages
+  // (useLeadsList already shared with LeadsPage; useEnrollmentList already
+  // shared with EnrollmentListPage), now also surfaced as top-row KPIs.
+  const { data: leadsData, isLoading: leadsLoading } = useLeadsList();
+  const leadCounts = useMemo(() => deriveLeadCounts(leadsData ?? []), [leadsData]);
+  const leadsTotalActive = leadCounts.new + leadCounts.contacted;
+
+  const { data: enrollmentsData, isLoading: enrollmentsLoading } = useEnrollmentList({ per_page: 1 });
 
   const reservedCount = useMemo(
     () => (pendingBookingsData?.data ?? []).filter((b) => b.status === 'reserved').length,
@@ -405,6 +416,61 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {/* ── KPI row ─────────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <PermissionGate permission="scheduling:booking:read">
+            <StatCard
+              key="lessons"
+              title="Dagens lektioner"
+              value={String(displayMetrics?.today_slots?.total ?? 0)}
+              description="Schemalagda"
+              icon={Calendar}
+              isLoading={metrics.isLoading && !displayMetrics}
+              onClick={() => navigate('/scheduling')}
+            />
+          </PermissionGate>
+          <StatCard
+            key="students"
+            title="Aktiva elever"
+            value={String(activeCount)}
+            description="Registrerade"
+            icon={Users}
+            isLoading={metrics.isLoading && !displayMetrics}
+            onClick={() => navigate('/students')}
+          />
+          <PermissionGate permission="scheduling:booking:read">
+            <StatCard
+              key="today-lessons"
+              title="Elever med lektion"
+              value={String(studentsWithLessonsToday)}
+              description="Kör idag"
+              icon={GraduationCap}
+              isLoading={metrics.isLoading && !displayMetrics}
+              onClick={() => navigate('/scheduling')}
+            />
+          </PermissionGate>
+          <StatCard
+            key="leads"
+            title="Leads"
+            value={String(leadsTotalActive)}
+            description={`${leadCounts.enrolled} inskrivna`}
+            icon={UserPlus}
+            isLoading={leadsLoading}
+            onClick={() => navigate('/leads')}
+          />
+          <PermissionGate permission="enrollment:request:read">
+            <StatCard
+              key="enrollments"
+              title="Anmälningar"
+              value={String(enrollmentsData?.meta.total ?? 0)}
+              description="Nya anmälningar"
+              icon={ClipboardList}
+              isLoading={enrollmentsLoading}
+              onClick={() => navigate('/enrollments')}
+            />
+          </PermissionGate>
+        </div>
+
         {/* ── Main 3-column grid ──────────────────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
@@ -454,63 +520,6 @@ export function DashboardPage() {
               />
             </PermissionGate>
           </div>
-        </div>
-
-        {/* ── KPI row ─────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <PermissionGate permission="scheduling:booking:read">
-            <StatCard
-              key="lessons"
-              title="Dagens lektioner"
-              value={String(displayMetrics?.today_slots?.total ?? 0)}
-              description="Schemalagda"
-              icon={Calendar}
-              isLoading={metrics.isLoading && !displayMetrics}
-              onClick={() => navigate('/scheduling')}
-            />
-          </PermissionGate>
-          <StatCard
-            key="students"
-            title="Aktiva elever"
-            value={String(activeCount)}
-            description="Registrerade"
-            icon={Users}
-            isLoading={metrics.isLoading && !displayMetrics}
-            onClick={() => navigate('/students')}
-          />
-          <PermissionGate permission="scheduling:booking:read">
-            <StatCard
-              key="today-lessons"
-              title="Elever med lektion"
-              value={String(studentsWithLessonsToday)}
-              description="Kör idag"
-              icon={GraduationCap}
-              isLoading={metrics.isLoading && !displayMetrics}
-              onClick={() => navigate('/scheduling')}
-            />
-          </PermissionGate>
-          <PermissionGate permission="finance:invoice:read">
-            <StatCard
-              key="invoices"
-              title="Obet. fakturor"
-              value={String(displayMetrics?.pending_invoices?.pendingCount ?? 0)}
-              description={overdueCount > 0 ? `${overdueCount} förfallna` : 'Obetald'}
-              icon={Receipt}
-              isLoading={metrics.isLoading && !displayMetrics}
-              onClick={() => navigate('/finance/invoices')}
-            />
-          </PermissionGate>
-          <PermissionGate permission="finance:invoice:read">
-            <StatCard
-              key="revenue"
-              title="Månadsintäkt"
-              value={formatSekRounded(displayMetrics?.monthly_revenue?.amount ?? 0)}
-              description="Denna månad"
-              icon={TrendingUp}
-              isLoading={metrics.isLoading && !displayMetrics}
-              onClick={() => navigate('/finance/invoices')}
-            />
-          </PermissionGate>
         </div>
 
         {/* ── Lower section: Alerts | Messages | Notices ───────────────────── */}

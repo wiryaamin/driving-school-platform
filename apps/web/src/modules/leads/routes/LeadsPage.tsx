@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Users, Mail, Phone, Clock, CheckCircle, XCircle, MessageSquare,
   TrendingUp, Plus, ChevronRight, ArrowRight, ClipboardList,
@@ -11,34 +11,10 @@ import { useSession } from '@shared/hooks/useSession.js';
 import { cn } from '@/lib/utils.js';
 import { LeadDetailSheet } from '../components/LeadDetailSheet.js';
 import { CreateLeadDialog } from '../components/CreateLeadDialog.js';
+import { useLeadsList } from '../hooks/useLeadsList.js';
+import type { Lead, LeadStatus } from '../hooks/useLeadsList.js';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type LeadStatus = 'new' | 'contacted' | 'enrolled' | 'declined';
-
-export interface Lead {
-  id:                         string;
-  first_name:                 string;
-  last_name:                  string;
-  email:                      string | null;
-  phone:                      string | null;
-  license_category:           string;
-  notes:                      string | null;
-  status:                     LeadStatus;
-  source:                     string;
-  created_at:                 string;
-  updated_at:                 string;
-  preferred_start_date:       string | null;
-  driving_experience:         string | null;
-  learner_permit_status:      string | null;
-  preferred_transmission:     string;
-  preferred_lesson_times:     string[];
-  preferred_language:         string;
-  existing_license_category:  string | null;
-  needs_theory:                boolean;
-  needs_risk1:                 boolean;
-  needs_risk2:                 boolean;
-}
+export type { Lead, LeadStatus };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -268,26 +244,7 @@ export function LeadsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const dragIdRef = useRef<string | null>(null);
 
-  const { data: leads = [], isLoading } = useQuery<Lead[]>({
-    queryKey: ['leads', orgId],
-    queryFn: async () => {
-      if (!orgId) return [];
-      const { data, error } = await supabase
-        .from('student_leads')
-        .select(`
-          id, first_name, last_name, email, phone, license_category, notes, status, source, created_at, updated_at,
-          preferred_start_date, driving_experience, learner_permit_status, preferred_transmission,
-          preferred_lesson_times, preferred_language, existing_license_category, needs_theory, needs_risk1, needs_risk2
-        `)
-        .eq('organization_id', orgId)
-        .order('created_at', { ascending: false })
-        .limit(200);
-      if (error) throw new Error(error.message);
-      return (data ?? []) as Lead[];
-    },
-    enabled: !!orgId,
-    staleTime: 30_000,
-  });
+  const { data: leads = [], isLoading } = useLeadsList();
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: LeadStatus }) => {
