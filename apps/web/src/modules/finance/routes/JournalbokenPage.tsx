@@ -30,6 +30,7 @@ import {
   TabsTrigger,
   toast,
 } from '@platform/ui';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
@@ -67,7 +68,7 @@ function entryTypeLabel(t: JournalEntryType | string): string {
     reversal:          'Återföring',
     correction:        'Korrigering',
   };
-  return map[t] ?? t;
+  return map[t] ?? humanizeIdentifier(t);
 }
 
 function entryTypeAccountTypeClass(t: string): string {

@@ -16,6 +16,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import {
   usePlatformOrgDetail,
@@ -157,7 +158,7 @@ function securityEventLabel(eventType: string): string {
     case 'password_reset.forced':       return 'Lösenord återställt (tvingat)';
     case 'session.force_logout':        return 'Administratör utloggad';
     case 'operations.retry_triggered':  return 'Misslyckade händelser återköades';
-    default:                            return eventType;
+    default:                            return humanizeIdentifier(eventType);
   }
 }
 
@@ -1058,7 +1059,7 @@ export function PlatformOrganizationDetailPage() {
                     {(operations!.recent_dead_letters as PlatformOrgDeadLetter[]).map((d) => (
                       <div key={d.id} className="px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-medium text-foreground">{d.event_type}</p>
+                          <p className="text-sm font-medium text-foreground" title={d.event_type}>{humanizeIdentifier(d.event_type)}</p>
                           <span className="text-[11px] text-muted-foreground whitespace-nowrap">
                             {new Date(d.dead_lettered_at).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })}
                           </span>

@@ -7,6 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   toast,
 } from '@platform/ui';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
@@ -41,7 +42,7 @@ const ENTRY_TYPE_LABELS: Record<string, string> = {
 };
 
 function entryTypeLabel(t: string): string {
-  return ENTRY_TYPE_LABELS[t] ?? t;
+  return ENTRY_TYPE_LABELS[t] ?? humanizeIdentifier(t);
 }
 
 function entryTypeBadgeClass(t: string): string {

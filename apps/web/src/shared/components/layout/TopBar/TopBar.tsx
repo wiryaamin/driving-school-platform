@@ -2,6 +2,7 @@ import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, Messag
 import { useState } from 'react';
 import { useNavigate, useLocation, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
+import { humanizeIdentifier } from '@platform/utils';
 import { useSessionStore } from '@core/store/session.store.js';
 import { useAuth } from '@core/auth/hooks.js';
 import { useUiStore } from '@core/store/ui.store.js';
@@ -333,7 +334,7 @@ function NotifRow({ n, onNavigate }: { n: Notification; onNavigate: (path: strin
       <ChannelIcon className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-foreground truncate">
-          {n.subject ?? n.template_key ?? 'Notis'}
+          {n.subject ?? humanizeIdentifier(n.template_key)}
         </p>
         <p className="text-[10px] text-muted-foreground mt-0.5">{when}</p>
       </div>

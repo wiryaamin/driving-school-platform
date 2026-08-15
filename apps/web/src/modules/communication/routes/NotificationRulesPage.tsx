@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, Pencil, Trash2, X, Check, Info, ToggleLeft, ToggleRight, CheckCircle2, AlertTriangle, Clock, Zap, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast, Skeleton } from '@platform/ui';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
@@ -192,7 +193,7 @@ function RuleRow({
   onDelete: (id: string) => void;
   onToggle: (id: string, enabled: boolean) => void;
 }) {
-  const triggerLabel = TRIGGER_EVENTS.find((t) => t.value === rule.trigger_event)?.label ?? rule.trigger_event;
+  const triggerLabel = TRIGGER_EVENTS.find((t) => t.value === rule.trigger_event)?.label ?? humanizeIdentifier(rule.trigger_event);
   const recipientLabel = rule.recipient_type === 'student' ? 'Elev' : 'Instruktör';
 
   return (

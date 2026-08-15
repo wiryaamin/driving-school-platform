@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, toast } from '@platform/ui';
+import { humanizeIdentifier } from '@platform/utils';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
@@ -338,7 +339,7 @@ function AutomationRulesPanel() {
               <div key={rule.id} className="flex items-center gap-3 px-4 py-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground">
-                    {eventMeta?.label ?? rule.trigger_event}
+                    {eventMeta?.label ?? humanizeIdentifier(rule.trigger_event)}
                   </p>
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     {eventMeta && (
@@ -373,7 +374,7 @@ function AutomationRulesPanel() {
                     )}
                     role="switch"
                     aria-checked={rule.enabled}
-                    aria-label={`${eventMeta?.label ?? rule.trigger_event} ${rule.enabled ? 'aktiv' : 'inaktiv'}`}
+                    aria-label={`${eventMeta?.label ?? humanizeIdentifier(rule.trigger_event)} ${rule.enabled ? 'aktiv' : 'inaktiv'}`}
                   >
                     <span className={cn(
                       'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',

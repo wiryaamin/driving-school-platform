@@ -8,6 +8,7 @@ import {
   Input,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import {
   useTrialRequests, useTrialRequestDetail, useApproveTrialRequest,
@@ -175,7 +176,7 @@ function TrialRequestDetailDialog({ id, onClose }: { id: string | null; onClose:
               <ul className="space-y-2">
                 {data.events.map(e => (
                   <li key={e.id} className="text-xs border-l-2 border-border pl-3 py-0.5">
-                    <span className="font-medium text-foreground">{e.event_type}</span>
+                    <span className="font-medium text-foreground">{humanizeIdentifier(e.event_type)}</span>
                     <span className="text-muted-foreground"> — {formatDate(e.created_at)} — {e.actor_type}{e.actor_email ? ` (${e.actor_email})` : ''}</span>
                   </li>
                 ))}

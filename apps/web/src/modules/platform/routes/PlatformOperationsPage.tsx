@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Clock, RefreshCw, AlertCircle, ShieldAlert, Cpu } from 'lucide-react';
 import { Skeleton } from '@platform/ui';
+import { humanizeIdentifier } from '@platform/utils';
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { usePlatformOperationsSummary, useWorkerRunSummary } from '../hooks/usePlatformOpsCenter.js';
@@ -98,7 +99,7 @@ export function PlatformOperationsPage() {
               <Link key={i} to={`/platform/organizations/${o.organization_id}`} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{o.org_name ?? o.organization_id}</p>
-                  <p className="text-xs text-muted-foreground">{o.event_type}</p>
+                  <p className="text-xs text-muted-foreground" title={o.event_type}>{humanizeIdentifier(o.event_type)}</p>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 text-xs">
                   {o.dead_letter_count > 0 && <span className="text-destructive font-semibold">{o.dead_letter_count} dead-letter</span>}

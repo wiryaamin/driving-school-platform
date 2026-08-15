@@ -6,6 +6,7 @@ import {
   Mail, Plus, Loader2, RotateCw, Ban, KeyRound, History, AlertTriangle,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { humanizeIdentifier } from '@platform/utils';
 import {
   Button, Skeleton, Label, Switch,
   Card, CardContent,
@@ -656,7 +657,7 @@ export function UsersSettingsPage() {
                       ) : (
                         historyEvents.map(ev => (
                           <div key={ev.id} className="flex items-center justify-between gap-3 text-xs">
-                            <span className="text-foreground">{IDENTITY_EVENT_LABEL[ev.event_type] ?? ev.event_type}</span>
+                            <span className="text-foreground">{IDENTITY_EVENT_LABEL[ev.event_type] ?? humanizeIdentifier(ev.event_type)}</span>
                             <span className="text-muted-foreground shrink-0">{formatDateTime(ev.occurred_at)}</span>
                           </div>
                         ))

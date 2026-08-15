@@ -8,6 +8,7 @@ import {
   Skeleton, Badge, Tabs, TabsList, TabsTrigger, TabsContent,
 } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
+import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
 import {
   usePlatformSubscriptionDetail,
@@ -463,7 +464,7 @@ export function PlatformSubscriptionDetailPage() {
                   <div className="absolute left-[5px] top-2 bottom-2 w-px bg-border" />
                   {(history as SubscriptionHistoryEvent[]).map((event, idx) => {
                     const dotColor = HISTORY_EVENT_COLOR[event.event_type] ?? 'bg-muted-foreground';
-                    const label    = HISTORY_EVENT_LABEL[event.event_type] ?? event.event_type;
+                    const label    = HISTORY_EVENT_LABEL[event.event_type] ?? humanizeIdentifier(event.event_type);
                     return (
                       <div key={event.id ?? idx} className="relative flex gap-3">
                         <div className={cn('w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 -ml-5 relative z-10 ring-2 ring-background', dotColor)} />

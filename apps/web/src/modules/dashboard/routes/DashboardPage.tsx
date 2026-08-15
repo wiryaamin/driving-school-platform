@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, Link, NavLink } from 'react-router-dom';
 import { useSession } from '@shared/hooks/useSession.js';
-import { formatTime } from '@platform/utils';
+import { formatTime, humanizeIdentifier, formatChannelLabel } from '@platform/utils';
 import { usePermissions } from '@core/rbac/hooks.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import type { Permission } from '@core/rbac/permissions.js';
@@ -1104,9 +1104,9 @@ function MessagesCard({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-foreground truncate">
-                    {msg.subject ?? msg.template_key ?? 'Meddelande'}
+                    {msg.subject ?? humanizeIdentifier(msg.template_key)}
                   </p>
-                  <p className="text-[10px] text-muted-foreground capitalize">{msg.channel}</p>
+                  <p className="text-[10px] text-muted-foreground">{formatChannelLabel(msg.channel)}</p>
                 </div>
                 <span className="text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">{when}</span>
               </div>
