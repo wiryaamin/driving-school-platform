@@ -122,10 +122,80 @@ function buildColumns(): ColumnDef<BookingLogEntry>[] {
   ];
 }
 
+// ─── Detail card ──────────────────────────────────────────────────────────────
+// Same below-table "click a row, see detail underneath" pattern already
+// established for Ändringslogg and Aktivitetslogg in this module — not a new
+// standalone page, not the (already-existing but non-functional) "Visa
+// bokning" navigation used by the Missade tabs, which links to a
+// /scheduling?booking= query param nothing in the app actually reads.
+
+const STATUS_LABEL: Record<string, string> = {
+  draft:        'Utkast',
+  confirmed:    'Bekräftad',
+  reserved:     'Reserverad',
+  completed:    'Genomförd',
+  cancelled:    'Avbokad',
+  no_show:      'Uteblev',
+  rescheduled:  'Ombokad',
+};
+
+function BookingDetail({ entry }: { entry: BookingLogEntry }) {
+  return (
+    <div className="mt-4 bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-primary">{entry.handelse}</p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        <div>
+          <p className="text-muted-foreground mb-0.5">Elev</p>
+          <p className="text-foreground">{entry.elev}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Lärare</p>
+          <p className="text-foreground">{entry.larare}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Lektionstyp</p>
+          <p className="text-foreground">{entry.lektionstyp}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Status</p>
+          <p className="text-foreground">{STATUS_LABEL[entry.status] ?? entry.status}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Datum</p>
+          <p className="text-foreground font-mono">
+            {formatDateShort(entry.datum)} {formatTime(entry.datum)}
+          </p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Fordon</p>
+          <p className="text-foreground">{entry.fordon ?? '—'}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Plats</p>
+          <p className="text-foreground">{entry.plats ?? '—'}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Boknings-ID</p>
+          <p className="text-foreground font-mono">{entry.id.slice(0, 8)}…</p>
+        </div>
+        {entry.avbokningsorsak && (
+          <div className="col-span-2 sm:col-span-4">
+            <p className="text-muted-foreground mb-0.5">Avbokningsorsak</p>
+            <p className="text-foreground">{entry.avbokningsorsak}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function BookingLogsPage() {
-  const [filter, setFilter] = useState<BookingLogFilter>('all');
+  const [filter, setFilter]     = useState<BookingLogFilter>('all');
+  const [selected, setSelected] = useState<BookingLogEntry | null>(null);
 
   const { data, isLoading, error, refetch } = useBookingLogs({ filter, per_page: 50 });
   const records = data?.data ?? [];
@@ -179,9 +249,12 @@ export function BookingLogsPage() {
             emptyMessage="Inga bokningsloggar hittades."
             defaultPageSize={50}
             getRowClassName={(row) => rowClass(row.status)}
+            onRowClick={(row) => setSelected(row.id === selected?.id ? null : row)}
           />
         </div>
       )}
+
+      {selected && <BookingDetail entry={selected} />}
     </div>
   );
 }

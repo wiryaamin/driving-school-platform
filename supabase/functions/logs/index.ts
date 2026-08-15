@@ -278,10 +278,12 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
   let q = (client as any)
     .from('lesson_bookings')
     .select(`id, status, created_at, updated_at, status_changed_at, cancelled_at, no_show_marked_at,
-             starts_at, ends_at, cancellation_category,
+             starts_at, ends_at, cancellation_category, cancellation_reason,
              students ( first_name, last_name ),
              instructors ( first_name, last_name ),
-             lesson_types ( name )`)
+             lesson_types ( name ),
+             vehicles ( registration_number ),
+             organization_locations ( name )`)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
@@ -297,8 +299,11 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
     id: string; status: string; created_at: string; updated_at: string;
     status_changed_at: string | null; cancelled_at: string | null; no_show_marked_at: string | null;
     starts_at: string; ends_at: string;
-    cancellation_category: string | null; students: NameRow | null; instructors: NameRow | null;
+    cancellation_category: string | null; cancellation_reason: string | null;
+    students: NameRow | null; instructors: NameRow | null;
     lesson_types: LessonTypeRow | null;
+    vehicles: { registration_number: string } | null;
+    organization_locations: { name: string } | null;
   };
 
   // Sort the FULL matching set by event timestamp before paginating — the
@@ -320,6 +325,13 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
     larare:    fullName(b.instructors),
     utford:    fullName(b.instructors),
     status:    b.status,
+    // Detail-view fields — the table itself only ever shows the six fields
+    // above (unchanged); these are additive, for the row's detail card only.
+    elev:              fullName(b.students),
+    lektionstyp:       b.lesson_types?.name ?? '—',
+    fordon:            b.vehicles?.registration_number ?? null,
+    plats:             b.organization_locations?.name ?? null,
+    avbokningsorsak:   b.cancellation_reason ?? null,
   }));
 
   return pagedResp(ctx, logs, total, page, per_page);

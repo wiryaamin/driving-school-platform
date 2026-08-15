@@ -9,6 +9,8 @@ export type BookingLogFilter = 'all' | 'booked' | 'cancelled';
 export interface BookingLogEntry {
   id: string; kalla: string; datum: string; handelse: string;
   tillfalle: string; larare: string; utford: string; status: string;
+  elev: string; lektionstyp: string; fordon: string | null;
+  plats: string | null; avbokningsorsak: string | null;
 }
 
 export interface CommunicationLogEntry {
