@@ -57,6 +57,12 @@ const MissedExamsQuerySchema = PageSchema.extend({
   category:      z.enum(['all', 'risk1', 'risk2', 'assessment']).default('all'),
 });
 
+const ActivitiesQuerySchema = PageSchema.extend({
+  entity_type: z.string().optional(),
+  date_from:   z.string().optional(),
+  date_to:     z.string().optional(),
+});
+
 const AuditLogQuerySchema = PageSchema.extend({
   actor_email: z.string().optional(),
   entity_type: z.string().optional(),
@@ -166,6 +172,39 @@ function buildAuditHandelse(operation: string, entityType: string, actorEmail: s
   const entity = auditEntityLabel(entityType);
   const verb   = auditOperationVerb(operation);
   return actorEmail ? `${entity} ${verb} av ${actorEmail}` : `${entity} ${verb}`;
+}
+
+// activity_logs.entity_type uses singular values (e.g. 'vehicle', 'student'),
+// unlike audit_logs' plural table-name values — kept as a separate map
+// rather than reusing AUDIT_ENTITY_LABEL.
+const ACTIVITY_ENTITY_LABEL: Record<string, string> = {
+  student:    'Elev',
+  instructor: 'Lärare',
+  guardian:   'Vårdnadshavare',
+  vehicle:    'Fordon',
+  booking:    'Bokning',
+  invoice:    'Faktura',
+  payment:    'Betalning',
+};
+
+function activityEntityLabel(entityType: string | null): string {
+  if (!entityType) return '—';
+  return ACTIVITY_ENTITY_LABEL[entityType] ?? entityType;
+}
+
+const ACTIVITY_ACTION_LABEL: Record<string, string> = {
+  'guardian_portal.viewed_me':          'Vårdnadshavare visade elevöversikt',
+  'guardian_portal.viewed_progress':    'Vårdnadshavare visade utbildningsstatus',
+  'guardian_portal.viewed_bookings':    'Vårdnadshavare visade bokningar',
+  'guardian_portal.viewed_balance':     'Vårdnadshavare visade saldo',
+  'guardian_portal.viewed_assessments': 'Vårdnadshavare visade bedömningar',
+  'guardian_portal.viewed_documents':   'Vårdnadshavare visade dokument',
+  'vehicle_registry.performed':         'Fordonsuppslag genomfört',
+  'vehicle_registry.cache_hit':         'Fordonsuppslag (cachad träff)',
+};
+
+function activityActionLabel(action: string): string {
+  return ACTIVITY_ACTION_LABEL[action] ?? action;
 }
 
 // ─── Handler: Booking logs ────────────────────────────────────────────────────
@@ -295,19 +334,26 @@ async function handleActivities(req: Request, ctx: EdgeRequestContext): Promise<
   if (guard) return guard;
 
   const raw    = Object.fromEntries(new URL(req.url).searchParams.entries());
-  const parsed = PageSchema.safeParse(raw);
+  const parsed = ActivitiesQuerySchema.safeParse(raw);
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Invalid query', parsed.error.issues);
 
-  const { page, per_page } = parsed.data;
+  const { page, per_page, entity_type, date_from, date_to } = parsed.data;
   const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
-  const { data: logs, count, error } = await (client as any)
+  // eslint-disable-next-line prefer-const
+  let q = (client as any)
     .from('activity_logs')
     .select('id, occurred_at, user_id, user_email, action, description, entity_type, entity_id', { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .order('occurred_at', { ascending: false })
     .range(fromIdx, toIdx);
+
+  if (entity_type) q = q.eq('entity_type', entity_type);
+  if (date_from)   q = q.gte('occurred_at', date_from);
+  if (date_to)     q = q.lt('occurred_at', `${date_to}T23:59:59.999Z`);
+
+  const { data: logs, count, error } = await q;
 
   if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
 
@@ -331,9 +377,10 @@ async function handleActivities(req: Request, ctx: EdgeRequestContext): Promise<
     datum:       l.occurred_at,
     kund:        l.user_id ? fullName(profileMap.get(l.user_id)) : '—',
     email:       l.user_email ?? '—',
-    typ:         l.description ?? l.action,
+    typ:         l.description ?? activityActionLabel(l.action),
     entity_type: l.entity_type,
     entity_id:   l.entity_id,
+    modul:       activityEntityLabel(l.entity_type),
   }));
 
   return pagedResp(ctx, result, count ?? 0, page, per_page);

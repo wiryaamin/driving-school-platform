@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import { Button, DataTable } from '@platform/ui';
@@ -16,6 +16,15 @@ function DatumCell({ iso }: { iso: string }) {
   );
 }
 
+const ENTITY_TYPE_OPTIONS = [
+  { value: '',           label: 'Alla typer' },
+  { value: 'student',    label: 'Elever' },
+  { value: 'instructor', label: 'Lärare' },
+  { value: 'guardian',   label: 'Vårdnadshavare' },
+  { value: 'vehicle',    label: 'Fordon' },
+  { value: 'booking',    label: 'Bokningar' },
+];
+
 function buildColumns(): ColumnDef<ActivityLogEntry>[] {
   return [
     {
@@ -27,7 +36,7 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
     },
     {
       id: 'kund',
-      header: 'Kund',
+      header: 'Användare',
       cell: ({ row }) => (
         <span className="text-sm text-primary font-medium">{row.original.kund}</span>
       ),
@@ -47,7 +56,7 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
     },
     {
       id: 'typ',
-      header: 'Typ',
+      header: 'Vad hände',
       cell: ({ row }) => (
         <span className="text-sm text-foreground">{row.original.typ}</span>
       ),
@@ -57,11 +66,10 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
       id: 'entity',
       header: 'Objekt',
       cell: ({ row }) => {
-        const { entity_type, entity_id } = row.original;
-        if (!entity_type) return <span className="text-sm text-muted-foreground/40">—</span>;
+        const { entity_id, modul } = row.original;
         return (
           <span className="text-xs text-muted-foreground">
-            {entity_type}
+            {modul}
             {entity_id ? <span className="text-muted-foreground/50"> · {entity_id.slice(0, 8)}…</span> : null}
           </span>
         );
@@ -73,15 +81,61 @@ function buildColumns(): ColumnDef<ActivityLogEntry>[] {
 }
 
 export function AktivitetsloggarPage() {
-  const { data, isLoading, error, refetch } = useActivityLogs({ per_page: 50 });
+  const [entityType, setEntityType] = useState('');
+  const [dateFrom,   setDateFrom]   = useState('');
+  const [dateTo,     setDateTo]     = useState('');
+  const [selected,   setSelected]   = useState<ActivityLogEntry | null>(null);
+
+  const { data, isLoading, error, refetch } = useActivityLogs({
+    per_page:    50,
+    entity_type: entityType || undefined,
+    date_from:   dateFrom || undefined,
+    date_to:     dateTo || undefined,
+  });
   const records = data?.data ?? [];
   const columns = useMemo(() => buildColumns(), []);
 
   return (
     <div>
+      {/* Filters — same "Filtrera" card pattern as the other Loggar tabs */}
+      <div className="bg-card border border-border rounded-lg p-4 mb-5">
+        <p className="text-sm font-semibold text-primary mb-3">Filtrera</p>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Typ</label>
+            <select
+              value={entityType}
+              onChange={(e) => setEntityType(e.target.value)}
+              className="w-full text-sm border border-border rounded-md px-3 py-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {ENTITY_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="col-span-2 lg:col-span-2">
+            <label className="text-xs text-muted-foreground block mb-1">Datum</label>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full text-sm border border-border rounded-md px-2 py-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full text-sm border border-border rounded-md px-2 py-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-muted-foreground">
-          Visar alla aktiviteter i plattformen
+          Visar aktivitet i din organisation
         </p>
         <Button variant="ghost" size="icon" onClick={() => void refetch()} disabled={isLoading} title="Uppdatera">
           <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
@@ -101,6 +155,8 @@ export function AktivitetsloggarPage() {
             isLoading={isLoading}
             emptyMessage="Inga aktivitetsloggar hittades."
             defaultPageSize={50}
+            onRowClick={(row) => setSelected(row.id === selected?.id ? null : row)}
+            getRowClassName={(row) => (row.id === selected?.id ? 'bg-muted/40' : '')}
           />
         </div>
       )}
@@ -109,6 +165,42 @@ export function AktivitetsloggarPage() {
         <p className="text-xs text-muted-foreground mt-2">
           Visar {records.length} av {data.meta.total} resultat
         </p>
+      )}
+
+      {/* Detail — same below-table pattern as Ändringslogg, no raw metadata */}
+      {selected && (
+        <div className="mt-4 bg-card border border-border rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-semibold text-primary">{selected.typ}</p>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              Stäng
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <p className="text-muted-foreground mb-0.5">Användare</p>
+              <p className="text-foreground">{selected.kund !== '—' ? selected.kund : (selected.email !== '—' ? selected.email : '—')}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground mb-0.5">Datum</p>
+              <p className="text-foreground font-mono">
+                {formatDateShort(selected.datum)} {formatTime(selected.datum)}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground mb-0.5">Objekt</p>
+              <p className="text-foreground">{selected.modul}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground mb-0.5">Identifierare</p>
+              <p className="text-foreground font-mono">{selected.entity_id ? `${selected.entity_id.slice(0, 8)}…` : '—'}</p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

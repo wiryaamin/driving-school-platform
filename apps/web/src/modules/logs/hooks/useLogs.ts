@@ -19,7 +19,7 @@ export interface CommunicationLogEntry {
 
 export interface ActivityLogEntry {
   id: string; datum: string; kund: string; email: string; typ: string;
-  entity_type: string | null; entity_id: string | null;
+  entity_type: string | null; entity_id: string | null; modul: string;
 }
 
 export interface MissedTrainingEntry {
@@ -92,12 +92,20 @@ export function useCommunicationLogs(
   });
 }
 
-export function useActivityLogs(params: { page?: number | undefined; per_page?: number | undefined } = {}) {
-  const { page = 1, per_page = 50 } = params;
+export function useActivityLogs(
+  params: {
+    page?: number | undefined; per_page?: number | undefined;
+    entity_type?: string | undefined; date_from?: string | undefined; date_to?: string | undefined;
+  } = {},
+) {
+  const { page = 1, per_page = 50, entity_type, date_from, date_to } = params;
   return useQuery({
     queryKey: logKeys.activities(params),
     queryFn: async () => {
       const sp = new URLSearchParams({ page: String(page), per_page: String(per_page) });
+      if (entity_type) sp.set('entity_type', entity_type);
+      if (date_from)   sp.set('date_from', date_from);
+      if (date_to)     sp.set('date_to', date_to);
       const { data, error } = await supabase.functions.invoke<{ data: ActivityLogEntry[]; meta: LogMeta }>(
         `logs/activities?${sp.toString()}`, { method: 'GET' },
       );
