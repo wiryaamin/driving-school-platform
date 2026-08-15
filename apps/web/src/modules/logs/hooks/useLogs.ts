@@ -17,6 +17,10 @@ export interface CommunicationLogEntry {
   id: string; datum: string; kanal: string; kanal_raw: string;
   status: string; status_raw: string; amne: string;
   skickad_av: string; skickad_till: string; typ: string;
+  mottagartyp: string; schemalagd_till: string | null;
+  skickat: string | null; misslyckades: string | null;
+  misslyckande_orsak: string | null;
+  relaterat_objekt: string | null; relaterat_id: string | null;
 }
 
 export interface ActivityLogEntry {

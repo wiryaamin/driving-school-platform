@@ -164,6 +164,31 @@ function notifStatusToLabel(st: string): string {
   return st;
 }
 
+function recipientTypeLabel(rt: string | null): string {
+  if (rt === 'student')    return 'Elev';
+  if (rt === 'instructor') return 'Lärare';
+  if (rt === 'guardian')   return 'Vårdnadshavare';
+  if (rt === 'staff')      return 'Personal';
+  return rt ?? '—';
+}
+
+// Picks the timestamp that actually corresponds to the notification's
+// current status, instead of always using created_at — same evidence-based
+// approach as bookingEventTimestamp() (commit 976d4e3). Live data check:
+// sent_at is populated for only 6 of 71 'sent' rows today (91% null — no DB
+// constraint guarantees it, unlike lesson_bookings' cancelled_at), but for
+// every one of those 6 it differs from created_at, so it's still the more
+// correct value whenever actually present. failed_at was populated for
+// 100% of the (small) 'failed' sample. Never fabricates a value — always
+// falls back to the already-populated created_at.
+function notificationEventTimestamp(row: {
+  status: string; created_at: string; sent_at: string | null; failed_at: string | null;
+}): string {
+  if (row.status === 'sent'   && row.sent_at)   return row.sent_at;
+  if (row.status === 'failed' && row.failed_at) return row.failed_at;
+  return row.created_at;
+}
+
 const AUDIT_ENTITY_LABEL: Record<string, string> = {
   students:              'Elev',
   instructors:           'Lärare',
@@ -338,6 +363,15 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
 }
 
 // ─── Handler: Communication logs ─────────────────────────────────────────────
+//
+// Ordering must follow the same effective event timestamp shown in the
+// "Datum" column (notificationEventTimestamp()) — same reasoning and same
+// fetch-all/sort/paginate-in-memory structure as handleBookingLogs, since
+// PostgREST's .order() can't express a per-row CASE/COALESCE expression.
+// Real notification volumes are even smaller than bookings today (160
+// total across every org), so the same generous cap is safe.
+
+const COMMUNICATION_LOG_FETCH_CAP = 2000;
 
 async function handleCommunications(req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'scheduling:booking:read');
@@ -348,28 +382,28 @@ async function handleCommunications(req: Request, ctx: EdgeRequestContext): Prom
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Invalid query', parsed.error.issues);
 
   const { page, per_page, channel, status } = parsed.data;
-  const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('notifications')
-    .select('id, created_at, channel, status, template_key, subject, metadata, recipient_id, recipient_type, sent_at',
-      { count: 'exact' })
+    .select(`id, created_at, channel, status, template_key, subject, metadata, recipient_id, recipient_type,
+             sent_at, failed_at, failure_reason, scheduled_for, reference_type, reference_id`)
     .eq('organization_id', ctx.organizationId)
     .order('created_at', { ascending: false })
-    .range(fromIdx, toIdx);
+    .range(0, COMMUNICATION_LOG_FETCH_CAP - 1);
 
   if (channel !== 'all') q = q.eq('channel', channel);
-  if (status  !== 'all') q = q.eq('status', status === 'sent' ? 'sent' : status);
+  if (status  !== 'all') q = q.eq('status', status);
 
-  const { data: notifs, count, error } = await q;
+  const { data: notifs, error } = await q;
   if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
 
   // Batch-fetch student contact info for student recipients
-  const studentIds = (notifs ?? [])
-    .filter((n: { recipient_type: string }) => n.recipient_type === 'student')
-    .map((n: { recipient_id: string }) => n.recipient_id);
+  const studentIds = [...new Set<string>(
+    (notifs ?? []).filter((n: { recipient_type: string }) => n.recipient_type === 'student')
+      .map((n: { recipient_id: string }) => n.recipient_id)
+  )];
 
   const { data: students } = studentIds.length > 0
     ? await (client as any).from('students').select('id, email, phone').in('id', studentIds)
@@ -379,11 +413,25 @@ async function handleCommunications(req: Request, ctx: EdgeRequestContext): Prom
     (students ?? []).map((s: { id: string; email: string | null; phone: string | null }) => [s.id, s])
   );
 
-  const logs = (notifs ?? []).map((n: {
+  type NotifRow = {
     id: string; created_at: string; channel: string; status: string; template_key: string;
     subject: string | null; metadata: Record<string, string>; recipient_id: string;
-    recipient_type: string; sent_at: string | null;
-  }) => {
+    recipient_type: string | null; sent_at: string | null; failed_at: string | null;
+    failure_reason: string | null; scheduled_for: string | null;
+    reference_type: string | null; reference_id: string | null;
+  };
+
+  // Sort the FULL matching set by event timestamp before paginating — same
+  // reasoning as handleBookingLogs.
+  const sorted = ((notifs ?? []) as NotifRow[]).slice().sort(
+    (a, b) => new Date(notificationEventTimestamp(b)).getTime() - new Date(notificationEventTimestamp(a)).getTime(),
+  );
+
+  const total    = sorted.length;
+  const fromIdx  = (page - 1) * per_page;
+  const pageRows = sorted.slice(fromIdx, fromIdx + per_page);
+
+  const logs = pageRows.map((n) => {
     const contact = studentMap.get(n.recipient_id);
     const skickadTill = n.channel === 'sms'
       ? (contact?.phone ?? n.metadata?.to ?? '—')
@@ -391,20 +439,29 @@ async function handleCommunications(req: Request, ctx: EdgeRequestContext): Prom
     const skickadAv = n.metadata?.sent_by_name ?? n.metadata?.sender ?? 'System';
 
     return {
-      id:          n.id,
-      datum:       n.created_at,
-      kanal:       channelToLabel(n.channel),
-      kanal_raw:   n.channel,
-      status:      notifStatusToLabel(n.status),
-      status_raw:  n.status,
-      amne:        n.subject ?? '—',
-      skickad_av:  skickadAv,
-      skickad_till: skickadTill,
-      typ:         templateKeyToLabel(n.template_key),
+      id:              n.id,
+      datum:           notificationEventTimestamp(n),
+      kanal:           channelToLabel(n.channel),
+      kanal_raw:       n.channel,
+      status:          notifStatusToLabel(n.status),
+      status_raw:      n.status,
+      amne:            n.subject ?? '—',
+      skickad_av:      skickadAv,
+      skickad_till:    skickadTill,
+      typ:             templateKeyToLabel(n.template_key),
+      // Detail-view fields — the table itself only shows the seven fields
+      // above (unchanged); these are additive, for the row's detail card.
+      mottagartyp:     recipientTypeLabel(n.recipient_type),
+      schemalagd_till: n.scheduled_for,
+      skickat:         n.sent_at,
+      misslyckades:    n.failed_at,
+      misslyckande_orsak: n.failure_reason,
+      relaterat_objekt: n.reference_type,
+      relaterat_id:     n.reference_id,
     };
   });
 
-  return pagedResp(ctx, logs, count ?? 0, page, per_page);
+  return pagedResp(ctx, logs, total, page, per_page);
 }
 
 // ─── Handler: Activity logs ───────────────────────────────────────────────────

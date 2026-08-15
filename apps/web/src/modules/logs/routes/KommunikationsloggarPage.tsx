@@ -111,10 +111,90 @@ function buildColumns(): ColumnDef<CommunicationLogEntry>[] {
   ];
 }
 
+// ─── Detail card ──────────────────────────────────────────────────────────────
+// Same below-table "click a row, see detail underneath" pattern already
+// established for Ändringslogg, Aktivitetslogg, and Bokningsloggar.
+
+function CommunicationDetail({ entry }: { entry: CommunicationLogEntry }) {
+  return (
+    <div className="mt-4 bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-primary">{entry.amne !== '—' ? entry.amne : entry.typ}</p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        <div>
+          <p className="text-muted-foreground mb-0.5">Typ</p>
+          <p className="text-foreground">{entry.typ}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Kanal</p>
+          <p className="text-foreground">{entry.kanal}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Status</p>
+          <p className="text-foreground">{entry.status}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Datum</p>
+          <p className="text-foreground font-mono">
+            {formatDateShort(entry.datum)} {formatTime(entry.datum)}
+          </p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Mottagartyp</p>
+          <p className="text-foreground">{entry.mottagartyp}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Skickad till</p>
+          <p className="text-foreground truncate">{entry.skickad_till}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Skickad av</p>
+          <p className="text-foreground">{entry.skickad_av}</p>
+        </div>
+        {entry.schemalagd_till && (
+          <div>
+            <p className="text-muted-foreground mb-0.5">Schemalagd till</p>
+            <p className="text-foreground font-mono">{formatDateShort(entry.schemalagd_till)} {formatTime(entry.schemalagd_till)}</p>
+          </div>
+        )}
+        {entry.skickat && (
+          <div>
+            <p className="text-muted-foreground mb-0.5">Skickat</p>
+            <p className="text-foreground font-mono">{formatDateShort(entry.skickat)} {formatTime(entry.skickat)}</p>
+          </div>
+        )}
+        {entry.misslyckades && (
+          <div>
+            <p className="text-muted-foreground mb-0.5">Misslyckades</p>
+            <p className="text-foreground font-mono">{formatDateShort(entry.misslyckades)} {formatTime(entry.misslyckades)}</p>
+          </div>
+        )}
+        {entry.relaterat_objekt && (
+          <div>
+            <p className="text-muted-foreground mb-0.5">Relaterat objekt</p>
+            <p className="text-foreground">
+              {entry.relaterat_objekt}
+              {entry.relaterat_id ? <span className="text-muted-foreground/60"> · {entry.relaterat_id.slice(0, 8)}…</span> : null}
+            </p>
+          </div>
+        )}
+        {entry.misslyckande_orsak && (
+          <div className="col-span-2 sm:col-span-4">
+            <p className="text-muted-foreground mb-0.5">Misslyckandeorsak</p>
+            <p className="text-foreground">{entry.misslyckande_orsak}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function KommunikationsloggarPage() {
-  const [channel, setChannel] = useState('all');
+  const [channel, setChannel]   = useState('all');
+  const [selected, setSelected] = useState<CommunicationLogEntry | null>(null);
   const { data, isLoading, error, refetch } = useCommunicationLogs({ channel: channel === 'all' ? undefined : channel, per_page: 50 });
   const records = data?.data ?? [];
   const columns = useMemo(() => buildColumns(), []);
@@ -162,6 +242,7 @@ export function KommunikationsloggarPage() {
             isLoading={isLoading}
             emptyMessage="Inga kommunikationsloggar hittades."
             defaultPageSize={50}
+            onRowClick={(row) => setSelected(row.id === selected?.id ? null : row)}
           />
         </div>
       )}
@@ -171,6 +252,8 @@ export function KommunikationsloggarPage() {
           Visar 1 till {records.length} av {data.meta.total} resultat
         </p>
       )}
+
+      {selected && <CommunicationDetail entry={selected} />}
     </div>
   );
 }
