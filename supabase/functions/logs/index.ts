@@ -236,6 +236,32 @@ function activityActionLabel(action: string): string {
 }
 
 // ─── Handler: Booking logs ────────────────────────────────────────────────────
+//
+// Ordering must follow the same effective event timestamp shown in the
+// "Datum" column (bookingEventTimestamp(), commit 976d4e3), not created_at —
+// otherwise the list and the dates it displays can disagree (a booking
+// cancelled today but created weeks ago must sort as "today", not "weeks
+// ago"). PostgREST's .order() only accepts real column names, not a
+// per-row CASE/COALESCE expression, so it can't express this directly.
+// Fetching one page by created_at and re-sorting only that page would
+// silently break pagination (a later page could contain a row that
+// belongs, by event time, on an earlier page). Instead: fetch every
+// matching row for this org+filter (bounded by BOOKING_LOG_FETCH_CAP as a
+// resource-exhaustion guard — see the constant's own comment), sort the
+// complete set by event timestamp, then paginate in memory. Real org
+// volumes today are tiny (largest is 38 bookings) so this is safe now;
+// if a single tenant's booking history ever approaches the cap, correct
+// server-side ordering would require a small SQL function instead — not
+// implemented here since it isn't needed yet and DB changes were to be
+// avoided unless unavoidable.
+
+// Generous upper bound on how many of an org's own bookings this handler
+// will ever fetch in one request — not a page size. Real orgs are 1-2
+// orders of magnitude below this today. Existing DB-level pagination
+// remains correct up to this cap; beyond it, the oldest-by-created_at
+// rows would be silently excluded rather than the result being wrong in
+// a hidden way.
+const BOOKING_LOG_FETCH_CAP = 2000;
 
 async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'scheduling:booking:read');
@@ -246,7 +272,6 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Invalid query', parsed.error.issues);
 
   const { page, per_page, filter } = parsed.data;
-  const fromIdx = (page - 1) * per_page, toIdx = fromIdx + per_page - 1;
 
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
   // eslint-disable-next-line prefer-const
@@ -256,25 +281,37 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
              starts_at, ends_at, cancellation_category,
              students ( first_name, last_name ),
              instructors ( first_name, last_name ),
-             lesson_types ( name )`, { count: 'exact' })
+             lesson_types ( name )`)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
-    .range(fromIdx, toIdx);
+    .range(0, BOOKING_LOG_FETCH_CAP - 1);
 
   if (filter === 'booked')    q = q.in('status', ['confirmed', 'reserved', 'completed']);
   if (filter === 'cancelled') q = q.eq('status', 'cancelled');
 
-  const { data, count, error } = await q;
+  const { data, error } = await q;
   if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
 
-  const logs = (data ?? []).map((b: {
+  type BookingRow = {
     id: string; status: string; created_at: string; updated_at: string;
     status_changed_at: string | null; cancelled_at: string | null; no_show_marked_at: string | null;
     starts_at: string; ends_at: string;
     cancellation_category: string | null; students: NameRow | null; instructors: NameRow | null;
     lesson_types: LessonTypeRow | null;
-  }) => ({
+  };
+
+  // Sort the FULL matching set by event timestamp before paginating — the
+  // whole point of this handler's structure (see comment above).
+  const sorted = ((data ?? []) as BookingRow[]).slice().sort(
+    (a, b) => new Date(bookingEventTimestamp(b)).getTime() - new Date(bookingEventTimestamp(a)).getTime(),
+  );
+
+  const total    = sorted.length;
+  const fromIdx  = (page - 1) * per_page;
+  const pageRows = sorted.slice(fromIdx, fromIdx + per_page);
+
+  const logs = pageRows.map((b) => ({
     id:        b.id,
     kalla:     'A',
     datum:     bookingEventTimestamp(b),
@@ -285,7 +322,7 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
     status:    b.status,
   }));
 
-  return pagedResp(ctx, logs, count ?? 0, page, per_page);
+  return pagedResp(ctx, logs, total, page, per_page);
 }
 
 // ─── Handler: Communication logs ─────────────────────────────────────────────
