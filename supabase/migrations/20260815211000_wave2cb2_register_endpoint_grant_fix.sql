@@ -1,0 +1,26 @@
+-- Corrects an error in 20260815210000: register_regulatory_endpoint was
+-- granted to service_role only. Its body-level check
+-- (is_trusted_service_context()) already correctly allows a legitimate
+-- platform admin through even when connecting as the `authenticated`
+-- Postgres role, since is_platform_admin() reads the caller's own JWT
+-- claim independent of which DB role executed the query. But the
+-- service_role-only grant blocked that path at the PostgREST layer before
+-- the function body ever ran — and the function's only real caller,
+-- compliance/index.ts's handleRegisterEndpoint, always connects via the
+-- anon key + forwarded Authorization header (the `authenticated` role),
+-- never service_role directly. The net effect: no real caller, including
+-- a legitimate platform admin, could reach this function at all.
+--
+-- Live-confirmed during Wave 2C-B corrective testing: a platform-admin
+-- JWT (is_platform_admin: true) calling via the authenticated role got
+-- "permission denied for function register_regulatory_endpoint" (42501)
+-- at the grant layer, never reaching the internal check.
+--
+-- Fix: grant EXECUTE to authenticated as well as service_role. The
+-- function body's own is_trusted_service_context() check (unchanged)
+-- remains the actual authorization boundary — an ordinary tenant user
+-- calling via authenticated with no platform-admin claim and no
+-- service-role JWT is still rejected there, live-verified in the same
+-- test run this migration corrects.
+
+GRANT EXECUTE ON FUNCTION public.register_regulatory_endpoint(text, text, text, text, boolean, text, jsonb, jsonb, uuid) TO authenticated;
