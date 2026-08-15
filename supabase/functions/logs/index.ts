@@ -591,6 +591,13 @@ async function handleMissedTraining(req: Request, ctx: EdgeRequestContext): Prom
 
 // ─── Handler: Missed exam moments ────────────────────────────────────────────
 
+function examCategoryLabel(category: string | undefined): string {
+  if (category === 'risk1')      return 'Riskutbildning 1';
+  if (category === 'risk2')      return 'Riskutbildning 2';
+  if (category === 'assessment') return 'Bedömning';
+  return category ?? '—';
+}
+
 async function handleMissedExams(req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'scheduling:booking:read');
   if (guard) return guard;
@@ -622,15 +629,31 @@ async function handleMissedExams(req: Request, ctx: EdgeRequestContext): Promise
   if (examTypeIds.length === 0) return pagedResp(ctx, [], 0, page, per_page);
 
   // Step 2: query bookings for those lesson types
+  //
+  // status must be exactly 'no_show' — this endpoint's own name is "missed
+  // examination moments", and its sibling handleMissedTraining already
+  // establishes status='no_show' as this codebase's actual definition of
+  // "missed" for lesson_bookings. The previous
+  // .in('status', ['confirmed','completed','no_show']) included upcoming
+  // (confirmed) and successfully-completed exam bookings alongside genuine
+  // no-shows, which doesn't match "missed" under any reading — a real
+  // functional bug, not a design choice, corrected here rather than
+  // preserved.
+  //
+  // starts_at is a real column (every row already has status='no_show'
+  // after the fix above), so DB-level ordering + .range() pagination is
+  // already correct — same reasoning as handleMissedTraining.
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('lesson_bookings')
-    .select(`id, starts_at, ends_at, lesson_type_id,
+    .select(`id, starts_at, ends_at, lesson_type_id, no_show_marked_at,
              students ( first_name, last_name ),
-             instructors ( first_name, last_name )`, { count: 'exact' })
+             instructors ( first_name, last_name ),
+             vehicles ( registration_number ),
+             organization_locations ( name )`, { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .in('lesson_type_id', examTypeIds)
-    .in('status', ['confirmed', 'completed', 'no_show'])
+    .eq('status', 'no_show')
     .is('deleted_at', null)
     .order('starts_at', { ascending: false })
     .range(fromIdx, toIdx);
@@ -642,17 +665,26 @@ async function handleMissedExams(req: Request, ctx: EdgeRequestContext): Promise
 
   const result = (data ?? []).map((b: {
     id: string; starts_at: string; ends_at: string; lesson_type_id: string;
+    no_show_marked_at: string | null;
     students: NameRow | null; instructors: NameRow | null;
+    vehicles: { registration_number: string } | null;
+    organization_locations: { name: string } | null;
   }) => {
     const lt = examTypeMap.get(b.lesson_type_id);
     return {
-      id:         b.id,
-      kund:       fullName(b.students),
-      larare:     fullName(b.instructors),
-      tidslucka:  lt?.name ?? '—',
-      datum:      buildTillfalle(lt?.name ?? '', b.starts_at, b.ends_at),
-      typ:        lt?.name ?? '—',
-      bokning_id: b.id,
+      id:                b.id,
+      kund:              fullName(b.students),
+      larare:            fullName(b.instructors),
+      tidslucka:         lt?.name ?? '—',
+      datum:             b.starts_at,
+      typ:               examCategoryLabel(lt?.category),
+      bokning_id:        b.id,
+      // Detail-view fields — the table itself shows the six fields above
+      // (unchanged shape), these are additive, for the row's detail card.
+      tillfalle:         buildTillfalle(lt?.name ?? '', b.starts_at, b.ends_at),
+      no_show_marked_at: b.no_show_marked_at,
+      fordon:            b.vehicles?.registration_number ?? null,
+      plats:             b.organization_locations?.name ?? null,
     };
   });
 

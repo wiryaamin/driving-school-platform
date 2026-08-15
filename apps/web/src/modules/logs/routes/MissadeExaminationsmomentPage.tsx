@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { ColumnDef } from '@platform/ui';
 import { Button, DataTable } from '@platform/ui';
+import { formatDateShort, formatTime } from '@platform/utils';
 import { useMissedExamLogs } from '../hooks/useLogs.js';
 import type { MissedExamEntry } from '../hooks/useLogs.js';
 import { useInstructorList } from '@modules/instructors/hooks/useInstructors.js';
@@ -16,17 +16,28 @@ const EXAM_CATEGORIES = [
   { value: 'assessment', label: 'Bedömning' },
 ];
 
+// Always Europe/Stockholm, regardless of the viewer's device timezone — same
+// shared formatter already used across the rest of Loggar (see commit
+// 46ad024). datum is now the raw scheduled exam start time (starts_at) —
+// previously this column rendered a full descriptive sentence instead of a
+// real timestamp.
+function DatumCell({ iso }: { iso: string }) {
+  return (
+    <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+      {formatDateShort(iso)} <span className="text-muted-foreground/60">|</span> {formatTime(iso)}
+    </span>
+  );
+}
+
 // ─── Columns ──────────────────────────────────────────────────────────────────
 
-function buildColumns(navigate: (path: string) => void): ColumnDef<MissedExamEntry>[] {
+function buildColumns(): ColumnDef<MissedExamEntry>[] {
   return [
     {
       id: 'kund',
-      header: 'Kund',
+      header: 'Elev',
       cell: ({ row }) => (
-        <span className="text-sm text-primary font-medium cursor-pointer hover:underline">
-          {row.original.kund}
-        </span>
+        <span className="text-sm text-primary font-medium">{row.original.kund}</span>
       ),
       enableSorting: false,
     },
@@ -41,54 +52,105 @@ function buildColumns(navigate: (path: string) => void): ColumnDef<MissedExamEnt
     },
     {
       id: 'tidslucka',
-      header: 'Tidslucka',
+      header: 'Lektionstyp',
       cell: ({ row }) => (
         <span className="text-sm text-muted-foreground">{row.original.tidslucka}</span>
       ),
-      size: 140,
+      size: 200,
       enableSorting: false,
     },
     {
       id: 'datum',
       header: 'Datum',
-      cell: ({ row }) => (
-        <span className="text-sm text-foreground">{row.original.datum}</span>
-      ),
+      cell: ({ row }) => <DatumCell iso={row.original.datum} />,
+      size: 150,
       enableSorting: false,
     },
     {
       id: 'typ',
-      header: 'Typ',
+      header: 'Examinationstyp',
       cell: ({ row }) => (
         <span className="text-sm text-muted-foreground">{row.original.typ}</span>
       ),
-      size: 240,
-      enableSorting: false,
-    },
-    {
-      id: 'bokning',
-      header: 'Bokning',
-      cell: ({ row }) => (
-        <button
-          onClick={() => navigate(`/scheduling?booking=${row.original.bokning_id}`)}
-          className="text-xs text-primary hover:underline whitespace-nowrap"
-        >
-          Visa bokning
-        </button>
-      ),
-      size: 110,
+      size: 180,
       enableSorting: false,
     },
   ];
 }
 
+// ─── Detail card ──────────────────────────────────────────────────────────────
+// Same below-table "click a row, see detail underneath" pattern already
+// established for Ändringslogg/Aktivitetslogg/Bokningsloggar/
+// Kommunikationsloggar/Missade utbildningsloggar — replaces the previous
+// "Visa bokning" button (dead: /scheduling?booking=<id> is read by nothing
+// in the app) and the dead cursor-pointer/hover:underline "Kund" cell that
+// never had a click handler.
+
+function MissedExamDetail({ entry }: { entry: MissedExamEntry }) {
+  return (
+    <div className="mt-4 bg-card border border-border rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-primary">{entry.tillfalle}</p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        <div>
+          <p className="text-muted-foreground mb-0.5">Elev</p>
+          <p className="text-foreground">{entry.kund}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Lärare</p>
+          <p className="text-foreground">{entry.larare}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Lektionstyp</p>
+          <p className="text-foreground">{entry.tidslucka}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Examinationstyp</p>
+          <p className="text-foreground">{entry.typ}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Status</p>
+          <p className="text-foreground">Uteblev</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Schemalagd tid</p>
+          <p className="text-foreground font-mono">
+            {formatDateShort(entry.datum)} {formatTime(entry.datum)}
+          </p>
+        </div>
+        {entry.no_show_marked_at && (
+          <div>
+            <p className="text-muted-foreground mb-0.5">Registrerad som utebliven</p>
+            <p className="text-foreground font-mono">
+              {formatDateShort(entry.no_show_marked_at)} {formatTime(entry.no_show_marked_at)}
+            </p>
+          </div>
+        )}
+        <div>
+          <p className="text-muted-foreground mb-0.5">Fordon</p>
+          <p className="text-foreground">{entry.fordon ?? '—'}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Plats</p>
+          <p className="text-foreground">{entry.plats ?? '—'}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground mb-0.5">Boknings-ID</p>
+          <p className="text-foreground font-mono">{entry.bokning_id.slice(0, 8)}…</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function MissadeExaminationsmomentPage() {
-  const navigate = useNavigate();
   const [instructorId, setInstructorId] = useState('');
   const [category,     setCategory]     = useState('all');
   const [page,         setPage]         = useState(1);
+  const [selected,     setSelected]     = useState<MissedExamEntry | null>(null);
 
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
   const instructors = instructorsData?.data ?? [];
@@ -102,7 +164,7 @@ export function MissadeExaminationsmomentPage() {
 
   const records = data?.data ?? [];
   const meta    = data?.meta;
-  const columns = useMemo(() => buildColumns(navigate), [navigate]);
+  const columns = useMemo(() => buildColumns(), []);
   const totalPages = meta ? Math.ceil(meta.total / (meta.per_page ?? 25)) : 1;
 
   return (
@@ -158,6 +220,7 @@ export function MissadeExaminationsmomentPage() {
             emptyMessage="Inga examinationsmoment hittades."
             defaultPageSize={25}
             enablePagination={false}
+            onRowClick={(row) => setSelected(row.id === selected?.id ? null : row)}
           />
         </div>
       )}
@@ -209,6 +272,8 @@ export function MissadeExaminationsmomentPage() {
           </div>
         </div>
       )}
+
+      {selected && <MissedExamDetail entry={selected} />}
     </div>
   );
 }
