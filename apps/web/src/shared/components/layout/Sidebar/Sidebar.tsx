@@ -280,8 +280,30 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
 
       <div className="mx-3 h-px bg-sidebar-border shrink-0" />
 
-      {/* Scrollable operational sections */}
-      <div className="flex-1 overflow-y-auto px-3 py-1 scrollbar-none">
+      {/* Scrollable operational sections.
+          With most/all permissions granted, section content (Kundhantering
+          4 + Planering 2 + Ekonomi 7 + System 3 items, plus headers) runs
+          taller than common laptop viewport heights, and this is a nested
+          scroll region (not page scroll) with an OS-hidden scrollbar on
+          macOS by default — so the last section (SYSTEM, containing
+          Loggar) can sit below the fold with no visual cue that there is
+          more to scroll to. The background-attachment trick below paints a
+          fade at whichever edge still has hidden content, and removes it
+          once scrolled to that edge — pure CSS, no layout/order change. */}
+      <div
+        className="flex-1 overflow-y-auto px-3 py-1 scrollbar-none"
+        style={{
+          backgroundImage: [
+            'linear-gradient(hsl(var(--sidebar-background)) 30%, transparent)',
+            'linear-gradient(transparent, hsl(var(--sidebar-background)) 70%) 0 100%',
+            'linear-gradient(hsla(0, 0%, 0%, 0.28), transparent)',
+            'linear-gradient(transparent, hsla(0, 0%, 0%, 0.28)) 0 100%',
+          ].join(', '),
+          backgroundRepeat: 'no-repeat',
+          backgroundSize: '100% 28px, 100% 28px, 100% 10px, 100% 10px',
+          backgroundAttachment: 'local, local, scroll, scroll',
+        }}
+      >
         {NAVIGATION.map((section) => {
           const visibleItems = visibleOf(section.items);
           if (visibleItems.length === 0) return null;
