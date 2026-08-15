@@ -31,6 +31,8 @@ export interface ActivityLogEntry {
 export interface MissedTrainingEntry {
   id: string; kund: string; larare: string; tidslucka: string;
   datum: string; bokning_id: string;
+  tillfalle: string; no_show_marked_at: string | null;
+  fordon: string | null; plats: string | null;
 }
 
 export interface MissedExamEntry {

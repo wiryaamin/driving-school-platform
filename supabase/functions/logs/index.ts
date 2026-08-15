@@ -540,13 +540,23 @@ async function handleMissedTraining(req: Request, ctx: EdgeRequestContext): Prom
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('lesson_bookings')
-    .select(`id, starts_at, ends_at,
+    .select(`id, starts_at, ends_at, no_show_marked_at,
              students ( first_name, last_name ),
              instructors ( first_name, last_name ),
-             lesson_types ( name )`, { count: 'exact' })
+             lesson_types ( name ),
+             vehicles ( registration_number ),
+             organization_locations ( name )`, { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
     .eq('status', 'no_show')
     .is('deleted_at', null)
+    // starts_at is a real column with no per-row conditional logic (every
+    // row here already has status='no_show'), so DB-level ordering +
+    // .range() pagination is already correct — unlike Bokningsloggar/
+    // Kommunikationsloggar, no fetch-all/sort-in-memory workaround is
+    // needed. starts_at is also the authoritative event timestamp: the
+    // missed-training event is the scheduled lesson itself not happening,
+    // not the later administrative act of marking it (no_show_marked_at),
+    // which is surfaced separately in the detail card instead.
     .order('starts_at', { ascending: false })
     .range(fromIdx, toIdx);
 
@@ -557,15 +567,23 @@ async function handleMissedTraining(req: Request, ctx: EdgeRequestContext): Prom
   if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
 
   const result = (data ?? []).map((b: {
-    id: string; starts_at: string; ends_at: string;
+    id: string; starts_at: string; ends_at: string; no_show_marked_at: string | null;
     students: NameRow | null; instructors: NameRow | null; lesson_types: LessonTypeRow | null;
+    vehicles: { registration_number: string } | null;
+    organization_locations: { name: string } | null;
   }) => ({
-    id:         b.id,
-    kund:       fullName(b.students),
-    larare:     fullName(b.instructors),
-    tidslucka:  b.lesson_types?.name ?? '—',
-    datum:      buildTillfalle(b.lesson_types?.name ?? '', b.starts_at, b.ends_at),
-    bokning_id: b.id,
+    id:                b.id,
+    kund:              fullName(b.students),
+    larare:            fullName(b.instructors),
+    tidslucka:         b.lesson_types?.name ?? '—',
+    datum:             b.starts_at,
+    bokning_id:        b.id,
+    // Detail-view fields — the table itself shows the four fields above
+    // (unchanged shape), these are additive, for the row's detail card only.
+    tillfalle:         buildTillfalle(b.lesson_types?.name ?? '', b.starts_at, b.ends_at),
+    no_show_marked_at: b.no_show_marked_at,
+    fordon:            b.vehicles?.registration_number ?? null,
+    plats:             b.organization_locations?.name ?? null,
   }));
 
   return pagedResp(ctx, result, count ?? 0, page, per_page);
