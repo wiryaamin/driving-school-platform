@@ -94,6 +94,34 @@ function buildHandelse(status: string, studentName: string, instructorName: stri
   return `${studentName} — ${status}`;
 }
 
+// Picks the timestamp that actually corresponds to the event buildHandelse()
+// describes, instead of always using created_at. Evidence for this mapping
+// (checked against real lesson_bookings data, not assumed):
+//   - cancelled_at is DB-constrained NOT NULL iff status='cancelled'
+//     (lesson_bookings_cancel_consistency) — 100% reliable.
+//   - no_show_marked_at is DB-constrained NOT NULL iff status='no_show'
+//     (lesson_bookings_no_show_consistency) — 100% reliable, and more
+//     precise than the generic status_changed_at for this status.
+//   - status_changed_at has no such guarantee (no trigger maintains it; it's
+//     set ad hoc by whichever code path changed the status) — live data
+//     showed it NULL for 60% of 'completed' rows, so it's only used when
+//     actually present, falling back to updated_at (always populated).
+//   - confirmed/reserved/draft and anything else: the creation event IS the
+//     described event ("inbokad"), so created_at is already correct.
+// Never fabricates a value — every branch resolves to an existing,
+// already-populated column.
+function bookingEventTimestamp(row: {
+  status: string; created_at: string; updated_at: string;
+  status_changed_at: string | null; cancelled_at: string | null; no_show_marked_at: string | null;
+}): string {
+  if (row.status === 'cancelled' && row.cancelled_at)    return row.cancelled_at;
+  if (row.status === 'no_show'   && row.no_show_marked_at) return row.no_show_marked_at;
+  if (row.status === 'completed' || row.status === 'rescheduled') {
+    return row.status_changed_at ?? row.updated_at;
+  }
+  return row.created_at;
+}
+
 function buildTillfalle(lessonTypeName: string, startsAt: string, endsAt: string): string {
   try {
     const tz = 'Europe/Stockholm';
@@ -224,7 +252,8 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
   // eslint-disable-next-line prefer-const
   let q = (client as any)
     .from('lesson_bookings')
-    .select(`id, status, created_at, starts_at, ends_at, cancellation_category,
+    .select(`id, status, created_at, updated_at, status_changed_at, cancelled_at, no_show_marked_at,
+             starts_at, ends_at, cancellation_category,
              students ( first_name, last_name ),
              instructors ( first_name, last_name ),
              lesson_types ( name )`, { count: 'exact' })
@@ -240,13 +269,15 @@ async function handleBookingLogs(req: Request, ctx: EdgeRequestContext): Promise
   if (error) return errorResp(ctx, 500, 'DB_ERROR', error.message);
 
   const logs = (data ?? []).map((b: {
-    id: string; status: string; created_at: string; starts_at: string; ends_at: string;
+    id: string; status: string; created_at: string; updated_at: string;
+    status_changed_at: string | null; cancelled_at: string | null; no_show_marked_at: string | null;
+    starts_at: string; ends_at: string;
     cancellation_category: string | null; students: NameRow | null; instructors: NameRow | null;
     lesson_types: LessonTypeRow | null;
   }) => ({
     id:        b.id,
     kalla:     'A',
-    datum:     b.created_at,
+    datum:     bookingEventTimestamp(b),
     handelse:  buildHandelse(b.status, fullName(b.students), fullName(b.instructors), b.cancellation_category),
     tillfalle: buildTillfalle(b.lesson_types?.name ?? '', b.starts_at, b.ends_at),
     larare:    fullName(b.instructors),
