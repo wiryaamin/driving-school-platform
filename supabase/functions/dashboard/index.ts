@@ -69,7 +69,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   const startedAt = Date.now();
 
   try {
-    const [studentsRes, slotsRes, pendingInvRes, paidInvRes] = await Promise.all([
+    const [studentsRes, slotsRes, invoiceMetricsRes] = await Promise.all([
       canStudents
         ? (client as any)
             .from('students')
@@ -91,26 +91,19 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             .limit(20)
         : Promise.resolve({ data: null, error: null }),
 
+      // Server-side aggregation (COUNT/SUM, no row cap) — see
+      // tenant_overview_invoice_metrics() in the migrations for the exact
+      // pending/overdue/monthly-revenue business rules being preserved.
+      // p_month_from is passed as null when absent, matching the previous
+      // behavior where a missing month_from only zeroed the revenue figure
+      // rather than skipping the pending/overdue counts too.
       canFinance
-        ? (client as any)
-            .from('invoices')
-            .select('id, due_date', { count: 'exact' })
-            .eq('organization_id', orgId)
-            .eq('status', 'issued')
-            .is('void_at', null)
-            .limit(50)
-        : Promise.resolve({ data: null, count: null, error: null }),
-
-      canFinance && monthFrom
-        ? (client as any)
-            .from('invoices')
-            .select('paid_amount', { count: 'exact' })
-            .eq('organization_id', orgId)
-            .in('status', ['paid', 'partially_paid'])
-            .is('void_at', null)
-            .gte('created_at', monthFrom)
-            .limit(5000)
-        : Promise.resolve({ data: null, count: null, error: null }),
+        ? (client as any).rpc('tenant_overview_invoice_metrics', {
+            p_org_id:     orgId,
+            p_today:      today,
+            p_month_from: monthFrom || null,
+          })
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     const activeStudentCount = canStudents ? (studentsRes.count ?? 0) : null;
@@ -119,20 +112,21 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       ? { total: slotsRes.data?.length ?? 0, slots: slotsRes.data ?? [] }
       : null;
 
+    const invoiceMetrics = invoiceMetricsRes.data as
+      | { pending_count: number; overdue_count: number; monthly_revenue: number }
+      | null;
+
     const pendingInvoices = canFinance
       ? {
-          pendingCount: pendingInvRes.count ?? 0,
-          overdueCount: ((pendingInvRes.data ?? []) as Array<{ due_date: string | null }>).filter(
-            (inv) => inv.due_date !== null && inv.due_date < today,
-          ).length,
+          pendingCount: invoiceMetrics?.pending_count ?? 0,
+          overdueCount: invoiceMetrics?.overdue_count ?? 0,
         }
       : null;
 
-    const paidInvData = (paidInvRes.data ?? []) as Array<{ paid_amount: number | null }>;
     const monthlyRevenue = canFinance
       ? {
-          amount:  paidInvData.reduce((sum, inv) => sum + (inv.paid_amount ?? 0), 0),
-          hasMore: (paidInvRes.count ?? 0) > paidInvData.length,
+          amount:  invoiceMetrics?.monthly_revenue ?? 0,
+          hasMore: false,
         }
       : null;
 
