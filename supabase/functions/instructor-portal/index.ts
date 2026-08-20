@@ -7,6 +7,7 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
 import { transitionBookingAttendance } from '../_shared/booking-lifecycle.ts';
+import { resolveInstructorVisibleStudentIds } from '../_shared/instructor-scope.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -654,6 +655,22 @@ Deno.serve((req: Request) =>
       const body   = await req.json().catch(() => null);
       const parsed = AssessmentSchema.safeParse(body);
       if (!parsed.success) return fail(400, 'Invalid assessment payload');
+
+      // Security fix: the GET handler above is safe by construction (its own
+      // .eq('organization_id', organization_id) means a cross-org studentId
+      // can never match a row), but this upsert wrote organization_id from
+      // the session while trusting studentId from the URL outright — an
+      // instructor could write an assessment against ANY student UUID in the
+      // database, in any organization, and it would persist. Confirmed live
+      // during the Portal V1.1 acceptance test (a real E2E-org instructor
+      // wrote an assessment against a real Trafikskolan AB student).
+      // resolveInstructorVisibleStudentIds is the same authoritative
+      // instructor→student definition GET /students above already uses
+      // (P1-6) — its own two lookups are each organization_id-scoped by
+      // construction, so membership in this set proves both "same org" and
+      // "within this instructor's authorized scope" in one check.
+      const visibleIds = await resolveInstructorVisibleStudentIds(supabase, organization_id, instructor_id);
+      if (!visibleIds.includes(studentId)) return fail(404, 'Student not found');
 
       const { competencies, readiness, notes } = parsed.data;
 

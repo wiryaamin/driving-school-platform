@@ -2,10 +2,11 @@ import { z } from 'npm:zod@3';
 import { serveCors } from '../_shared/cors.ts';
 import { buildEdgeContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
-import { createSupabaseClient } from '../_shared/supabase.ts';
+import { createSupabaseClient, createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { performPersonLookup, getPersonLookupStatus, isValidPersonnummerFormat } from '../_shared/person-lookup-service.ts';
 import { hashPersonalNumber, identityCryptoConfigured } from '../_shared/bankid-crypto.ts';
+import { isInstructorTierRole, resolveOwnInstructorId, resolveInstructorVisibleStudentIds } from '../_shared/instructor-scope.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline Zod schemas (Deno can't import workspace packages) ───────────────
@@ -93,6 +94,14 @@ const StudentListQuerySchema = z.object({
   corporate_customer_id: z.string().uuid().optional(),
   age_from: z.coerce.number().int().min(14).max(110).optional(),
   age_to:   z.coerce.number().int().min(14).max(110).optional(),
+});
+
+// Mirrors instructor-portal/index.ts's AssessmentSchema exactly (P1-3) — same
+// shape, same table, same one-assessment-per-instructor-per-student model.
+const AssessmentSchema = z.object({
+  competencies: z.record(z.string()).optional(),
+  readiness:    z.record(z.boolean()).optional(),
+  notes:        z.string().max(5000).optional(),
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -631,6 +640,86 @@ async function handleGetLessonContext(req: Request, ctx: EdgeRequestContext, stu
   });
 }
 
+// P1-3: instructor_student_assessments has no INSERT/UPDATE RLS policy at
+// all (only 3 SELECT policies exist — confirmed against the live schema) —
+// the only working write path today is instructor-portal/index.ts's
+// service-role client. Reusing that exact client here for just these two
+// handlers, rather than this file's usual caller's-JWT client, is what
+// makes this route work without a migration; the authorization boundary is
+// still fully enforced in code below (organization_id + the caller's own
+// resolved instructor_id are never taken from the request), the same
+// pattern instructor-portal already uses for the same table. Route is
+// instructor-tier only — reception/admin assessment visibility is a
+// separate, not-yet-scoped capability, deliberately not added here.
+async function handleGetAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may view a competency assessment here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  const svc = createServiceClient();
+  const { data, error } = await svc
+    .from('instructor_student_assessments')
+    .select('id, competencies, readiness, notes, assessed_at, updated_at')
+    .eq('instructor_id', ownInstructorId)
+    .eq('student_id', studentId)
+    .eq('organization_id', ctx.organizationId!)
+    .maybeSingle();
+
+  if (error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch assessment');
+  return successResp(ctx, data ?? null);
+}
+
+async function handleSaveAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may save a competency assessment here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  let body: unknown;
+  try { body = await req.json(); } catch { return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+  const parsed = AssessmentSchema.safeParse(body);
+  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
+
+  // Security fix: handleGetAssessment above is safe by construction (its own
+  // .eq('organization_id', ctx.organizationId!) means a cross-org studentId
+  // can never match a row), but this upsert wrote organization_id from ctx
+  // while trusting studentId from the URL outright — an instructor could
+  // write an assessment against ANY student UUID in the database, in any
+  // organization. Confirmed live during the Portal V1.1 acceptance test
+  // (identical flaw found in instructor-portal/index.ts's equivalent route).
+  // resolveInstructorVisibleStudentIds is the same authoritative
+  // instructor→student definition already reused for P0-2's visibility
+  // filter — its own two lookups are each organization-scoped by
+  // construction, so membership in this set proves both "same org" and
+  // "within this instructor's authorized scope" in one check.
+  const visibleIds = await resolveInstructorVisibleStudentIds(client, ctx.organizationId!, ownInstructorId);
+  if (!visibleIds.includes(studentId)) return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
+
+  const { competencies, readiness, notes } = parsed.data;
+  const svc = createServiceClient();
+  const { error } = await svc
+    .from('instructor_student_assessments')
+    .upsert(
+      {
+        organization_id: ctx.organizationId!,
+        instructor_id:   ownInstructorId,
+        student_id:      studentId,
+        competencies:    competencies ?? {},
+        readiness:       readiness    ?? {},
+        notes:           notes        ?? null,
+        assessed_at:     new Date().toISOString(),
+      },
+      { onConflict: 'instructor_id,student_id' },
+    );
+
+  if (error) {
+    logger.error('students.assessment_upsert_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to save assessment');
+  }
+  return successResp(ctx, { success: true });
+}
+
 async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
@@ -859,6 +948,16 @@ Deno.serve((req: Request) => serveCors(req, async () => {
             JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
             { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
           );
+    } else if (/^\/students\/[0-9a-f-]+\/assessment$/.test(pathname)) {
+      const studentId = pathname.split('/')[2]!;
+      if (req.method === 'GET')      { response = await handleGetAssessment(req, ctx, studentId); }
+      else if (req.method === 'PUT') { response = await handleSaveAssessment(req, ctx, studentId); }
+      else {
+        response = new Response(
+          JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+          { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+        );
+      }
     } else if (/^\/students\/[0-9a-f-]+\/lesson-context$/.test(pathname)) {
       const studentId = pathname.split('/')[2]!;
       response = req.method === 'GET'
