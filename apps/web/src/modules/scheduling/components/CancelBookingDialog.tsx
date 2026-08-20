@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Lock } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
   Button, Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -8,6 +8,8 @@ import {
 import { toast } from '@platform/ui';
 import type { CancellationCategory, Student } from '@platform/types';
 import { useCancelBooking } from '../hooks/useSchedulingMutations.js';
+import { useCancellationDeadlineHours } from '../hooks/useCancellationPolicy.js';
+import { useSession } from '@shared/hooks/useSession.js';
 
 // ─── Cancellation category Swedish labels ─────────────────────────────────────
 
@@ -40,12 +42,24 @@ export function CancelBookingDialog({
   onOpenChange,
   bookingId,
   slotId,
+  slotStartsAt,
   onSuccess,
 }: CancelBookingDialogProps) {
   const [category, setCategory] = useState<CancellationCategory | ''>('');
   const [reason, setReason]     = useState('');
 
   const cancelMutation = useCancelBooking();
+
+  // F3 V1 — informational only; the backend is the real enforcement point.
+  // Only 'student_request' is subject to the deadline (mirrors handleCancel).
+  const { organization } = useSession();
+  const { data: deadlineHours } = useCancellationDeadlineHours(organization?.id);
+  const isLate = Boolean(
+    category === 'student_request' &&
+    slotStartsAt &&
+    deadlineHours !== undefined &&
+    (new Date(slotStartsAt).getTime() - Date.now()) <= deadlineHours * 3_600_000
+  );
 
   function handleClose() {
     if (cancelMutation.isPending) return;
@@ -72,6 +86,11 @@ export function CancelBookingDialog({
               title:       'Kredit kunde inte återställas automatiskt',
               description: 'Bokningen är avbokad, men elevens paketkredit kunde inte återställas. Kontrollera elevens paket manuellt.',
               variant:     'destructive',
+            });
+          } else if (data.credit_forfeited) {
+            toast({
+              title:       'Lektionskredit återställdes inte',
+              description: 'Avbokningen skedde inom avbokningsfristen, så eleven behåller inte krediten för denna lektion.',
             });
           }
           handleClose();
@@ -130,6 +149,15 @@ export function CancelBookingDialog({
               className="resize-none"
             />
           </div>
+
+          {isLate && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-2.5">
+              <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+                Sen avbokning — inom {deadlineHours} timmar från lektionsstart. Elevens lektionskredit återställs inte.
+              </p>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">

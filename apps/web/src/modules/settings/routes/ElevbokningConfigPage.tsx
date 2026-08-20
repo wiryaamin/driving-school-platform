@@ -1,5 +1,11 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Settings, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Settings, ChevronRight, Save } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Button, Input, Label, toast } from '@platform/ui';
+import { supabase } from '@core/api/supabase.js';
+import { useSession } from '@shared/hooks/useSession.js';
+import { useCancellationDeadlineHours, DEFAULT_CANCELLATION_DEADLINE_HOURS } from '@modules/scheduling/hooks/useCancellationPolicy.js';
 
 // ─── Audit finding ─────────────────────────────────────────────────────────────
 //
@@ -12,14 +18,14 @@ import { Settings, ChevronRight, AlertTriangle } from 'lucide-react';
 // StudentPortalBokningarPage), and it does NOT read this settings blob either —
 // it has its own independent, hardcoded rules. Concretely verified:
 //
-//   - Avbokningsfrist (cancel_hours/allow_cancel/cancel_lesson/cancel_course/
-//     respect_holidays/cancel_mode/day_mode/cancel_time): the real student
-//     portal hardcodes CANCEL_CUTOFF_MS = 24h in StudentPortalBokningarPage.tsx
-//     — this settings page's cancellation-window controls have never affected
-//     it. Making them real means changing the actual cancellation cutoff logic
-//     the student portal enforces today — a behavioral change to a booking/
-//     billing-adjacent flow, not a config-wiring task, so it needs its own
-//     explicit, separately-scoped decision rather than being folded in here.
+//   - Avbokningsfrist: WAS hardcoded (CANCEL_CUTOFF_MS = 24h in
+//     StudentPortalBokningarPage.tsx), with zero effect from this page's
+//     control. F3 (2026-08-18) made this real — the control below now reads
+//     and writes the exact same organizations.settings.student_booking
+//     .cancellation_deadline_hours path the student portal, the staff
+//     cancel-dialog warning, and both booking/reschedule Edge Functions all
+//     read. Every other control that used to exist here remains removed —
+//     see below — this is the one field made real, not a general revival.
 //   - Balance/price display, card payment, discount codes, booking limits
 //     (max_upcoming/min_hours_before/weeks_ahead/show_prices/require_balance/
 //     book_restriction), education card detail level, and booking-request
@@ -29,9 +35,9 @@ import { Settings, ChevronRight, AlertTriangle } from 'lucide-react';
 //     notification_rules trigger or event exists for a student-initiated
 //     cancellation notifying staff.
 //
-// Removed the 24 fake controls rather than leaving a settings page that reads
-// as if it configures the real student booking portal when it configures
-// nothing live.
+// Removed the other 23 fake controls rather than leaving a settings page that
+// reads as if it configures the real student booking portal when most of it
+// configures nothing live.
 
 function NotBuilt({ title, description }: { title: string; description: string }) {
   return (
@@ -39,6 +45,81 @@ function NotBuilt({ title, description }: { title: string; description: string }
       <h2 className="text-sm font-semibold text-primary">{title}</h2>
       <div className="rounded-lg border border-border bg-muted/20 p-4">
         <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Avbokningsfrist (F3 V1) — the one real, wired control on this page ───────
+//
+// Reads/writes organizations.settings.student_booking.cancellation_deadline_hours
+// directly (same pattern as KassaSettingsPage's pay_terms_days — the other
+// real field on a similarly-audited settings page), merging into the existing
+// settings blob rather than overwriting it.
+
+function CancellationDeadlineControl() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+
+  const { data: currentHours, isLoading } = useCancellationDeadlineHours(orgId);
+  const [hours, setHours] = useState(DEFAULT_CANCELLATION_DEADLINE_HOURS);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (currentHours !== undefined) setHours(currentHours);
+  }, [currentHours]);
+
+  async function handleSave() {
+    if (!orgId || hours < 0) return;
+    setSaving(true);
+    const { data: org } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+    const existingSettings = ((org as unknown as { settings?: Record<string, unknown> } | null)?.settings) ?? {};
+    const existingStudentBooking = (existingSettings['student_booking'] as Record<string, unknown> | undefined) ?? {};
+
+    const { error } = await supabase.from('organizations').update({
+      settings: {
+        ...existingSettings,
+        student_booking: { ...existingStudentBooking, cancellation_deadline_hours: hours },
+      },
+    } as never).eq('id', orgId);
+
+    setSaving(false);
+    if (error) {
+      toast({ title: 'Kunde inte spara', variant: 'destructive' });
+      return;
+    }
+    toast({ title: 'Sparat', description: 'Avbokningsfristen har uppdaterats.' });
+    void qc.invalidateQueries({ queryKey: ['org-settings', 'cancellation-deadline-hours', orgId] });
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-sm font-semibold text-primary">Avbokningsfrist</h2>
+      <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Om en elev avbokar eller uteblir från en lektion inom denna tidsgräns återställs inte lektionskrediten.
+          Personalens avbokningar (t.ex. sjukdom, väder) påverkas inte av denna gräns.
+        </p>
+        <div className="flex items-end gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="cancel-deadline-hours">Timmar före lektionsstart</Label>
+            <Input
+              id="cancel-deadline-hours"
+              type="number"
+              min={0}
+              max={168}
+              value={hours}
+              disabled={isLoading}
+              onChange={(e) => setHours(Math.max(0, Number(e.target.value) || 0))}
+              className="w-28"
+            />
+          </div>
+          <Button size="sm" onClick={handleSave} disabled={saving || isLoading} className="gap-1.5">
+            <Save className="w-3.5 h-3.5" />
+            {saving ? 'Sparar...' : 'Spara'}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -64,16 +145,7 @@ export function ElevbokningConfigPage() {
         <p className="text-sm text-muted-foreground">Regler för elevbokning, elevavbokning och avbokningsmeddelanden.</p>
       </div>
 
-      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-4 py-3 text-sm">
-        <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-        <div className="space-y-1 text-amber-800 dark:text-amber-300">
-          <p className="font-medium">Elevportalens verkliga avbokningsfrist är fast 24 timmar</p>
-          <p className="text-xs leading-relaxed">
-            Elevportalens bokningssida använder en egen, hårdkodad regel oberoende av denna sida. Att göra
-            avbokningsfristen konfigurerbar innebär en ändring av verklig avbokningslogik och görs inte i denna omgång.
-          </p>
-        </div>
-      </div>
+      <CancellationDeadlineControl />
 
       <NotBuilt
         title="Ekonomiöversikt på Elevsidan"
@@ -92,7 +164,7 @@ export function ElevbokningConfigPage() {
 
       <NotBuilt
         title="Aktiviteter — Avbokning"
-        description="Avbokningsfrist, vilka aktivitetstyper som kan avbokas, och hänsyn till helgdagar är inte konfigurerbara — elevportalen använder en fast 24-timmarsregel (se ovan)."
+        description="Avbokningsfristen konfigureras ovan. Vilka aktivitetstyper som kan avbokas, och hänsyn till helgdagar, är fortfarande inte konfigurerbara."
       />
 
       <NotBuilt

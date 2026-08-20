@@ -138,3 +138,74 @@ export async function consumeLessonPackageCreditOrCompensate(
 
   return { ok: true };
 }
+
+// ─── Credit reversal on cancellation (F3 V1) ──────────────────────────────────
+//
+// Single authoritative implementation of "should this cancelled booking's
+// package credit come back" — extracted verbatim from the staff cancel path
+// (bookings/index.ts handleCancel) for the identical reason
+// consumeLessonPackageCreditOrCompensate exists: the Student Portal's own
+// cancel handler previously had none of this logic at all, meaning a student
+// who cancelled through the portal permanently lost the credit regardless of
+// notice given — a real bug, not a policy gap. Both entry points now call
+// this one implementation.
+//
+// `forfeit` is the F3 late-cancellation/no-show policy decision (computed by
+// the caller from isWithinCancellationDeadline + who/why is cancelling) — it
+// short-circuits before ever consulting the package's own
+// cancellation_consumes_credit flag, so a late student-initiated cancellation
+// forfeits credit even for a package whose flag would otherwise restore it.
+
+export interface CreditReversalResult {
+  attempted:  boolean;  // a credit_consumed event existed for this booking and wasn't already reversed
+  reversed:   boolean;  // reverse_lesson_credit succeeded
+  forfeited:  boolean;  // skipped specifically because forfeit=true (F3 policy), not the package's own flag
+  error?:     string;
+}
+
+export async function reverseLessonCreditOnCancellation(
+  client: any,
+  params: {
+    organizationId: string;
+    bookingId:      string;
+    forfeit:        boolean;
+    actorId:        string | null;
+    actorEmail:     string | null;
+    reason:         string;
+  },
+): Promise<CreditReversalResult> {
+  const { data: creditEvents } = await client
+    .from('package_consumption_events')
+    .select('assignment_id, event_type')
+    .eq('booking_id',      params.bookingId)
+    .eq('organization_id', params.organizationId)
+    .in('event_type', ['credit_consumed', 'credit_reversed']);
+
+  const consumed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_consumed');
+  const reversed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_reversed');
+
+  if (!consumed || reversed) return { attempted: false, reversed: false, forfeited: false };
+  if (params.forfeit)        return { attempted: true, reversed: false, forfeited: true };
+
+  const { data: asgn } = await client
+    .from('student_package_assignments')
+    .select('cancellation_consumes_credit')
+    .eq('id',              consumed.assignment_id)
+    .eq('organization_id', params.organizationId)
+    .maybeSingle();
+
+  if (!asgn || asgn.cancellation_consumes_credit) return { attempted: true, reversed: false, forfeited: false };
+
+  const { error } = await client.rpc('reverse_lesson_credit', {
+    p_assignment_id:   consumed.assignment_id,
+    p_organization_id: params.organizationId,
+    p_reversal_type:   'manual',
+    p_reason:          params.reason,
+    p_booking_id:      params.bookingId,
+    p_actor_id:        params.actorId,
+    p_actor_email:     params.actorEmail,
+  });
+
+  if (error) return { attempted: true, reversed: false, forfeited: false, error: error.message };
+  return { attempted: true, reversed: true, forfeited: false };
+}

@@ -7,6 +7,8 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
 import { decryptCredential } from '../_shared/credential-crypto.ts';
+import { getCancellationDeadlineHours, isWithinCancellationDeadline } from '../_shared/cancellation-policy.ts';
+import { reverseLessonCreditOnCancellation } from '../_shared/lesson-credits.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -164,6 +166,10 @@ const RevokePushTokenSchema = z.object({
 
 const GenerateTokenSchema = z.object({
   guardian_id: z.string().uuid(),
+});
+
+const CancelBookingSchema = z.object({
+  reason: z.string().max(500).optional(),
 });
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -347,6 +353,10 @@ Deno.serve((req: Request) =>
       }
 
       const loc = locationRes.data as { phone: string | null; email: string | null } | null;
+      // Informational only, mirrors student-portal's GET /org — the actual
+      // deadline is re-checked server-side on every cancel attempt regardless
+      // of what the client displays here.
+      const cancellationDeadlineHours = await getCancellationDeadlineHours(svc, organization_id);
       logGuardianAccess(svc, session, 'guardian_portal.viewed_me', correlationId);
       return ok({
         guardian:     guardianRes.data,
@@ -355,6 +365,7 @@ Deno.serve((req: Request) =>
           ...orgRes.data,
           phone: loc?.phone ?? null,
           email: loc?.email ?? null,
+          cancellation_deadline_hours: cancellationDeadlineHours,
         },
         session: { expires_at: session.expires_at },
       });
@@ -381,6 +392,76 @@ Deno.serve((req: Request) =>
 
       logGuardianAccess(svc, session, 'guardian_portal.viewed_bookings', correlationId);
       return ok(sorted);
+    }
+
+    // POST /bookings/:id/cancel — guardian self-service cancellation.
+    //
+    // F3 V1 (single source of truth — see student-portal/index.ts's identical
+    // handler, which this mirrors exactly): the deadline always applies to a
+    // self-service cancellation regardless of who performs it, because it is
+    // never staff/school-initiated. cancellation_category stays
+    // 'student_request' — the existing taxonomy's value for any non-staff
+    // cancellation; a guardian acting is not a new category, just another
+    // caller of the same rule. actorId is null for the same reason
+    // student-portal's is: neither students nor guardians are auth.users rows
+    // (both are token-based portal sessions), so there is no valid FK target
+    // for lesson_bookings.cancelled_by / package_credit_reversals.reversed_by.
+    const cancelMatch = path.match(/^\/bookings\/([0-9a-f-]+)\/cancel$/);
+    if (req.method === 'POST' && cancelMatch) {
+      const bookingId = cancelMatch[1]!;
+      const body       = await req.json().catch(() => ({}));
+      const parsedBody = CancelBookingSchema.safeParse(body);
+
+      const { data: booking } = await svc
+        .from('lesson_bookings')
+        .select('id, status, starts_at')
+        .eq('id', bookingId)
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .is('deleted_at', null)
+        .single();
+
+      if (!booking) return fail(404, 'Booking not found');
+
+      const terminalStatuses = ['completed', 'cancelled', 'no_show', 'rescheduled'];
+      if (terminalStatuses.includes((booking as { status: string }).status)) {
+        return fail(409, 'This booking cannot be cancelled');
+      }
+
+      const deadlineHours = await getCancellationDeadlineHours(svc, organization_id);
+      const forfeitCredit = isWithinCancellationDeadline((booking as { starts_at: string }).starts_at, deadlineHours);
+
+      const { error: updateErr } = await svc
+        .from('lesson_bookings')
+        .update({
+          status:                'cancelled',
+          cancelled_at:          new Date().toISOString(),
+          cancellation_category: 'student_request',
+          cancellation_reason:   parsedBody.success ? (parsedBody.data.reason ?? null) : null,
+        })
+        .eq('id', bookingId);
+
+      if (updateErr) return fail(500, 'Cancel failed');
+
+      const reversal = await reverseLessonCreditOnCancellation(svc, {
+        organizationId: organization_id,
+        bookingId,
+        forfeit:        forfeitCredit,
+        actorId:        null,
+        actorEmail:     null,
+        reason:         'Lektion avbokad av vårdnadshavare — kredit återställd automatiskt',
+      });
+
+      logGuardianAccess(svc, session, 'guardian_portal.cancelled_booking', correlationId);
+
+      if (reversal.error) {
+        logger.warn('guardian-portal.credit_reverse_failed', {
+          booking_id: bookingId, student_id, organization_id, error: reversal.error,
+        });
+        return ok({ success: true, credit_reversal_failed: true });
+      }
+
+      return ok({ success: true, credit_forfeited: reversal.forfeited });
     }
 
     // GET /balance — student balance + unpaid invoices (only if guardian has can_pay)

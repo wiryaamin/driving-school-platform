@@ -304,7 +304,7 @@ export function usePortalCancelBooking() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ bookingId, reason }: { bookingId: string; reason?: string }) =>
-      portalFetch<{ success: boolean }>(`/bookings/${bookingId}/cancel`, {
+      portalFetch<{ success: boolean; credit_forfeited?: boolean; credit_reversal_failed?: boolean }>(`/bookings/${bookingId}/cancel`, {
         method: 'POST',
         body:   JSON.stringify({ reason }),
       }),
@@ -565,10 +565,13 @@ export function usePortalAcceptTerms() {
 }
 
 export interface PortalOrg {
-  name:          string;
-  swish_number:  string | null;
-  contact_phone: string | null;
-  contact_email: string | null;
+  name:                         string;
+  swish_number:                 string | null;
+  contact_phone:                string | null;
+  contact_email:                string | null;
+  // F3 V1 — the org's configured cancellation/reschedule deadline (hours
+  // before a lesson), defaulting to 24 server-side when unset.
+  cancellation_deadline_hours:  number;
 }
 
 export function usePortalOrg() {

@@ -4,7 +4,8 @@ import { buildEdgeContext } from '../_shared/context.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
-import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
+import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate, reverseLessonCreditOnCancellation } from '../_shared/lesson-credits.ts';
+import { getCancellationDeadlineHours, isWithinCancellationDeadline } from '../_shared/cancellation-policy.ts';
 import { transitionBookingAttendance } from '../_shared/booking-lifecycle.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
@@ -423,7 +424,7 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id, status')
+    .select('id, status, starts_at')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -435,6 +436,16 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
   if (!allowed.includes('cancelled')) {
     return errorResp(ctx, 409, 'CONFLICT', `Cannot cancel a booking in '${existing.status}' status`);
   }
+
+  // F3 V1: a cancellation attributed to the student ("Elevens önskemål") that
+  // falls inside the organization's cancellation-deadline window forfeits the
+  // credit — same consequence as a no-show, deliberately. Staff/school/
+  // instructor-caused cancellations (any other category, or none given) are
+  // exempt regardless of timing, per the approved V1 policy.
+  const isStudentInitiated = parsed.data.cancellation_category === 'student_request';
+  const forfeitCredit = isStudentInitiated
+    ? isWithinCancellationDeadline(existing.starts_at, await getCancellationDeadlineHours(client, ctx.organizationId!))
+    : false;
 
   const now = new Date().toISOString();
   const updatePayload: Record<string, unknown> = {
@@ -465,70 +476,52 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
     actor_id:       ctx.actorId,
   });
 
-  // ── C2: Restore package credit on cancellation ──────────────────────────────
-  // Queries package_consumption_events for a credit_consumed event on this booking.
-  // If found, not yet reversed, and the assignment policy allows restoration
-  // (cancellation_consumes_credit = false), calls reverse_lesson_credit().
-  // The cancellation itself has already succeeded regardless of this outcome —
-  // but a failed reversal leaves the student's package short a credit for a
-  // lesson that no longer exists, so it's surfaced to the caller (not just
-  // logged) so the receptionist who cancelled can be told to check manually.
-  let creditReversalFailed = false;
-  {
-    const { data: creditEvents } = await (client as any)
-      .from('package_consumption_events')
-      .select('assignment_id, event_type')
-      .eq('booking_id',      id)
-      .eq('organization_id', ctx.organizationId)
-      .in('event_type', ['credit_consumed', 'credit_reversed']);
+  // ── C2 / F3: Restore or forfeit package credit on cancellation ──────────────
+  // See reverseLessonCreditOnCancellation (_shared/lesson-credits.ts) — shared
+  // with the Student Portal's cancel path. forfeitCredit (computed above)
+  // short-circuits the reversal for a late student-initiated cancellation;
+  // otherwise behavior is unchanged from before F3 (gated on the package's
+  // own cancellation_consumes_credit flag). A failed reversal is surfaced to
+  // the caller (not just logged) so the receptionist can be told to check
+  // the student's package manually.
+  const reversal = await reverseLessonCreditOnCancellation(client, {
+    organizationId: ctx.organizationId!,
+    bookingId:      id,
+    forfeit:        forfeitCredit,
+    actorId:        ctx.actorId,
+    actorEmail:     null,
+    reason:         'Lektion avbokad — kredit återställd automatiskt',
+  });
 
-    const consumed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_consumed');
-    const reversed = (creditEvents ?? []).find((e: any) => e.event_type === 'credit_reversed');
-
-    if (consumed && !reversed) {
-      const { data: asgn } = await (client as any)
-        .from('student_package_assignments')
-        .select('cancellation_consumes_credit')
-        .eq('id',              consumed.assignment_id)
-        .eq('organization_id', ctx.organizationId)
-        .maybeSingle();
-
-      if (asgn && !asgn.cancellation_consumes_credit) {
-        const { error: reverseErr } = await (client as any).rpc('reverse_lesson_credit', {
-          p_assignment_id:   consumed.assignment_id,
-          p_organization_id: ctx.organizationId,
-          p_reversal_type:   'manual',
-          p_reason:          'Lektion avbokad — kredit återställd automatiskt',
-          p_booking_id:      id,
-          p_actor_id:        ctx.actorId,
-          p_actor_email:     null,
-        });
-
-        if (reverseErr) {
-          creditReversalFailed = true;
-          logger.warn('bookings.credit_reverse_failed', {
-            request_id:     ctx.requestId,
-            correlation_id: ctx.correlationId,
-            org_id:         ctx.organizationId,
-            booking_id:     id,
-            assignment_id:  consumed.assignment_id,
-            error:          reverseErr.message,
-          });
-        } else {
-          logger.info('bookings.credit_reversed', {
-            request_id:     ctx.requestId,
-            correlation_id: ctx.correlationId,
-            org_id:         ctx.organizationId,
-            booking_id:     id,
-            assignment_id:  consumed.assignment_id,
-            actor_id:       ctx.actorId,
-          });
-        }
-      }
-    }
+  if (reversal.error) {
+    logger.warn('bookings.credit_reverse_failed', {
+      request_id:     ctx.requestId,
+      correlation_id: ctx.correlationId,
+      org_id:         ctx.organizationId,
+      booking_id:     id,
+      error:          reversal.error,
+    });
+  } else if (reversal.reversed) {
+    logger.info('bookings.credit_reversed', {
+      request_id:     ctx.requestId,
+      correlation_id: ctx.correlationId,
+      org_id:         ctx.organizationId,
+      booking_id:     id,
+      actor_id:       ctx.actorId,
+    });
+  } else if (reversal.forfeited) {
+    logger.info('bookings.credit_forfeited_late_cancellation', {
+      request_id:     ctx.requestId,
+      correlation_id: ctx.correlationId,
+      org_id:         ctx.organizationId,
+      booking_id:     id,
+      actor_id:       ctx.actorId,
+    });
   }
 
-  return successResp(ctx, creditReversalFailed ? { ...booking, credit_reversal_failed: true } : booking);
+  return successResp(ctx, reversal.error
+    ? { ...booking, credit_reversal_failed: true }
+    : { ...booking, credit_forfeited: reversal.forfeited });
 }
 
 async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {

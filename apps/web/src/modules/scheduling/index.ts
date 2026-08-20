@@ -22,6 +22,9 @@ export type { SlotListResponse, SlotListMeta } from './hooks/useSlots.js';
 export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBookings, useInstructorUpcomingBookings, bookingKeys } from './hooks/useBookings.js';
 export type { LessonBooking, BookingListResponse, BookingListMeta } from './hooks/useBookings.js';
 
+// ─── Cancellation policy (F3) ─────────────────────────────────────────────────
+export { useCancellationDeadlineHours, DEFAULT_CANCELLATION_DEADLINE_HOURS } from './hooks/useCancellationPolicy.js';
+
 // ─── Waitlist query hooks + keys ──────────────────────────────────────────────
 export { useWaitlistForSlot, useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, useRemoveFromWaitlist, waitlistKeys } from './hooks/useWaitlist.js';
 export type {

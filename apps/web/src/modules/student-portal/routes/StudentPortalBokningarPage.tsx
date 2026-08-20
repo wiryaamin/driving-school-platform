@@ -3,7 +3,7 @@ import { CalendarDays, Clock, ChevronDown, ChevronUp, X, RefreshCw, Loader2, Ale
 import { Link } from 'react-router-dom';
 import {
   usePortalBookings, usePortalSlots, usePortalCancelBooking, usePortalRescheduleBooking,
-  usePortalHistory,
+  usePortalHistory, usePortalOrg,
   type PortalBooking, type PortalSlot, type PortalHistoryItem,
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
@@ -38,8 +38,11 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-const TERMINAL            = new Set(['completed', 'cancelled', 'no_show', 'rescheduled']);
-const CANCEL_CUTOFF_MS    = 24 * 60 * 60 * 1000; // 24 h
+const TERMINAL = new Set(['completed', 'cancelled', 'no_show', 'rescheduled']);
+// F3 V1: falls back to 24h client-side only until usePortalOrg() resolves —
+// the real, org-configured value (server-enforced regardless) comes from
+// GET /org's cancellation_deadline_hours.
+const DEFAULT_CANCELLATION_DEADLINE_HOURS = 24;
 
 // ─── Reschedule sheet ─────────────────────────────────────────────────────────
 
@@ -153,9 +156,9 @@ function RescheduleSheet({
 // ─── Cancel sheet ─────────────────────────────────────────────────────────────
 
 function CancelSheet({
-  booking, onClose,
+  booking, isLate, onClose,
 }: {
-  booking: PortalBooking; onClose: () => void;
+  booking: PortalBooking; isLate: boolean; onClose: () => void;
 }) {
   const [reason, setReason] = useState('');
   const cancel = usePortalCancelBooking();
@@ -164,7 +167,14 @@ function CancelSheet({
   function handleSubmit() {
     cancel.mutate(
       { bookingId: booking.id, reason: reason.trim() },
-      { onSuccess: onClose },
+      {
+        onSuccess: (data) => {
+          if (data.credit_reversal_failed) {
+            alert('Bokningen är avbokad, men lektionskrediten kunde inte återställas automatiskt. Kontakta skolan så hjälper de dig.');
+          }
+          onClose();
+        },
+      },
     );
   }
 
@@ -186,6 +196,15 @@ function CancelSheet({
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">{booking.lesson_type_name}</p>
           )}
         </div>
+
+        {isLate && (
+          <div className="flex items-start gap-2.5 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800/60">
+            <Lock className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 dark:text-amber-300 font-medium leading-relaxed">
+              Lektionen börjar snart — om du avbokar nu återställs inte lektionskrediten.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <label className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -233,11 +252,21 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
   const [showResch,       setShowResch]       = useState(false);
   const [showCancelSheet, setShowCancelSheet] = useState(false);
 
-  const isTerminal      = TERMINAL.has(booking.status);
-  const startsAt        = new Date(booking.starts_at).getTime();
-  const isUpcoming      = !isTerminal && startsAt > Date.now();
-  const canSelfService  = isUpcoming && (startsAt - Date.now()) > CANCEL_CUTOFF_MS;
-  const instructor      = [booking.instructor_first_name, booking.instructor_last_name].filter(Boolean).join(' ') || null;
+  const { data: org } = usePortalOrg();
+  const deadlineHours = org?.cancellation_deadline_hours ?? DEFAULT_CANCELLATION_DEADLINE_HOURS;
+  const deadlineMs    = deadlineHours * 60 * 60 * 1000;
+
+  const isTerminal = TERMINAL.has(booking.status);
+  const startsAt    = new Date(booking.starts_at).getTime();
+  const isUpcoming  = !isTerminal && startsAt > Date.now();
+  // F3 V1: cancellation is always available while upcoming — being inside the
+  // deadline only changes the credit consequence (see CancelSheet), it never
+  // blocks the action itself. Rescheduling, unlike cancellation, IS blocked
+  // inside the deadline (server-enforced regardless; this just avoids
+  // showing a button that would just come back with a 409).
+  const isLate        = isUpcoming && (startsAt - Date.now()) <= deadlineMs;
+  const canReschedule = isUpcoming && !isLate;
+  const instructor     = [booking.instructor_first_name, booking.instructor_last_name].filter(Boolean).join(' ') || null;
 
   return (
     <>
@@ -303,8 +332,8 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
                 {booking.vehicle_label && <span>{booking.vehicle_label}</span>}
               </div>
             )}
-            {canSelfService ? (
-              <div className="flex gap-2 pt-3">
+            <div className="flex gap-2 pt-3">
+              {canReschedule && (
                 <button
                   onClick={() => setShowResch(true)}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-blue-200 dark:border-blue-800 rounded-xl text-blue-600 dark:text-blue-400 text-sm font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
@@ -312,21 +341,27 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
                   <RefreshCw className="w-4 h-4" />
                   Boka om
                 </button>
-                <button
-                  onClick={() => setShowCancelSheet(true)}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                  Avboka
-                </button>
-              </div>
-            ) : (
+              )}
+              <button
+                onClick={() => setShowCancelSheet(true)}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                Avboka
+              </button>
+            </div>
+            {isLate ? (
               <div className="flex items-start gap-2.5 mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800/60">
                 <Lock className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-700 dark:text-amber-300 font-medium leading-relaxed">
-                  Avbokning ej möjlig — lektionen börjar om mindre än 24 timmar. Kontakta skolan om du behöver avboka.
+                  Mindre än {deadlineHours} timmar kvar till lektionen — du kan fortfarande avboka, men lektionskrediten
+                  återställs inte. Ombokning är inte längre möjlig; kontakta skolan om du behöver ändra tiden.
                 </p>
               </div>
+            ) : (
+              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+                Avbokning senast {deadlineHours} timmar innan lektionen för att behålla lektionskrediten.
+              </p>
             )}
           </div>
         )}
@@ -336,7 +371,7 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
         <RescheduleSheet booking={booking} onClose={() => setShowResch(false)} />
       )}
       {showCancelSheet && (
-        <CancelSheet booking={booking} onClose={() => setShowCancelSheet(false)} />
+        <CancelSheet booking={booking} isLate={isLate} onClose={() => setShowCancelSheet(false)} />
       )}
     </>
   );

@@ -5,7 +5,8 @@ import type { EdgeRequestContext } from '../_shared/context.ts';
 import { enforceIpRateLimit } from '../_shared/rate-limit.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
-import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
+import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate, reverseLessonCreditOnCancellation } from '../_shared/lesson-credits.ts';
+import { getCancellationDeadlineHours, isWithinCancellationDeadline, DEFAULT_CANCELLATION_DEADLINE_HOURS } from '../_shared/cancellation-policy.ts';
 import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
 import { decryptCredential, encryptCredential } from '../_shared/credential-crypto.ts';
 
@@ -584,7 +585,7 @@ Deno.serve((req: Request) =>
 
       const { data: booking } = await supabase
         .from('lesson_bookings')
-        .select('id, status')
+        .select('id, status, starts_at')
         .eq('id', bookingId)
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
@@ -598,6 +599,13 @@ Deno.serve((req: Request) =>
         return fail(409, 'This booking cannot be cancelled');
       }
 
+      // F3 V1: every self-service cancellation is attributed to the student
+      // by definition — the deadline check always applies here (unlike the
+      // staff path, which only applies it when the staff-chosen category is
+      // 'student_request').
+      const deadlineHours = await getCancellationDeadlineHours(supabase, organization_id);
+      const forfeitCredit = isWithinCancellationDeadline((booking as { starts_at: string }).starts_at, deadlineHours);
+
       const { error: updateErr } = await supabase
         .from('lesson_bookings')
         .update({
@@ -609,7 +617,37 @@ Deno.serve((req: Request) =>
         .eq('id', bookingId);
 
       if (updateErr) return fail(500, 'Cancel failed');
-      return ok({ success: true });
+
+      // Bug fix (found during the F3 audit): this endpoint previously never
+      // restored the package credit at all, regardless of notice given — the
+      // staff cancel path (bookings/index.ts) had this logic, the portal
+      // never did. Reuses the exact same shared implementation as staff now.
+      //
+      // actorId must be null, not student_id: students authenticate via
+      // portal tokens, not Supabase Auth, so a student's id is never a valid
+      // auth.users row — package_credit_reversals.reversed_by has an FK to
+      // that table. Mirrors the same actorId: null already used 70 lines up
+      // by consumeLessonPackageCreditOrCompensate for booking creation.
+      // Found live during the F3 authenticated-verification round: passing
+      // student_id here made every >24h portal cancellation fail with a
+      // 23503 foreign-key violation instead of actually restoring credit.
+      const reversal = await reverseLessonCreditOnCancellation(supabase, {
+        organizationId: organization_id,
+        bookingId,
+        forfeit:        forfeitCredit,
+        actorId:        null,
+        actorEmail:     null,
+        reason:         'Lektion avbokad av eleven — kredit återställd automatiskt',
+      });
+
+      if (reversal.error) {
+        logger.warn('student-portal.credit_reverse_failed', {
+          booking_id: bookingId, student_id, organization_id, error: reversal.error,
+        });
+        return ok({ success: true, credit_reversal_failed: true });
+      }
+
+      return ok({ success: true, credit_forfeited: reversal.forfeited });
     }
 
     // ── POST /bookings/:id/reschedule ─────────────────────────────────────────
@@ -624,7 +662,7 @@ Deno.serve((req: Request) =>
 
       const { data: booking } = await supabase
         .from('lesson_bookings')
-        .select('id, status')
+        .select('id, status, starts_at')
         .eq('id', bookingId)
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
@@ -636,6 +674,14 @@ Deno.serve((req: Request) =>
       const reschedulable = ['reserved', 'confirmed'];
       if (!reschedulable.includes((booking as { status: string }).status)) {
         return fail(409, 'This booking cannot be rescheduled');
+      }
+
+      // F3 V1: rescheduling inside the cancellation-deadline window is
+      // rejected outright — otherwise it's a silent bypass of the
+      // late-cancellation credit-forfeiture rule above.
+      const deadlineHours = await getCancellationDeadlineHours(supabase, organization_id);
+      if (isWithinCancellationDeadline((booking as { starts_at: string }).starts_at, deadlineHours)) {
+        return fail(409, `Ombokning är inte längre möjlig — mindre än ${deadlineHours} timmar kvar till lektionen. Kontakta skolan om du behöver ändra tiden.`);
       }
 
       // Verify new slot availability
@@ -922,11 +968,19 @@ Deno.serve((req: Request) =>
       if (orgErr) return fail(500, 'Failed to fetch org info');
       if (!org)   return fail(404, 'Organization not found');
       const settings = (org.settings ?? {}) as Record<string, unknown>;
+      const studentBooking = (settings['student_booking'] ?? {}) as Record<string, unknown>;
+      const rawDeadline = studentBooking['cancellation_deadline_hours'];
       return ok({
         name:          org.name,
         swish_number:  (settings['swish_number']  as string | undefined) ?? null,
         contact_phone: (settings['contact_phone'] as string | undefined) ?? null,
         contact_email: (settings['contact_email'] as string | undefined) ?? null,
+        // F3 V1 — lets the portal UI reflect the org's actual configured
+        // cancellation/reschedule deadline instead of a hardcoded literal.
+        cancellation_deadline_hours:
+          typeof rawDeadline === 'number' && Number.isFinite(rawDeadline) && rawDeadline >= 0
+            ? rawDeadline
+            : DEFAULT_CANCELLATION_DEADLINE_HOURS,
       });
     }
 
