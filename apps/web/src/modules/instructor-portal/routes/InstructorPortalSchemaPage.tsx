@@ -153,6 +153,7 @@ export function InstructorPortalSchemaPage() {
                         <p className="text-xs text-gray-400 mt-0.5">
                           {slot.lesson_type_name ?? 'Körlektion'}
                           {slot.location_name ? ` · ${slot.location_name}` : ''}
+                          {slot.vehicle_label ? ` · ${slot.vehicle_label}` : ''}
                         </p>
                       </div>
                       <div className="text-right shrink-0">

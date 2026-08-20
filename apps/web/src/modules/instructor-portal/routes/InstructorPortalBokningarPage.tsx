@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   CalendarCheck, Clock, Loader2, Save, CheckCircle,
   ChevronDown, ChevronUp, AlertCircle,
@@ -148,8 +148,18 @@ function EvaluationForm({
 
 function BookingCard({ b }: { b: InstructorPortalBooking }) {
   const markAttendance = useInstructorPortalMarkAttendance();
-  const [marking,  setMarking]  = useState<string | null>(null);
-  const [evalOpen, setEvalOpen] = useState(false);
+  const [marking,        setMarking]        = useState<string | null>(null);
+  const [evalOpen,       setEvalOpen]       = useState(false);
+  const [pendingAbsent,  setPendingAbsent]  = useState(false);
+
+  // Same arm-then-confirm pattern as instructor-app's SlotCard — a credit-
+  // affecting action shouldn't fire on a single accidental tap. Auto-resets
+  // after 4s if ignored.
+  useEffect(() => {
+    if (!pendingAbsent) return;
+    const t = setTimeout(() => setPendingAbsent(false), 4_000);
+    return () => clearTimeout(t);
+  }, [pendingAbsent]);
 
   const now        = new Date();
   const startTime  = new Date(b.starts_at);
@@ -213,19 +223,39 @@ function BookingCard({ b }: { b: InstructorPortalBooking }) {
               ? <Loader2 className="w-3 h-3 animate-spin mx-auto" />
               : 'Närvande'}
           </button>
-          <button
-            onClick={() => {
-              setMarking(b.id);
-              markAttendance.mutate(
-                { bookingId: b.id, status: 'absent' },
-                { onSettled: () => setMarking(null) },
-              );
-            }}
-            disabled={markAttendance.isPending && marking === b.id}
-            className="flex-1 py-2 rounded-xl text-xs font-bold bg-red-100 text-red-700 hover:bg-red-200 transition-colors disabled:opacity-50"
-          >
-            Uteblev
-          </button>
+          {!pendingAbsent ? (
+            <button
+              onClick={() => setPendingAbsent(true)}
+              disabled={markAttendance.isPending && marking === b.id}
+              className="flex-1 py-2 rounded-xl text-xs font-bold bg-red-100 text-red-700 hover:bg-red-200 transition-colors disabled:opacity-50"
+            >
+              Uteblev
+            </button>
+          ) : (
+            <div className="flex-1 flex items-center gap-2 rounded-xl border-2 border-red-300 px-2.5 py-1.5">
+              <span className="text-[10px] font-semibold text-red-700 flex-1">Bekräfta?</span>
+              <button
+                onClick={() => {
+                  setPendingAbsent(false);
+                  setMarking(b.id);
+                  markAttendance.mutate(
+                    { bookingId: b.id, status: 'absent' },
+                    { onSettled: () => setMarking(null) },
+                  );
+                }}
+                disabled={markAttendance.isPending && marking === b.id}
+                className="px-2 py-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-[10px] font-bold rounded-lg transition-colors"
+              >
+                Ja
+              </button>
+              <button
+                onClick={() => setPendingAbsent(false)}
+                className="px-2 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold rounded-lg transition-colors"
+              >
+                Nej
+              </button>
+            </div>
+          )}
         </div>
       )}
 
