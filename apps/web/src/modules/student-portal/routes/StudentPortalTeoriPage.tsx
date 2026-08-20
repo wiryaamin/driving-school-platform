@@ -187,7 +187,10 @@ function QuizScreen({ sessionId, questions, category, onFinish, onAbort }: {
     if (isLast) {
       submitQuiz.mutate(
         { session_id: sessionId, answers: newAnswers, time_spent_sec: elapsed },
-        { onSuccess: result => onFinish(result) },
+        {
+          onSuccess: result => onFinish(result),
+          onError:   () => alert('Kunde inte skicka in quizet. Försök igen.'),
+        },
       );
     } else {
       setCurrentIdx(i => i + 1);
@@ -436,6 +439,7 @@ export function StudentPortalTeoriPage() {
       setScreen({ type: 'quiz', sessionId: session.session_id, questions: session.questions, category });
     } catch (err) {
       console.error('Failed to start quiz', err);
+      alert('Kunde inte starta quizet. Försök igen.');
     }
   }
 
