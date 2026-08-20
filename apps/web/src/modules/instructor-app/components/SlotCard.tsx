@@ -113,7 +113,10 @@ export function StudentRow({ booking }: { booking: BookingDetail }) {
   function handleMarkCompleted() {
     mark.mutate(
       { bookingId: booking.id, status: 'completed' },
-      { onSuccess: () => setJustCompleted(true) },
+      {
+        onSuccess: () => setJustCompleted(true),
+        onError:   () => alert('Kunde inte registrera närvaro. Försök igen.'),
+      },
     );
   }
 
