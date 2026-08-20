@@ -5,6 +5,7 @@ import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate } from '../_shared/lesson-credits.ts';
+import { transitionBookingAttendance } from '../_shared/booking-lifecycle.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline schemas (Deno cannot import workspace packages) ──────────────────
@@ -386,57 +387,26 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     return errorResp(ctx, 422, 'VALIDATION_ERROR', "Use PATCH /bookings/:id/cancel to cancel a booking");
   }
 
-  const allowed = VALID_TRANSITIONS[existing.status] ?? [];
-  if (!allowed.includes(newStatus)) {
-    return errorResp(ctx, 409, 'CONFLICT', `Booking status transition '${existing.status}' → '${newStatus}' is not permitted`);
-  }
+  // Portal Audit P0-3 (IP-01/XP-04): the actual status transition, credit
+  // side effects, and lesson_completed event are the single canonical
+  // implementation in _shared/booking-lifecycle.ts — also reused by
+  // instructor-portal's attendance endpoint so no second lifecycle can
+  // silently diverge from this one.
+  const result = await transitionBookingAttendance(client, {
+    organizationId: ctx.organizationId!,
+    bookingId:      id,
+    newStatus,
+    actorId:        ctx.actorId,
+  });
 
-  const updatePayload: Record<string, unknown> = {
-    status: newStatus,
-    status_changed_at: new Date().toISOString(),
-    updated_by: ctx.actorId,
-  };
-  // lesson_bookings_no_show_consistency requires no_show_marked_at IS NOT NULL
-  // whenever status = 'no_show' — without this the update always violates
-  // the check constraint and fails with a raw 500.
-  if (newStatus === 'no_show') {
-    updatePayload['no_show_marked_at'] = new Date().toISOString();
-    updatePayload['no_show_marked_by'] = ctx.actorId;
-  }
-
-  const { data: booking, error } = await (client as any)
-    .from('lesson_bookings')
-    .update(updatePayload)
-    .eq('id', id)
-    .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null)
-    .select()
-    .single();
-
-  if (error) {
-    if (error.code === 'PGRST116') return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
-    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to update booking');
+  if (!result.ok) {
+    return errorResp(ctx, result.status, result.code ?? 'ERROR', result.message ?? 'Failed to update booking',
+      result.code === 'NO_SHOW_TOO_EARLY' ? { starts_at: existing.starts_at } : undefined);
   }
 
   logger.info('Lesson.Updated', { correlation_id: ctx.correlationId, booking_id: id, status: newStatus });
 
-  // H-2: emit lesson_completed event on the student's package timeline (non-critical)
-  if (newStatus === 'completed') {
-    await (client as any).rpc('record_lesson_completed_event', {
-      p_booking_id:      id,
-      p_organization_id: ctx.organizationId,
-      p_actor_id:        ctx.actorId ?? null,
-      p_actor_email:     null,
-    }).then(undefined, (e: unknown) => {
-      logger.warn('booking.record_lesson_completed_failed', {
-        correlation_id: ctx.correlationId,
-        booking_id:     id,
-        error:          String(e),
-      });
-    });
-  }
-
-  return successResp(ctx, booking);
+  return successResp(ctx, result.booking);
 }
 
 async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {

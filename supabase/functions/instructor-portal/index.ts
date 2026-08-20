@@ -6,6 +6,7 @@ import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.
 import { createServiceClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
 import { registerPushToken, revokePushToken } from '../_shared/push-tokens.ts';
+import { transitionBookingAttendance } from '../_shared/booking-lifecycle.ts';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -567,14 +568,40 @@ Deno.serve((req: Request) =>
 
       const bk = booking as { id: string; student_id: string; organization_id: string; starts_at: string };
 
+      const attended = status === 'present' || status === 'late';
+
+      // Portal Audit P0-3 (IP-01/XP-04): this used to write only to
+      // booking_attendance below, never touching lesson_bookings.status —
+      // the actual booking stayed 'confirmed' forever, so credit
+      // consumption/reversal, waitlist promotion, and the student's own
+      // completed/no-show counts never fired. transitionBookingAttendance
+      // is the same canonical lifecycle bookings/index.ts's own attendance
+      // action already uses (Booking Engine transition rules, no-show
+      // time-gate, lesson_completed event) — this is now the one
+      // authoritative write path, not a second one. actorId is null: like
+      // guardian/student portals, an instructor-portal token session has
+      // no auth.users row to attribute the change to.
+      const transition = await transitionBookingAttendance(supabase, {
+        organizationId: bk.organization_id,
+        bookingId:      bk.id,
+        newStatus:      attended ? 'completed' : 'no_show',
+        actorId:        null,
+      });
+
+      if (!transition.ok) {
+        // Idempotent by design: transitionBookingAttendance treats
+        // "already in the target status" as success, so a repeated
+        // Present/Absent submission for the same booking is a safe no-op,
+        // not an error, here as much as it already is on the staff path.
+        return fail(transition.status, transition.message ?? 'Failed to record attendance');
+      }
+
       // Soft-delete any existing attendance record for this booking
       await supabase
         .from('booking_attendance')
         .update({ deleted_at: new Date().toISOString() })
         .eq('booking_id', bookingId)
         .is('deleted_at', null);
-
-      const attended = status === 'present' || status === 'late';
 
       const { error: insertErr } = await supabase
         .from('booking_attendance')
