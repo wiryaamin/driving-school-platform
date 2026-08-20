@@ -447,6 +447,190 @@ async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Respo
   return successResp(ctx, data ?? []);
 }
 
+// PORTALS V1.1 Phase 3: instructor lesson context.
+//
+// One aggregated, read-only endpoint instead of the many independent
+// frontend queries the instructor-app/portal pattern would otherwise need —
+// student identity + progress + last lesson + last assessment + recent
+// lesson notes + package balance + next lesson + its vehicle, in a single
+// round trip. Reuses the exact authorization pattern already hardened for
+// handleGetAssessment/handleSaveAssessment above (isInstructorTierRole +
+// resolveOwnInstructorId + resolveInstructorVisibleStudentIds — the same
+// authoritative "instructor -> visible students" definition, not a second
+// one), and the same service-role client for instructor_student_assessments
+// (its only working write/read path — see the comment above
+// handleGetAssessment). Every other query stays on the caller's own JWT
+// client, scoped by organization_id, matching every other route in this
+// file. Deliberately excludes:
+//   - student_notes (general/admin notes) — never established as
+//     instructor-visible anywhere in this codebase; only booking_notes
+//     (per-lesson, already surfaced to instructors via useMySchedule) is
+//     included here.
+//   - personnummer/identity fields, invoice/payment/financial fields on
+//     student_package_assignments (base_price, vat_rate, discounts,
+//     final_price, currency) — only the operational quantity/status fields
+//     needed to show a remaining-lessons count.
+async function handleGetLessonContext(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may view lesson context here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  const orgId = ctx.organizationId!;
+
+  // Same authorization boundary as handleSaveAssessment: membership in this
+  // set proves both "same organization" and "within this instructor's
+  // authorized scope" in one check. 404, not 403 — consistent with
+  // handleGetById above, so probing ids can't distinguish "not yours" from
+  // "doesn't exist".
+  const visibleIds = await resolveInstructorVisibleStudentIds(client, orgId, ownInstructorId);
+  if (!visibleIds.includes(studentId)) return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
+
+  const nowIso = new Date().toISOString();
+  const svc = createServiceClient();
+
+  const [
+    studentRes,
+    assessmentRes,
+    lastLessonRes,
+    notesRes,
+    packageRes,
+    nextLessonRes,
+  ] = await Promise.all([
+    (client as any)
+      .from('students')
+      .select('id, first_name, last_name, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at')
+      .eq('id', studentId)
+      .eq('organization_id', orgId)
+      .maybeSingle(),
+    svc
+      .from('instructor_student_assessments')
+      .select('competencies, readiness, notes, assessed_at')
+      .eq('instructor_id', ownInstructorId)
+      .eq('student_id', studentId)
+      .eq('organization_id', orgId)
+      .maybeSingle(),
+    (client as any)
+      .from('lesson_bookings')
+      .select('starts_at, status, performance_rating, lesson_types(name), instructors(first_name, last_name), booking_attendance(evaluation_outcome, evaluation_strengths, evaluation_improvements, evaluation_recommendation)')
+      .eq('student_id', studentId)
+      .eq('organization_id', orgId)
+      .in('status', ['completed', 'no_show'])
+      .order('starts_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    (client as any)
+      .from('booking_notes')
+      .select('content, created_at, lesson_bookings!inner(student_id, organization_id)')
+      .eq('lesson_bookings.student_id', studentId)
+      .eq('lesson_bookings.organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .limit(3),
+    (client as any)
+      .from('student_package_assignments')
+      .select('package_name, lesson_category, package_quantity, lessons_used, status, expires_at')
+      .eq('student_id', studentId)
+      .eq('organization_id', orgId)
+      .eq('status', 'active')
+      .order('assigned_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    (client as any)
+      .from('lesson_bookings')
+      .select('starts_at, ends_at, status, lesson_types(name), lesson_slots(vehicles(registration_number, make, model))')
+      .eq('student_id', studentId)
+      .eq('organization_id', orgId)
+      .in('status', ['reserved', 'confirmed'])
+      .gte('starts_at', nowIso)
+      .order('starts_at', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (studentRes.error || studentRes.data === null) {
+    return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
+  }
+
+  const student = studentRes.data as {
+    id: string; first_name: string; last_name: string;
+    target_licence_category: string; permit_stage: string;
+    risk1_completed_at: string | null; risk2_completed_at: string | null;
+    theory_passed_at: string | null; practical_passed_at: string | null;
+  };
+
+  const lastLessonRow = lastLessonRes.data as {
+    starts_at: string; status: string; performance_rating: number | null;
+    lesson_types: { name: string } | null;
+    instructors: { first_name: string; last_name: string } | null;
+    booking_attendance: { evaluation_outcome: string | null; evaluation_strengths: string | null; evaluation_improvements: string | null; evaluation_recommendation: string | null }[] | null;
+  } | null;
+
+  const nextLessonRow = nextLessonRes.data as {
+    starts_at: string; ends_at: string; status: string;
+    lesson_types: { name: string } | null;
+    lesson_slots: { vehicles: { registration_number: string; make: string; model: string } | null } | null;
+  } | null;
+
+  const packageRow = packageRes.data as {
+    package_name: string; lesson_category: string; package_quantity: number;
+    lessons_used: number; status: string; expires_at: string | null;
+  } | null;
+
+  return successResp(ctx, {
+    student: {
+      id:                       student.id,
+      first_name:               student.first_name,
+      last_name:                student.last_name,
+      target_licence_category:  student.target_licence_category,
+      permit_stage:             student.permit_stage,
+    },
+    progress: {
+      permit_stage:         student.permit_stage,
+      risk1_completed_at:   student.risk1_completed_at,
+      risk2_completed_at:   student.risk2_completed_at,
+      theory_passed_at:     student.theory_passed_at,
+      practical_passed_at:  student.practical_passed_at,
+    },
+    last_lesson: lastLessonRow === null ? null : {
+      lesson_type_name:      lastLessonRow.lesson_types?.name ?? null,
+      starts_at:              lastLessonRow.starts_at,
+      status:                lastLessonRow.status,
+      instructor_first_name: lastLessonRow.instructors?.first_name ?? null,
+      instructor_last_name:  lastLessonRow.instructors?.last_name ?? null,
+      performance_rating:    lastLessonRow.performance_rating,
+      evaluation_outcome:        lastLessonRow.booking_attendance?.[0]?.evaluation_outcome        ?? null,
+      evaluation_strengths:      lastLessonRow.booking_attendance?.[0]?.evaluation_strengths      ?? null,
+      evaluation_improvements:   lastLessonRow.booking_attendance?.[0]?.evaluation_improvements   ?? null,
+      evaluation_recommendation: lastLessonRow.booking_attendance?.[0]?.evaluation_recommendation ?? null,
+    },
+    last_assessment: assessmentRes.data ?? null,
+    notes: (notesRes.data ?? []).map((n: { content: string; created_at: string }) => ({
+      content:    n.content,
+      created_at: n.created_at,
+    })),
+    package: packageRow === null ? null : {
+      package_name:    packageRow.package_name,
+      lesson_category: packageRow.lesson_category,
+      remaining:       Math.max(0, packageRow.package_quantity - packageRow.lessons_used),
+      status:          packageRow.status,
+      expires_at:      packageRow.expires_at,
+    },
+    next_lesson: nextLessonRow === null ? null : {
+      starts_at:         nextLessonRow.starts_at,
+      ends_at:           nextLessonRow.ends_at,
+      status:            nextLessonRow.status,
+      lesson_type_name:  nextLessonRow.lesson_types?.name ?? null,
+    },
+    vehicle: nextLessonRow?.lesson_slots?.vehicles
+      ? {
+          registration_number: nextLessonRow.lesson_slots.vehicles.registration_number,
+          make:                nextLessonRow.lesson_slots.vehicles.make,
+          model:               nextLessonRow.lesson_slots.vehicles.model,
+        }
+      : null,
+  });
+}
+
 async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
@@ -671,6 +855,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
     } else if (pathname.endsWith('/lookup-person')) {
       response = req.method === 'POST'
         ? await handlePersonLookup(req, ctx)
+        : new Response(
+            JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+            { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+          );
+    } else if (/^\/students\/[0-9a-f-]+\/lesson-context$/.test(pathname)) {
+      const studentId = pathname.split('/')[2]!;
+      response = req.method === 'GET'
+        ? await handleGetLessonContext(req, ctx, studentId)
         : new Response(
             JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
             { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }

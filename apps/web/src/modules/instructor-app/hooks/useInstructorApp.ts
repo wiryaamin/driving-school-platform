@@ -246,6 +246,89 @@ export function useStudentSummary(
   });
 }
 
+// PORTALS V1.1 Phase 3: instructor lesson context — one aggregated,
+// read-only fetch instead of assembling this view from several independent
+// queries. Backend does all authorization (resolveInstructorVisibleStudentIds)
+// and organization scoping; the frontend just renders whatever comes back.
+export interface LessonContextLastLesson {
+  lesson_type_name:          string | null;
+  starts_at:                 string;
+  status:                    string;
+  instructor_first_name:     string | null;
+  instructor_last_name:      string | null;
+  performance_rating:        number | null;
+  evaluation_outcome:        string | null;
+  evaluation_strengths:      string | null;
+  evaluation_improvements:   string | null;
+  evaluation_recommendation: string | null;
+}
+
+export interface LessonContextAssessment {
+  competencies: Record<string, string>;
+  readiness:    Record<string, boolean>;
+  notes:        string | null;
+  assessed_at:  string;
+}
+
+export interface LessonContextNote {
+  content:    string;
+  created_at: string;
+}
+
+export interface LessonContextPackage {
+  package_name:    string;
+  lesson_category: string;
+  remaining:       number;
+  status:          string;
+  expires_at:      string | null;
+}
+
+export interface LessonContextNextLesson {
+  starts_at:         string;
+  ends_at:           string;
+  status:            string;
+  lesson_type_name:  string | null;
+}
+
+export interface LessonContextVehicle {
+  registration_number: string;
+  make:                string;
+  model:               string;
+}
+
+export interface LessonContext {
+  progress: {
+    permit_stage:        string;
+    risk1_completed_at:  string | null;
+    risk2_completed_at:  string | null;
+    theory_passed_at:    string | null;
+    practical_passed_at: string | null;
+  };
+  last_lesson:     LessonContextLastLesson | null;
+  last_assessment: LessonContextAssessment | null;
+  notes:           LessonContextNote[];
+  package:         LessonContextPackage | null;
+  next_lesson:     LessonContextNextLesson | null;
+  vehicle:         LessonContextVehicle | null;
+}
+
+export function useLessonContext(studentId: string | null | undefined) {
+  return useQuery({
+    queryKey: [...instructorAppKeys.all, 'lesson-context', studentId ?? ''],
+    enabled:  Boolean(studentId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<LessonContext | null> => {
+      if (!studentId) return null;
+      const { data, error } = await supabase.functions.invoke<{ data: LessonContext }>(
+        `students/${studentId}/lesson-context`,
+        { method: 'GET' },
+      );
+      if (error) throw error;
+      return data?.data ?? null;
+    },
+  });
+}
+
 export type AttendanceStatus = 'completed' | 'no_show' | 'confirmed';
 
 export function useMarkAttendance() {

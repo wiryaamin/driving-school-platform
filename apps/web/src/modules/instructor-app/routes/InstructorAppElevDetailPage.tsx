@@ -1,7 +1,12 @@
-import { ArrowLeft, Phone, Mail, Star, AlertTriangle, AlertCircle } from 'lucide-react';
+import type { ReactNode } from 'react';
+import {
+  ArrowLeft, Phone, Mail, Star, AlertTriangle, AlertCircle,
+  ClipboardCheck, TrendingUp, History, StickyNote, Wallet, CalendarClock, Car,
+} from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useInstructorCtx } from './InstructorAppLayout.js';
-import { useMyStudents, useStudentSummary } from '../hooks/useInstructorApp.js';
+import { useMyStudents, useStudentSummary, useLessonContext } from '../hooks/useInstructorApp.js';
+import { PERMIT_STAGE_LABELS, getProgressPct, type PermitStage } from '@modules/student-portal/lib/permitStage.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -34,6 +39,155 @@ function StarDisplay({ rating }: { rating: number }) {
           )}
         />
       ))}
+    </div>
+  );
+}
+
+// ─── Lesson context (PORTALS V1.1 Phase 3) ────────────────────────────────────
+// Compact, scannable "who / where in training / what happened / what's next"
+// view sourced from the single aggregated GET /students/:id/lesson-context
+// endpoint — one round trip instead of several. Sections render only when
+// meaningful data exists (per the approved design), each with its own loading/
+// empty/error handling folded into the single query above.
+
+function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
+}
+
+function formatShortTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function ContextCard({ icon: Icon, label, children }: { icon: typeof TrendingUp; label: string; children: ReactNode }) {
+  return (
+    <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 space-y-2">
+      <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+        <Icon className="w-3.5 h-3.5" />
+        {label}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function LessonContextSection({ studentId }: { studentId: string }) {
+  const { data: ctx, isLoading, isError } = useLessonContext(studentId);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3 animate-pulse">
+        <div className="h-16 bg-gray-100 dark:bg-gray-800 rounded-2xl" />
+        <div className="h-16 bg-gray-100 dark:bg-gray-800 rounded-2xl" />
+      </div>
+    );
+  }
+  if (isError) {
+    return <p className="text-xs text-red-600 dark:text-red-400">Kunde inte hämta lektionsöversikt.</p>;
+  }
+  if (!ctx) return null;
+
+  const pct   = getProgressPct(ctx.progress.permit_stage);
+  const stage = PERMIT_STAGE_LABELS[ctx.progress.permit_stage as PermitStage] ?? ctx.progress.permit_stage;
+
+  return (
+    <div className="space-y-3">
+      {/* PROGRESS */}
+      <ContextCard icon={TrendingUp} label="Progress">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">{stage}</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">{pct}%</p>
+        </div>
+        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+          <div className="h-full bg-purple-500 rounded-full" style={{ width: `${pct}%` }} />
+        </div>
+      </ContextCard>
+
+      {/* LAST LESSON */}
+      {ctx.last_lesson && (
+        <ContextCard icon={History} label="Senaste lektion">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+              {ctx.last_lesson.lesson_type_name ?? 'Körlektion'}
+            </p>
+            <span className={cn(
+              'text-[10px] font-bold px-2 py-0.5 rounded-full',
+              ctx.last_lesson.status === 'completed'
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                : 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+            )}>
+              {ctx.last_lesson.status === 'completed' ? 'Genomförd' : 'Uteblev'}
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            {formatShortDate(ctx.last_lesson.starts_at)}
+            {ctx.last_lesson.instructor_first_name && ` · ${ctx.last_lesson.instructor_first_name} ${ctx.last_lesson.instructor_last_name ?? ''}`}
+          </p>
+          {ctx.last_lesson.performance_rating !== null && (
+            <StarDisplay rating={ctx.last_lesson.performance_rating} />
+          )}
+          {ctx.last_lesson.evaluation_outcome && (
+            <p className="text-xs text-gray-600 dark:text-gray-400">{ctx.last_lesson.evaluation_outcome}</p>
+          )}
+        </ContextCard>
+      )}
+
+      {/* LAST ASSESSMENT */}
+      {ctx.last_assessment && (
+        <ContextCard icon={ClipboardCheck} label="Senaste bedömning">
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            {formatShortDate(ctx.last_assessment.assessed_at)}
+          </p>
+          {ctx.last_assessment.notes && (
+            <p className="text-sm text-gray-700 dark:text-gray-300">{ctx.last_assessment.notes}</p>
+          )}
+        </ContextCard>
+      )}
+
+      {/* NOTES */}
+      {ctx.notes.length > 0 && (
+        <ContextCard icon={StickyNote} label="Anteckningar">
+          {ctx.notes.map((n, i) => (
+            <p key={i} className="text-sm text-gray-700 dark:text-gray-300">
+              <span className="text-gray-400 dark:text-gray-500">{formatShortDate(n.created_at)} — </span>
+              {n.content}
+            </p>
+          ))}
+        </ContextCard>
+      )}
+
+      {/* PACKAGE */}
+      {ctx.package && (
+        <ContextCard icon={Wallet} label="Paket">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">{ctx.package.package_name}</p>
+            <p className="text-sm font-bold text-purple-600 dark:text-purple-400 tabular-nums">
+              {ctx.package.remaining} kvar
+            </p>
+          </div>
+        </ContextCard>
+      )}
+
+      {/* NEXT */}
+      {ctx.next_lesson && (
+        <ContextCard icon={CalendarClock} label="Nästa lektion">
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            {formatShortDate(ctx.next_lesson.starts_at)} kl. {formatShortTime(ctx.next_lesson.starts_at)}
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            {ctx.next_lesson.lesson_type_name ?? 'Körlektion'}
+          </p>
+        </ContextCard>
+      )}
+
+      {/* VEHICLE */}
+      {ctx.vehicle && (
+        <ContextCard icon={Car} label="Fordon">
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            {ctx.vehicle.make} {ctx.vehicle.model}
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">{ctx.vehicle.registration_number}</p>
+        </ContextCard>
+      )}
     </div>
   );
 }
@@ -209,6 +363,9 @@ export function InstructorAppElevDetailPage() {
             )}
           </div>
         )}
+
+        {/* Lesson context (Phase 3) */}
+        <LessonContextSection studentId={student.id} />
       </div>
     </div>
   );
