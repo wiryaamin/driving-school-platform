@@ -54,6 +54,8 @@ export interface PortalBooking {
   lesson_type_name:      string | null;
   instructor_first_name: string | null;
   instructor_last_name:  string | null;
+  location_name:         string | null;
+  vehicle_label:         string | null;
   cancellation_reason:   string | null;
 }
 

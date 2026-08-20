@@ -297,6 +297,12 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
         {/* Expanded actions */}
         {expanded && isUpcoming && (
           <div className="px-4 pb-4 pt-0 border-t border-gray-50 dark:border-gray-800">
+            {(booking.location_name || booking.vehicle_label) && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-3 text-xs text-gray-500 dark:text-gray-400">
+                {booking.location_name && <span>{booking.location_name}</span>}
+                {booking.vehicle_label && <span>{booking.vehicle_label}</span>}
+              </div>
+            )}
             {canSelfService ? (
               <div className="flex gap-2 pt-3">
                 <button

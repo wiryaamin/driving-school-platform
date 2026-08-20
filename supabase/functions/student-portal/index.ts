@@ -435,7 +435,7 @@ Deno.serve((req: Request) =>
     if (req.method === 'GET' && path === '/bookings') {
       const { data: bookings, error: bErr } = await supabase
         .from('lesson_bookings')
-        .select('id, slot_id, status, created_at, cancellation_reason, lesson_slots(starts_at, ends_at, instructors(first_name, last_name), lesson_types(name))')
+        .select('id, slot_id, status, created_at, cancellation_reason, lesson_slots(starts_at, ends_at, instructors(first_name, last_name), lesson_types(name), organization_locations(name), vehicles(make, model))')
         .eq('student_id', student_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
@@ -450,6 +450,8 @@ Deno.serve((req: Request) =>
           starts_at: string; ends_at: string;
           instructors:  { first_name: string; last_name: string } | null;
           lesson_types: { name: string } | null;
+          organization_locations: { name: string } | null;
+          vehicles:               { make: string; model: string } | null;
         } | null;
       };
 
@@ -463,6 +465,8 @@ Deno.serve((req: Request) =>
         lesson_type_name:     b.lesson_slots?.lesson_types?.name ?? null,
         instructor_first_name: b.lesson_slots?.instructors?.first_name ?? null,
         instructor_last_name:  b.lesson_slots?.instructors?.last_name  ?? null,
+        location_name:        b.lesson_slots?.organization_locations?.name ?? null,
+        vehicle_label:        b.lesson_slots?.vehicles ? `${b.lesson_slots.vehicles.make} ${b.lesson_slots.vehicles.model}` : null,
         cancellation_reason:  b.cancellation_reason,
       })));
     }
