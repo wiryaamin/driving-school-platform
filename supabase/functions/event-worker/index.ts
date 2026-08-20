@@ -385,13 +385,13 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
       const [bookingResult, slotResult] = await Promise.all([
         client
           .from('lesson_bookings')
-          .select('slot_id, student_id')
+          .select('slot_id, student_id, instructor_id')
           .eq('id', bookingId)
           .single(),
         null,
       ]);
 
-      const booking = bookingResult.data as { slot_id: string; student_id: string } | null;
+      const booking = bookingResult.data as { slot_id: string; student_id: string; instructor_id: string | null } | null;
       if (booking !== null) {
         const [slotRes, studentRes] = await Promise.all([
           client.from('lesson_slots').select('starts_at').eq('id', booking.slot_id).single(),
@@ -427,6 +427,20 @@ async function handleLessonCreated(event: OutboxEvent, client: any): Promise<Han
           }).then(undefined, (enqueueErr: unknown) => {
             logger.warn('booking_confirmed.enqueue_failed', { event_id: event.id, booking_id: bookingId, error: String(enqueueErr) });
           });
+
+          // PORTALS V1.1 Phase 2: instructor booking-change notifications.
+          if (booking.instructor_id !== null) {
+            await notifyInstructorOfBookingChange(client, {
+              organizationId: orgId,
+              instructorId:   booking.instructor_id,
+              triggerEvent:   'booking_confirmed',
+              elevFornamn:    student.first_name ?? '',
+              datum,
+              tid,
+              referenceId:    bookingId,
+              causationId:    event.id,
+            });
+          }
         }
       }
     } catch (notifErr) {
@@ -589,6 +603,66 @@ async function handleLessonUpdated(event: OutboxEvent, _client: unknown): Promis
   return { success: true };
 }
 
+// Notifies the instructor a booking on their own schedule belongs to.
+// PORTALS V1.1 Phase 2 — mirrors notifyGuardiansOfBookingChange's shape
+// exactly, minus the loop: a booking has exactly one instructor (a direct
+// FK), not a variable-length list, so a single lookup + single enqueue is
+// the natural equivalent, not a new pattern. instructorId always comes from
+// event.organization_id / event.payload written by the emit_booking_status_
+// changed() trigger (SECURITY DEFINER, reads NEW.instructor_id directly) —
+// never from client input, so this never needs to re-validate authorization,
+// same trust boundary every other event-worker handler already relies on.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function notifyInstructorOfBookingChange(
+  client: any,
+  params: {
+    organizationId: string;
+    instructorId:   string;
+    triggerEvent:   'booking_confirmed' | 'booking_cancelled' | 'booking_rescheduled';
+    elevFornamn:    string;
+    datum:          string;
+    tid:            string;
+    referenceId?:   string;
+    causationId:    string;
+  },
+): Promise<void> {
+  const { data: instructor } = await client
+    .from('instructors')
+    .select('first_name, email, phone')
+    .eq('id', params.instructorId)
+    .eq('organization_id', params.organizationId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (instructor === null) return; // removed/not found — nothing to notify
+
+  const ins = instructor as { first_name: string; email: string | null; phone: string | null };
+
+  const commPayload: Record<string, string> = {
+    trigger_event:   params.triggerEvent,
+    organization_id: params.organizationId,
+    instructor_id:   params.instructorId,
+    förnamn:         ins.first_name ?? '',
+    elev_fornamn:    params.elevFornamn,
+    datum:           params.datum,
+    tid:             params.tid,
+    reference_type:  'lesson_booking',
+  };
+  if (params.referenceId !== undefined) commPayload['reference_id'] = params.referenceId;
+  if (ins.email)          commPayload['instructor_email'] = ins.email;
+  if (ins.phone !== null) commPayload['instructor_phone'] = ins.phone;
+
+  await client.rpc('insert_outbox_event', {
+    p_event_type:      'Communication.Requested',
+    p_channel:         'internal',
+    p_payload:         commPayload,
+    p_organization_id: params.organizationId,
+    p_causation_id:    params.causationId,
+  }).then(undefined, (enqueueErr: unknown) => {
+    logger.warn(`${params.triggerEvent}.instructor_enqueue_failed`, { instructor_id: params.instructorId, error: String(enqueueErr) });
+  });
+}
+
 // Lesson.Cancelled: cancel reminders + promote next waitlist entry
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<HandlerResult> {
@@ -650,8 +724,9 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
   }
 
   // Send cancellation notification to student
-  const orgId     = event.organization_id;
-  const studentId = event.payload['student_id'] as string | undefined;
+  const orgId        = event.organization_id;
+  const studentId    = event.payload['student_id']    as string | undefined;
+  const instructorId = event.payload['instructor_id'] as string | undefined;
   if (orgId !== null && studentId !== undefined) {
     try {
       const [studentRes, slotRes] = await Promise.all([
@@ -690,6 +765,25 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
           }).then(undefined, (enqueueErr: unknown) => {
             logger.warn('booking_cancelled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
           });
+
+          // PORTALS V1.1 Phase 2: instructor booking-change notifications.
+          // instructor_id comes straight from the trusted outbox payload
+          // (written by emit_booking_status_changed(), not client input) and
+          // fires identically regardless of who cancelled — student self-
+          // service, reception, or any other authorized path all update the
+          // same lesson_bookings.status column the DB trigger watches.
+          if (instructorId !== undefined) {
+            await notifyInstructorOfBookingChange(client, {
+              organizationId: orgId,
+              instructorId,
+              triggerEvent:   'booking_cancelled',
+              elevFornamn:    student.first_name ?? '',
+              datum,
+              tid,
+              referenceId:    bookingId,
+              causationId:    event.id,
+            });
+          }
       }
     } catch (notifErr) {
       logger.warn('booking_cancelled.notification_error', { event_id: event.id, error: String(notifErr) });
@@ -734,11 +828,11 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
       try {
         const { data: booking } = await client
           .from('lesson_bookings')
-          .select('slot_id, student_id')
+          .select('slot_id, student_id, instructor_id')
           .eq('id', newBookingId)
           .single();
 
-        const b = booking as { slot_id: string; student_id: string } | null;
+        const b = booking as { slot_id: string; student_id: string; instructor_id: string | null } | null;
         if (b !== null) {
           const [slotRes, studentRes] = await Promise.all([
             client.from('lesson_slots').select('starts_at').eq('id', b.slot_id).single(),
@@ -774,6 +868,25 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
             }).then(undefined, (enqueueErr: unknown) => {
               logger.warn('booking_rescheduled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
             });
+
+            // PORTALS V1.1 Phase 2: instructor booking-change notifications.
+            // Resolved from the new booking row (the one the instructor
+            // actually now has on their schedule) — Lesson.Rescheduled's own
+            // outbox payload only carries old/new booking ids, not
+            // instructor_id, so it's re-fetched here same as student_id
+            // already was.
+            if (b.instructor_id !== null) {
+              await notifyInstructorOfBookingChange(client, {
+                organizationId: orgId,
+                instructorId:   b.instructor_id,
+                triggerEvent:   'booking_rescheduled',
+                elevFornamn:    student.first_name ?? '',
+                datum,
+                tid,
+                referenceId:    newBookingId,
+                causationId:    event.id,
+              });
+            }
           }
         }
       } catch (notifErr) {
