@@ -36,9 +36,17 @@ DECLARE
 BEGIN
   RAISE NOTICE '─── Guardian notification migration: fixture lookup ────────────────';
 
-  SELECT id INTO v_org_id FROM public.organizations WHERE status = 'active' LIMIT 1;
+  -- Excludes the nil-UUID '00000000-0000-0000-0000-000000000000' platform
+  -- system organization (a real, deliberate sentinel row, not a tenant —
+  -- confirmed via direct query during the production-readiness audit).
+  SELECT id INTO v_org_id
+  FROM public.organizations
+  WHERE status = 'active'
+    AND id <> '00000000-0000-0000-0000-000000000000'
+  ORDER BY created_at ASC
+  LIMIT 1;
   IF v_org_id IS NULL THEN
-    RAISE EXCEPTION 'TEST SETUP: no active organization found.';
+    RAISE EXCEPTION 'TEST SETUP: no active tenant organization found.';
   END IF;
 
   -- =========================================================================

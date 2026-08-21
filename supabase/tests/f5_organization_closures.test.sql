@@ -57,9 +57,23 @@ DECLARE
 BEGIN
   RAISE NOTICE '─── F5 organization_closures: fixture lookup ───────────────────────';
 
-  SELECT id INTO v_org_id FROM public.organizations WHERE status = 'active' LIMIT 1;
+  -- Excludes the nil-UUID '00000000-0000-0000-0000-000000000000' platform
+  -- system organization (a real, deliberate sentinel row, not a tenant —
+  -- confirmed via direct query during the production-readiness audit) and
+  -- requires the org to actually have the instructor/lesson-type/student
+  -- fixtures this test needs, rather than picking any active org and
+  -- failing on missing fixtures with no useful signal about why.
+  SELECT o.id INTO v_org_id
+  FROM public.organizations o
+  WHERE o.status = 'active'
+    AND o.id <> '00000000-0000-0000-0000-000000000000'
+    AND EXISTS (SELECT 1 FROM public.instructors i WHERE i.organization_id = o.id AND i.deleted_at IS NULL)
+    AND EXISTS (SELECT 1 FROM public.lesson_types lt WHERE lt.organization_id = o.id AND lt.is_active = true)
+    AND EXISTS (SELECT 1 FROM public.students s WHERE s.organization_id = o.id AND s.deleted_at IS NULL)
+  ORDER BY o.created_at ASC
+  LIMIT 1;
   IF v_org_id IS NULL THEN
-    RAISE EXCEPTION 'F5 TEST SETUP: no active organization found — seed a demo org first.';
+    RAISE EXCEPTION 'F5 TEST SETUP: no active tenant organization with instructor+lesson_type+student fixtures found — seed a demo org first.';
   END IF;
 
   SELECT id INTO v_instructor_id
