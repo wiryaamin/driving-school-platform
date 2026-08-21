@@ -4,7 +4,7 @@ import { buildEdgeContext } from '../_shared/context.ts';
 import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.ts';
 import { createSupabaseClient } from '../_shared/supabase.ts';
 import { logger } from '../_shared/logger.ts';
-import { createInstructorRecord } from '../_shared/instructor-provisioning.ts';
+import { createInstructorRecord, resolvePersonnummer } from '../_shared/instructor-provisioning.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline Zod schemas (Deno can't import workspace packages) ───────────────
@@ -137,6 +137,30 @@ function extractId(req: Request): string | null {
 
 // ─── Route Handlers ───────────────────────────────────────────────────────────
 
+// instructors:instructor:read is held not just by org_owner/org_admin/
+// org_manager/instructor_senior but also, as of
+// 20260720000002_fix_instructor_read_rbac_gap.sql, the plain 'instructor'
+// role — deliberately, so the instructor dashboard's "Lärarstatus" widget
+// (name/employment_type/teaching_categories of colleagues) can render. That
+// grant was never meant to also hand a colleague-level caller the same
+// personnummer_last4/date_of_birth/employee_number every admin surface
+// exposes — select('*') did that as an unintended side effect. No RBAC
+// change here: this only trims the response for that one specific role,
+// same PII these fields already represent for students (see the
+// students:pii:read split), reusing the role signal already on ctx rather
+// than introducing a new permission.
+const INSTRUCTOR_PII_FIELDS = [
+  'identity_type', 'personnummer_encrypted', 'personnummer_hash',
+  'personnummer_last4', 'date_of_birth', 'employee_number',
+] as const;
+
+function stripInstructorPiiForPeers<T extends Record<string, unknown>>(ctx: EdgeRequestContext, row: T): T {
+  if (ctx.actorRole !== 'instructor') return row;
+  const stripped = { ...row };
+  for (const f of INSTRUCTOR_PII_FIELDS) delete stripped[f];
+  return stripped;
+}
+
 async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'instructors:instructor:read');
   if (guard) return guard;
@@ -179,7 +203,8 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to list instructors');
   }
 
-  return pagedResp(ctx, data ?? [], count ?? 0, page, per_page);
+  const rows = ((data ?? []) as Array<Record<string, unknown>>).map(r => stripInstructorPiiForPeers(ctx, r));
+  return pagedResp(ctx, rows, count ?? 0, page, per_page);
 }
 
 async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Response> {
@@ -244,7 +269,7 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
     return errorResp(ctx, 404, 'NOT_FOUND', `Instructor '${id}' not found`);
   }
 
-  return successResp(ctx, instructor);
+  return successResp(ctx, stripInstructorPiiForPeers(ctx, instructor as Record<string, unknown>));
 }
 
 async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
@@ -263,8 +288,8 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
     return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
   }
 
-  const pnrResult = await resolvePersonnummer(parsed.data, ctx);
-  if (!pnrResult.ok) return pnrResult.response;
+  const pnrResult = await resolvePersonnummer(parsed.data);
+  if (!pnrResult.ok) return errorResp(ctx, 500, 'INTERNAL_ERROR', pnrResult.message);
   const dto = pnrResult.dto as Record<string, unknown> & { email?: string; personnummer_hash?: string };
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 

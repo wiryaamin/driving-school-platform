@@ -34,11 +34,19 @@ export type CreateInstructorResult =
 
 /**
  * Turns a raw `personnummer` (YYYYMMDD-XXXX) into personnummer_encrypted/
- * _hash/_last4 via AES-256-GCM + HMAC-SHA256 and drops the raw field —
- * mirrors instructors/index.ts's resolvePersonnummer exactly.
+ * _hash/_last4 via AES-256-GCM + HMAC-SHA256 and drops the raw field.
+ *
+ * Exported: also used directly by instructors/index.ts's handleUpdate,
+ * which doesn't go through createInstructorRecord (that's create-only) but
+ * needs the identical encrypt/hash/last4 transform whenever an update
+ * includes a new personnummer. A local copy in instructors/index.ts existed
+ * here previously and was consolidated into this one shared implementation
+ * so the two call sites can't independently drift on how a personnummer is
+ * turned into its stored form — Partial<> because handleUpdate's DTO has
+ * every field optional (a PATCH), unlike handleCreate's.
  */
-async function resolvePersonnummer(
-  dto: CreateInstructorDto,
+export async function resolvePersonnummer(
+  dto: Partial<CreateInstructorDto>,
 ): Promise<{ ok: true; dto: Record<string, unknown> } | { ok: false; code: 'IDENTITY_CRYPTO_NOT_CONFIGURED'; message: string }> {
   const { personnummer, ...rest } = dto;
   if (personnummer === undefined) return { ok: true, dto: rest };
