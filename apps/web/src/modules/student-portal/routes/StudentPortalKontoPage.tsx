@@ -7,7 +7,7 @@ import {
 import {
   usePortalBalance, usePortalMe, usePortalOrg,
   usePortalRecordSwishInitiated, usePortalCreateStripeCheckout, usePortalCreateNetsCheckout,
-  usePortalPaymentRequest, usePortalPackages,
+  usePortalPaymentRequest, usePortalPackages, useUpdateNotificationPrefs,
 } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
 import { useQueryClient } from '@tanstack/react-query';
@@ -22,30 +22,6 @@ function formatSek(sek: number): string {
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-// ─── Notification preferences (localStorage) ──────────────────────────────────
-
-const NOTIF_KEY = 'portal_notification_prefs';
-
-interface NotifPrefs {
-  email_booking:  boolean;
-  email_reminder: boolean;
-  sms_reminder:   boolean;
-}
-
-function loadNotifPrefs(): NotifPrefs {
-  try {
-    const raw = localStorage.getItem(NOTIF_KEY);
-    if (raw) {
-      return { email_booking: true, email_reminder: true, sms_reminder: false, ...(JSON.parse(raw) as Partial<NotifPrefs>) };
-    }
-  } catch { /* ignore */ }
-  return { email_booking: true, email_reminder: true, sms_reminder: false };
-}
-
-function saveNotifPrefs(prefs: NotifPrefs): void {
-  try { localStorage.setItem(NOTIF_KEY, JSON.stringify(prefs)); } catch { /* ignore */ }
 }
 
 // ─── Toggle ───────────────────────────────────────────────────────────────────
@@ -534,13 +510,7 @@ export function StudentPortalKontoPage() {
   const { data: org }                               = usePortalOrg();
 
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceData | null>(null);
-  const [notifPrefs, setNotifPrefs] = useState<NotifPrefs>(loadNotifPrefs);
-
-  function updatePref<K extends keyof NotifPrefs>(key: K, value: NotifPrefs[K]) {
-    const next = { ...notifPrefs, [key]: value };
-    setNotifPrefs(next);
-    saveNotifPrefs(next);
-  }
+  const updatePrefs = useUpdateNotificationPrefs();
 
   const isLoading = meLoading || balLoading;
   const student   = me;
@@ -740,21 +710,15 @@ export function StudentPortalKontoPage() {
         </div>
         <div className="px-5 divide-y divide-gray-50 dark:divide-gray-800">
           <Toggle
-            checked={notifPrefs.email_booking}
-            onChange={v => updatePref('email_booking', v)}
-            label="Bokningsbekräftelse via e-post"
-            description="Skickas direkt när en bokning skapas eller avbokas"
+            checked={student?.communication_opt_in_email ?? true}
+            onChange={v => updatePrefs.mutate({ communication_opt_in_email: v })}
+            label="E-postnotiser"
+            description="Bokningsbekräftelser och påminnelser via e-post"
           />
           <Toggle
-            checked={notifPrefs.email_reminder}
-            onChange={v => updatePref('email_reminder', v)}
-            label="Påminnelse dagen innan"
-            description="E-postpåminnelse 24 timmar före lektionen"
-          />
-          <Toggle
-            checked={notifPrefs.sms_reminder}
-            onChange={v => updatePref('sms_reminder', v)}
-            label="SMS-påminnelse"
+            checked={student?.communication_opt_in_sms ?? true}
+            onChange={v => updatePrefs.mutate({ communication_opt_in_sms: v })}
+            label="SMS-notiser"
             description="Kräver att skolan har aktiverat SMS-utskick"
           />
         </div>
