@@ -2,50 +2,48 @@ import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowLeft, Phone, Mail, Star, AlertTriangle, AlertCircle,
-  ClipboardCheck, TrendingUp, History, StickyNote, Wallet, CalendarClock, Car,
+  CheckCircle, Circle, Loader2, ClipboardCheck, TrendingUp,
+  History, StickyNote, Wallet, CalendarClock, Car,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useInstructorCtx } from './InstructorAppLayout.js';
 import {
-  useMyStudents, useStudentSummary, useLessonContext, useLessonHistory,
+  useMyStudents, useStudentSummary, useAssessment, useSaveAssessment,
+  useLessonContext, useLessonHistory,
   type LessonHistoryEntry,
 } from '../hooks/useInstructorApp.js';
 import { PERMIT_STAGE_LABELS, getProgressPct, type PermitStage } from '@modules/student-portal/lib/permitStage.js';
 import { cn } from '@/lib/utils.js';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Assessment (P1-3) — same competency/readiness keys and one-per-
+// instructor-per-student model as instructor-portal/utbildningskort, reused
+// not reinvented, so a student's card reads consistently regardless of which
+// instructor surface last touched it. ──────────────────────────────────────
 
-const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
-  lead:       { label: 'Intressent',   cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400' },
-  onboarding: { label: 'Onboarding',   cls: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' },
-  active:     { label: 'Aktiv',        cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' },
-  paused:     { label: 'Pausad',       cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
-  completed:  { label: 'Klar',         cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' },
-  archived:   { label: 'Arkiverad',    cls: 'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500' },
-};
+const COMPETENCIES = [
+  { key: 'stadskorning', label: 'Stadskörning' },
+  { key: 'landsvag',     label: 'Landsväg' },
+  { key: 'motorvag',     label: 'Motorväg' },
+  { key: 'parkering',    label: 'Parkering' },
+  { key: 'backning',     label: 'Backning' },
+  { key: 'cirkulation',  label: 'Cirkulationsplats' },
+  { key: 'morker',       label: 'Körning i mörker' },
+  { key: 'halka',        label: 'Halkkörning' },
+] as const;
 
-function formatLicCat(cat: string): string {
-  return cat ? cat.replace(/_?(automat|auto|manuell|manual)/i, '').trim().toUpperCase() || cat.toUpperCase() : '';
-}
+const READINESS = [
+  { key: 'risk1',     label: 'Redo för Riskettan' },
+  { key: 'risk2',     label: 'Redo för Risktvåan' },
+  { key: 'theory',    label: 'Redo för Kunskapsprov' },
+  { key: 'practical', label: 'Redo för Körprov' },
+] as const;
 
-function StarDisplay({ rating }: { rating: number }) {
-  const rounded = Math.round(rating);
-  return (
-    <div className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map(i => (
-        <Star
-          key={i}
-          className={cn(
-            'w-4 h-4',
-            i <= rounded
-              ? 'fill-amber-400 text-amber-400'
-              : 'fill-gray-200 text-gray-200 dark:fill-gray-700 dark:text-gray-700',
-          )}
-        />
-      ))}
-    </div>
-  );
-}
+const STATUS_OPTIONS = [
+  { value: 'not_started', label: 'Ej påbörjad',       cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400' },
+  { value: 'in_progress', label: 'Pågående',           cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
+  { value: 'mastered',    label: 'Behärskas',          cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' },
+  { value: 'needs_more',  label: 'Kräver mer träning', cls: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400' },
+] as const;
 
 // ─── Lesson context (PORTALS V1.1 Phase 3) ────────────────────────────────────
 // Compact, scannable "who / where in training / what happened / what's next"
@@ -264,6 +262,141 @@ function LessonHistorySection({ studentId }: { studentId: string }) {
   );
 }
 
+function AssessmentSection({ studentId, studentFirstName }: { studentId: string; studentFirstName: string }) {
+  const { data: assessment, isLoading, isError } = useAssessment(studentId);
+  const save = useSaveAssessment();
+
+  const [competencies, setCompetencies] = useState<Partial<Record<string, string>>>({});
+  const [readiness,    setReadiness]    = useState<Partial<Record<string, boolean>>>({});
+  const [notes,        setNotes]        = useState('');
+  const [initialized,  setInitialized]  = useState(false);
+  const [saved,        setSaved]        = useState(false);
+
+  useEffect(() => {
+    if (!initialized && !isLoading) {
+      if (assessment) {
+        setCompetencies(assessment.competencies);
+        setReadiness(assessment.readiness);
+        setNotes(assessment.notes ?? '');
+      }
+      setInitialized(true);
+    }
+  }, [assessment, isLoading, initialized]);
+
+  function handleSave() {
+    save.mutate(
+      { studentId, competencies: competencies as Record<string, string>, readiness: readiness as Record<string, boolean>, notes },
+      { onSuccess: () => { setSaved(true); setTimeout(() => setSaved(false), 2500); } },
+    );
+  }
+
+  if (isLoading && !initialized) {
+    return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-300" /></div>;
+  }
+  if (isError) {
+    return <p className="text-xs text-red-600 dark:text-red-400">Kunde inte hämta bedömningen.</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+        {COMPETENCIES.map(comp => {
+          const current = competencies[comp.key] ?? 'not_started';
+          const cfg = STATUS_OPTIONS.find(o => o.value === current) ?? STATUS_OPTIONS[0];
+          return (
+            <div key={comp.key} className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-50 dark:border-gray-800 last:border-0">
+              <p className="flex-1 text-sm text-gray-700 dark:text-gray-300">{comp.label}</p>
+              <select
+                value={current}
+                onChange={e => setCompetencies(prev => ({ ...prev, [comp.key]: e.target.value }))}
+                className={cn('text-xs font-bold px-2 py-1 rounded-lg border-0 focus:outline-none focus:ring-2 focus:ring-purple-300', cfg.cls)}
+              >
+                {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden">
+        {READINESS.map(item => {
+          const value = Boolean(readiness[item.key]);
+          return (
+            <button
+              key={item.key}
+              onClick={() => setReadiness(prev => ({ ...prev, [item.key]: !value }))}
+              className={cn(
+                'flex items-center gap-2 w-full px-4 py-2.5 border-b border-gray-50 dark:border-gray-800 last:border-0 text-left transition-colors',
+                value ? 'bg-green-50 dark:bg-green-900/10' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50',
+              )}
+            >
+              {value
+                ? <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />
+                : <Circle className="w-4 h-4 text-gray-200 dark:text-gray-700 shrink-0" />}
+              <p className={cn('text-sm', value ? 'text-green-800 dark:text-green-300' : 'text-gray-700 dark:text-gray-300')}>{item.label}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <textarea
+        value={notes}
+        onChange={e => setNotes(e.target.value)}
+        rows={3}
+        placeholder={`Anteckningar om ${studentFirstName}s utbildning...`}
+        className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-purple-300 text-gray-700 dark:text-gray-200 placeholder:text-gray-300 dark:placeholder:text-gray-600"
+      />
+
+      {save.isError && (
+        <p className="text-xs text-red-600 dark:text-red-400 text-center">Kunde inte spara — försök igen.</p>
+      )}
+
+      <button
+        onClick={handleSave}
+        disabled={save.isPending}
+        className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-bold transition-colors"
+      >
+        {save.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : null}
+        {saved ? 'Sparat' : 'Spara bedömning'}
+      </button>
+    </div>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
+  lead:       { label: 'Intressent',   cls: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400' },
+  onboarding: { label: 'Onboarding',   cls: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' },
+  active:     { label: 'Aktiv',        cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' },
+  paused:     { label: 'Pausad',       cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
+  completed:  { label: 'Klar',         cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' },
+  archived:   { label: 'Arkiverad',    cls: 'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500' },
+};
+
+function formatLicCat(cat: string): string {
+  return cat ? cat.replace(/_?(automat|auto|manuell|manual)/i, '').trim().toUpperCase() || cat.toUpperCase() : '';
+}
+
+function StarDisplay({ rating }: { rating: number }) {
+  const rounded = Math.round(rating);
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map(i => (
+        <Star
+          key={i}
+          className={cn(
+            'w-4 h-4',
+            i <= rounded
+              ? 'fill-amber-400 text-amber-400'
+              : 'fill-gray-200 text-gray-200 dark:fill-gray-700 dark:text-gray-700',
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ─── InstructorAppElevDetailPage ──────────────────────────────────────────────
 
 export function InstructorAppElevDetailPage() {
@@ -446,6 +579,15 @@ export function InstructorAppElevDetailPage() {
             Lektionshistorik
           </p>
           <LessonHistorySection studentId={student.id} />
+        </div>
+
+        {/* Competency assessment (P1-3) */}
+        <div className="space-y-2">
+          <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <ClipboardCheck className="w-3.5 h-3.5" />
+            Bedömning
+          </p>
+          <AssessmentSection studentId={student.id} studentFirstName={student.first_name} />
         </div>
       </div>
     </div>
