@@ -157,6 +157,19 @@ function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
   return null;
 }
 
+// Portal Audit P0-2 (IP-03): an instructor-tier caller (role
+// 'instructor'/'instructor_senior') may only read students they actually
+// teach or are assigned to. Returns null for every other role — reception,
+// admin, owner, etc. remain completely unaffected. Returns the caller's
+// visible-student-id set otherwise (possibly empty, never "all").
+// deno-lint-ignore no-explicit-any
+async function resolveInstructorVisibilityFilter(client: any, ctx: EdgeRequestContext): Promise<string[] | null> {
+  if (!isInstructorTierRole(ctx) || ctx.organizationId === null) return null;
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return [];
+  return resolveInstructorVisibleStudentIds(client, ctx.organizationId, ownInstructorId);
+}
+
 function extractId(req: Request): string | null {
   const segments = new URL(req.url).pathname.split('/').filter(Boolean);
   const last = segments[segments.length - 1];
@@ -235,6 +248,9 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     q = q.gte('date_of_birth', d.toISOString().slice(0, 10));
   }
 
+  const visibleIds = await resolveInstructorVisibilityFilter(client, ctx);
+  if (visibleIds !== null) q = q.in('id', visibleIds);
+
   const { data, error, count } = await q;
 
   if (error) {
@@ -242,7 +258,15 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to list students');
   }
 
-  return pagedResp(ctx, data ?? [], count ?? 0, page, per_page);
+  // date_of_birth stays visible to anyone with list access (students:student:read);
+  // the last 4 personnummer digits require the stricter students:pii:read — the
+  // list query above has no per-column RLS, so this has to be stripped here.
+  const canReadPii = ctx.isPlatformAdmin || ctx.permissions.includes('students:pii:read');
+  const rows = canReadPii
+    ? (data ?? [])
+    : (data ?? []).map((r: Record<string, unknown>) => ({ ...r, personnummer_last4: null }));
+
+  return pagedResp(ctx, rows, count ?? 0, page, per_page);
 }
 
 async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Response> {
@@ -441,12 +465,17 @@ async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Respo
   }
 
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+
+  const visibleIds = await resolveInstructorVisibilityFilter(client, ctx);
+  const scopedIds = visibleIds === null ? ids : ids.filter(i => visibleIds.includes(i));
+  if (scopedIds.length === 0) return successResp(ctx, []);
+
   const { data, error } = await (client as any)
     .from('students')
     .select('id, organization_id, first_name, last_name, date_of_birth, identity_type, personnummer_last4, email, phone, status, permit_stage, target_licence_category, assigned_instructor_id, enrollment_location_id, enrolled_at, corporate_customer_id, created_at, updated_at')
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
-    .in('id', ids);
+    .in('id', scopedIds);
 
   if (error) {
     logger.error('students.batch_failed', { correlation_id: ctx.correlationId, error: error.message });
@@ -454,6 +483,86 @@ async function handleBatch(req: Request, ctx: EdgeRequestContext): Promise<Respo
   }
 
   return successResp(ctx, data ?? []);
+}
+
+// P1-3: instructor_student_assessments has no INSERT/UPDATE RLS policy at
+// all (only 3 SELECT policies exist — confirmed against the live schema) —
+// the only working write path today is instructor-portal/index.ts's
+// service-role client. Reusing that exact client here for just these two
+// handlers, rather than this file's usual caller's-JWT client, is what
+// makes this route work without a migration; the authorization boundary is
+// still fully enforced in code below (organization_id + the caller's own
+// resolved instructor_id are never taken from the request), the same
+// pattern instructor-portal already uses for the same table. Route is
+// instructor-tier only — reception/admin assessment visibility is a
+// separate, not-yet-scoped capability, deliberately not added here.
+async function handleGetAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may view a competency assessment here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  const svc = createServiceClient();
+  const { data, error } = await svc
+    .from('instructor_student_assessments')
+    .select('id, competencies, readiness, notes, assessed_at, updated_at')
+    .eq('instructor_id', ownInstructorId)
+    .eq('student_id', studentId)
+    .eq('organization_id', ctx.organizationId!)
+    .maybeSingle();
+
+  if (error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch assessment');
+  return successResp(ctx, data ?? null);
+}
+
+async function handleSaveAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may save a competency assessment here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  let body: unknown;
+  try { body = await req.json(); } catch { return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
+  const parsed = AssessmentSchema.safeParse(body);
+  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
+
+  // Security fix: handleGetAssessment above is safe by construction (its own
+  // .eq('organization_id', ctx.organizationId!) means a cross-org studentId
+  // can never match a row), but this upsert wrote organization_id from ctx
+  // while trusting studentId from the URL outright — an instructor could
+  // write an assessment against ANY student UUID in the database, in any
+  // organization. Confirmed live during the Portal V1.1 acceptance test
+  // (identical flaw found in instructor-portal/index.ts's equivalent route).
+  // resolveInstructorVisibleStudentIds is the same authoritative
+  // instructor→student definition already reused for P0-2's visibility
+  // filter — its own two lookups are each organization-scoped by
+  // construction, so membership in this set proves both "same org" and
+  // "within this instructor's authorized scope" in one check.
+  const visibleIds = await resolveInstructorVisibleStudentIds(client, ctx.organizationId!, ownInstructorId);
+  if (!visibleIds.includes(studentId)) return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
+
+  const { competencies, readiness, notes } = parsed.data;
+  const svc = createServiceClient();
+  const { error } = await svc
+    .from('instructor_student_assessments')
+    .upsert(
+      {
+        organization_id: ctx.organizationId!,
+        instructor_id:   ownInstructorId,
+        student_id:      studentId,
+        competencies:    competencies ?? {},
+        readiness:       readiness    ?? {},
+        notes:           notes        ?? null,
+        assessed_at:     new Date().toISOString(),
+      },
+      { onConflict: 'instructor_id,student_id' },
+    );
+
+  if (error) {
+    logger.error('students.assessment_upsert_failed', { correlation_id: ctx.correlationId, error: error.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to save assessment');
+  }
+  return successResp(ctx, { success: true });
 }
 
 // PORTALS V1.1 Phase 3: instructor lesson context.
@@ -640,86 +749,6 @@ async function handleGetLessonContext(req: Request, ctx: EdgeRequestContext, stu
   });
 }
 
-// P1-3: instructor_student_assessments has no INSERT/UPDATE RLS policy at
-// all (only 3 SELECT policies exist — confirmed against the live schema) —
-// the only working write path today is instructor-portal/index.ts's
-// service-role client. Reusing that exact client here for just these two
-// handlers, rather than this file's usual caller's-JWT client, is what
-// makes this route work without a migration; the authorization boundary is
-// still fully enforced in code below (organization_id + the caller's own
-// resolved instructor_id are never taken from the request), the same
-// pattern instructor-portal already uses for the same table. Route is
-// instructor-tier only — reception/admin assessment visibility is a
-// separate, not-yet-scoped capability, deliberately not added here.
-async function handleGetAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
-  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may view a competency assessment here');
-  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
-  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
-  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
-
-  const svc = createServiceClient();
-  const { data, error } = await svc
-    .from('instructor_student_assessments')
-    .select('id, competencies, readiness, notes, assessed_at, updated_at')
-    .eq('instructor_id', ownInstructorId)
-    .eq('student_id', studentId)
-    .eq('organization_id', ctx.organizationId!)
-    .maybeSingle();
-
-  if (error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch assessment');
-  return successResp(ctx, data ?? null);
-}
-
-async function handleSaveAssessment(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
-  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may save a competency assessment here');
-  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
-  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
-  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
-
-  let body: unknown;
-  try { body = await req.json(); } catch { return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Request body must be valid JSON'); }
-  const parsed = AssessmentSchema.safeParse(body);
-  if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
-
-  // Security fix: handleGetAssessment above is safe by construction (its own
-  // .eq('organization_id', ctx.organizationId!) means a cross-org studentId
-  // can never match a row), but this upsert wrote organization_id from ctx
-  // while trusting studentId from the URL outright — an instructor could
-  // write an assessment against ANY student UUID in the database, in any
-  // organization. Confirmed live during the Portal V1.1 acceptance test
-  // (identical flaw found in instructor-portal/index.ts's equivalent route).
-  // resolveInstructorVisibleStudentIds is the same authoritative
-  // instructor→student definition already reused for P0-2's visibility
-  // filter — its own two lookups are each organization-scoped by
-  // construction, so membership in this set proves both "same org" and
-  // "within this instructor's authorized scope" in one check.
-  const visibleIds = await resolveInstructorVisibleStudentIds(client, ctx.organizationId!, ownInstructorId);
-  if (!visibleIds.includes(studentId)) return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
-
-  const { competencies, readiness, notes } = parsed.data;
-  const svc = createServiceClient();
-  const { error } = await svc
-    .from('instructor_student_assessments')
-    .upsert(
-      {
-        organization_id: ctx.organizationId!,
-        instructor_id:   ownInstructorId,
-        student_id:      studentId,
-        competencies:    competencies ?? {},
-        readiness:       readiness    ?? {},
-        notes:           notes        ?? null,
-        assessed_at:     new Date().toISOString(),
-      },
-      { onConflict: 'instructor_id,student_id' },
-    );
-
-  if (error) {
-    logger.error('students.assessment_upsert_failed', { correlation_id: ctx.correlationId, error: error.message });
-    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to save assessment');
-  }
-  return successResp(ctx, { success: true });
-}
-
 // ─── Instructor lesson history (Final Gap Analysis P2-1) ──────────────────────
 // handleGetLessonContext above already gives an instructor the single most
 // recent completed/no_show lesson; this adds the bounded, paginated list of
@@ -804,6 +833,14 @@ async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string):
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to fetch student');
   }
   if (student === null) {
+    return errorResp(ctx, 404, 'NOT_FOUND', `Student '${id}' not found`);
+  }
+
+  const visibleIds = await resolveInstructorVisibilityFilter(client, ctx);
+  if (visibleIds !== null && !visibleIds.includes(id)) {
+    // 404, not 403 — consistent with how the rest of the platform (e.g.
+    // guardian-portal) responds to an out-of-scope resource id, so an
+    // instructor probing ids can't distinguish "not yours" from "doesn't exist".
     return errorResp(ctx, 404, 'NOT_FOUND', `Student '${id}' not found`);
   }
 
