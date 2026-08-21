@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Bell, Copy, Car, Search, Plus, SlidersHorizontal, RefreshCw, ChevronDown,
+  Bell, Copy, Car, Search, Plus, SlidersHorizontal, RefreshCw, ChevronDown, Eye, EyeOff,
 } from 'lucide-react';
 import { PhoneLink } from '@shared/components/PhoneLink.js';
 import type { ColumnDef } from '@platform/ui';
@@ -147,6 +147,17 @@ function formatPersonnummer(student: Student): string {
   return `······-${student.personnummer_last4}`;
 }
 
+// Default, pre-reveal display: birthdate stays visible, the four identifying
+// digits are masked. Mirrors formatPersonnummer's own fallbacks exactly.
+function formatPersonnummerMasked(student: Student): string {
+  if (!student.personnummer_last4) return '—';
+  if (student.date_of_birth) {
+    const dob = student.date_of_birth.replace(/-/g, '');
+    return `${dob}-****`;
+  }
+  return '······-****';
+}
+
 function formatLicenceCategory(cat: string): string {
   if (!cat) return '—';
   const lower = cat.toLowerCase();
@@ -168,7 +179,11 @@ function formatActivityDate(ts: string | null | undefined): string {
 
 // ─── Column definitions ───────────────────────────────────────────────────────
 
-function buildColumns(onEdit: (s: Student) => void): ColumnDef<Student>[] {
+function buildColumns(
+  onEdit: (s: Student) => void,
+  revealedIds: Set<string>,
+  onToggleReveal: (id: string) => void,
+): ColumnDef<Student>[] {
   return [
     {
       id: 'bell',
@@ -205,14 +220,25 @@ function buildColumns(onEdit: (s: Student) => void): ColumnDef<Student>[] {
       id: 'personnummer',
       header: 'Personnummer',
       cell: ({ row }) => {
-        const pnr = formatPersonnummer(row.original);
+        const isRevealed = revealedIds.has(row.original.id);
+        const hasValue = !!row.original.personnummer_last4;
+        const display = isRevealed ? formatPersonnummer(row.original) : formatPersonnummerMasked(row.original);
         return (
           <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
             <div className="flex items-center gap-1.5 font-mono text-xs group/cell">
-              <span className="text-foreground">{pnr}</span>
-              {row.original.personnummer_last4 && (
+              <span className="text-foreground">{display}</span>
+              {hasValue && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(pnr); }}
+                  onClick={(e) => { e.stopPropagation(); onToggleReveal(row.original.id); }}
+                  className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+                  title={isRevealed ? 'Dölj personnummer' : 'Visa personnummer'}
+                >
+                  {isRevealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                </button>
+              )}
+              {isRevealed && hasValue && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(formatPersonnummer(row.original)); }}
                   className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
                   title="Kopiera personnummer"
                 >
@@ -630,9 +656,20 @@ export function StudentListPage() {
     return raw.filter((s) => tagIdSet.has(s.id));
   }, [data, activeTagId, tagIdSet]);
 
+  // Ephemeral, per-mount only — never persisted (no localStorage/query param),
+  // so a refresh or navigating away and back always returns to the masked default.
+  const [revealedPnrIds, setRevealedPnrIds] = useState<Set<string>>(new Set());
+  const toggleReveal = (id: string) => {
+    setRevealedPnrIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
   const columns = useMemo(
-    () => buildColumns((s) => { setEditStudent(s); setFormOpen(true); }),
-    [],
+    () => buildColumns((s) => { setEditStudent(s); setFormOpen(true); }, revealedPnrIds, toggleReveal),
+    [revealedPnrIds],
   );
 
   function handleCreate() {

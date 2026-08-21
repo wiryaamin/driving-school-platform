@@ -5225,7 +5225,7 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
 
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-foreground">Avtal</h3>
-        <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+        <PermissionGate allOf={[Permissions.DOCUMENTS_CREATE, Permissions.STUDENTS_PII_READ]}>
           <Button size="sm" className="gap-1.5" onClick={() => setContractOpen(true)}>
             <Plus className="w-3.5 h-3.5" />
             Nytt avtal
@@ -5241,7 +5241,7 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
         <div className="border border-dashed border-border rounded-lg py-12 text-center space-y-2">
           <FileText className="w-8 h-8 text-muted-foreground/30 mx-auto" />
           <p className="text-sm text-muted-foreground">Inga avtal har skickats till denna elev.</p>
-          <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+          <PermissionGate allOf={[Permissions.DOCUMENTS_CREATE, Permissions.STUDENTS_PII_READ]}>
             <Button
               size="sm"
               variant="outline"
@@ -5259,7 +5259,7 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               {contracts.length} avtal skickade
             </span>
-            <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+            <PermissionGate allOf={[Permissions.DOCUMENTS_CREATE, Permissions.STUDENTS_PII_READ]}>
               <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setContractOpen(true)}>
                 <Plus className="w-3 h-3" />
                 Nytt avtal
