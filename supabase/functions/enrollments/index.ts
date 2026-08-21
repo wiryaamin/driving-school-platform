@@ -211,6 +211,18 @@ async function handleDetail(_req: Request, client: any, orgId: string, ctx: Edge
   // Never expose the submitter IP to the frontend
   delete enrollment['submitter_ip'];
 
+  // Production-readiness audit: personnummer here is plaintext by design
+  // (20260630000001_enrollment_requests.sql — "optional; plaintext at lead
+  // stage (not a student yet)", pre-dating the encrypted-at-rest model
+  // students/instructors now use). That's a deliberate storage decision,
+  // not this fix's concern. What was missing is the same authorization
+  // boundary already enforced everywhere else this field is shown
+  // (EnrollmentDetailPage.tsx's PermissionGate, the students list PII
+  // strip) — enrollment:request:read alone let any caller with that base
+  // permission read the raw value straight off the API response,
+  // regardless of the frontend's display gate.
+  if (!hasPermission(ctx, 'students:pii:read')) delete enrollment['personnummer'];
+
   return json({
     data: {
       ...enrollment,
