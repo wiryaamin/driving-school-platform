@@ -21,13 +21,14 @@ const GenerateTokenSchema = z.object({
   student_id: z.string().uuid(),
 });
 
-const CreateBookingSchema = z.object({
-  slot_id:         z.string().uuid(),
-  // Required only when the slot itself has no fixed lesson type (generic
-  // availability) — the lesson type the student was browsing under when
-  // they picked this slot. See GET /slots' comment for why generic slots
-  // are now visible here at all.
-  lesson_type_id:  z.string().uuid().optional(),
+// P2-4: the only real, already-respected notification preference is
+// per-channel (students.communication_opt_in_email/sms — enforced at the
+// single notification choke point, runNotify) — not the finer booking-vs-
+// reminder split the Settings UI previously pretended to offer with no
+// backend behind it.
+const UpdateNotificationPrefsSchema = z.object({
+  communication_opt_in_email: z.boolean().optional(),
+  communication_opt_in_sms:   z.boolean().optional(),
 });
 
 // Final Gap Analysis P2-3: only phone is student-self-editable — name, email,
@@ -36,6 +37,15 @@ const CreateBookingSchema = z.object({
 // hyphens allowed as separators.
 const UpdatePhoneSchema = z.object({
   phone: z.string().trim().regex(/^\+?[0-9 -]{7,20}$/, 'Ogiltigt telefonnummer'),
+});
+
+const CreateBookingSchema = z.object({
+  slot_id:         z.string().uuid(),
+  // Required only when the slot itself has no fixed lesson type (generic
+  // availability) — the lesson type the student was browsing under when
+  // they picked this slot. See GET /slots' comment for why generic slots
+  // are now visible here at all.
+  lesson_type_id:  z.string().uuid().optional(),
 });
 
 const RescheduleSchema = z.object({
@@ -317,7 +327,7 @@ Deno.serve((req: Request) =>
     if (req.method === 'GET' && path === '/me') {
       const { data, error } = await supabase
         .from('students')
-        .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at, date_of_birth, personnummer_last4, address_line1, postal_code, city')
+        .select('id, first_name, last_name, email, phone, target_licence_category, permit_stage, risk1_completed_at, risk2_completed_at, theory_passed_at, practical_passed_at, date_of_birth, personnummer_last4, address_line1, postal_code, city, assigned_instructor_id, communication_opt_in_email, communication_opt_in_sms, instructors!assigned_instructor_id(first_name, last_name)')
         .eq('id', student_id)
         .single();
 
@@ -325,6 +335,8 @@ Deno.serve((req: Request) =>
 
       const row = data as typeof data & {
         date_of_birth: string | null; personnummer_last4: string | null;
+        assigned_instructor_id: string | null;
+        instructors: { first_name: string; last_name: string } | null;
       };
       // Masked personnummer only — the encrypted/plaintext value is never
       // decrypted for portal display, matching the same partial-reveal
@@ -332,8 +344,33 @@ Deno.serve((req: Request) =>
       const personnummer = row.date_of_birth
         ? `${row.date_of_birth.replace(/-/g, '')}${row.personnummer_last4 ? `-${row.personnummer_last4}` : ''}`
         : null;
-      const { date_of_birth: _dob, personnummer_last4: _last4, ...rest } = row;
-      return ok({ ...rest, personnummer });
+      // P1-5: the authoritative instructor relationship (assigned_instructor_id),
+      // not the previous frontend heuristic of "whoever taught the most
+      // bookings" — the latter kept showing a student's old instructor after
+      // a reassignment. Only name is exposed here, matching MinLararePage's
+      // existing "Kontaktuppgifter ej publika" design choice.
+      const assigned_instructor = row.instructors
+        ? { first_name: row.instructors.first_name, last_name: row.instructors.last_name }
+        : null;
+      const { date_of_birth: _dob, personnummer_last4: _last4, instructors: _instructors, ...rest } = row;
+      return ok({ ...rest, personnummer, assigned_instructor });
+    }
+
+    // ── PATCH /me/notification-preferences (P2-4) ─────────────────────────────
+    if (req.method === 'PATCH' && path === '/me/notification-preferences') {
+      const body   = await req.json().catch(() => null);
+      const parsed = UpdateNotificationPrefsSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid preferences');
+      if (Object.keys(parsed.data).length === 0) return fail(400, 'No fields to update');
+
+      const { error } = await supabase
+        .from('students')
+        .update(parsed.data)
+        .eq('id', student_id)
+        .eq('organization_id', organization_id);
+
+      if (error) return fail(500, 'Failed to update notification preferences');
+      return ok({ success: true });
     }
 
     // ── PATCH /me/phone (Final Gap Analysis P2-3) ─────────────────────────────
@@ -402,6 +439,44 @@ Deno.serve((req: Request) =>
         theory_passed_at:    student?.theory_passed_at     ?? null,
         practical_passed_at: student?.practical_passed_at  ?? null,
       });
+    }
+
+    // ── GET /assessments — the student's own instructor-authored competency
+    // assessment (Portal Audit SP-01/XP-03). Guardian Portal already reads
+    // this exact table for the same student — this is the identical query,
+    // scoped to the student's own session instead of a guardian's, so the
+    // student can see the same real assessment their guardian already can,
+    // instead of only the keyword-matched Utbildningskort heuristic.
+    if (req.method === 'GET' && path === '/assessments') {
+      const { data, error } = await supabase
+        .from('instructor_student_assessments')
+        .select('id, competencies, readiness, notes, updated_at, instructors!instructor_id(first_name, last_name)')
+        .eq('student_id', student_id)
+        .eq('organization_id', organization_id)
+        .order('updated_at', { ascending: false })
+        .limit(10);
+
+      if (error) return fail(500, 'Failed to fetch assessments');
+
+      type AssRow = {
+        id: string;
+        competencies: Record<string, string>;
+        readiness: Record<string, boolean>;
+        notes: string | null;
+        updated_at: string;
+        instructors: { first_name: string; last_name: string } | null;
+      };
+
+      return ok(((data ?? []) as unknown as AssRow[]).map(a => ({
+        id:              a.id,
+        instructor_name: a.instructors
+          ? `${a.instructors.first_name} ${a.instructors.last_name}`
+          : 'Okänd instruktör',
+        competencies:    a.competencies ?? {},
+        readiness:       a.readiness    ?? {},
+        notes:           a.notes,
+        updated_at:      a.updated_at,
+      })));
     }
 
     // ── GET /slots — available slots for booking ──────────────────────────────
