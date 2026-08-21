@@ -7,6 +7,7 @@ import {
   usePortalDeletePractice,
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
+import { STAGE_ORDER, stageIndex, type PermitStage } from '../lib/permitStage.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,21 +50,10 @@ function StatCard({
 }
 
 // ─── Stage definitions ────────────────────────────────────────────────────────
-
-const STAGE_ORDER = [
-  'not_started', 'theory_study',
-  'risk1_booked', 'risk1_completed',
-  'risk2_booked', 'risk2_completed',
-  'theory_exam_booked', 'theory_passed',
-  'practical_exam_booked', 'practical_passed', 'licence_issued',
-] as const;
-
-type PermitStage = typeof STAGE_ORDER[number];
-
-function stageIndex(stage: string): number {
-  const idx = STAGE_ORDER.indexOf(stage as PermitStage);
-  return idx === -1 ? 0 : idx;
-}
+//
+// Portal Audit SP-02: STAGE_ORDER/stageIndex/PermitStage now come from the
+// shared ../lib/permitStage.ts (this file's own copy was already correct,
+// consolidated so it can't independently drift from the others that weren't).
 
 // ─── Progress bar ─────────────────────────────────────────────────────────────
 

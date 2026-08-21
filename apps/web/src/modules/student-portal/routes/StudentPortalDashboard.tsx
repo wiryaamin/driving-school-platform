@@ -12,6 +12,8 @@ import {
   useUnreadNotificationCount, usePortalQuizCategories,
 } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
+import { PERMIT_MILESTONES as TIMELINE, milestoneRank, getProgressPct } from '../lib/permitStage.js';
+import type { STAGE_ORDER } from '../lib/permitStage.js';
 
 // ─── Brand tokens ─────────────────────────────────────────────────────────────
 
@@ -23,40 +25,16 @@ const BLUE_ACC  = '#4F7BFF';
 
 // ─── Stage config ─────────────────────────────────────────────────────────────
 //
-// These must mirror the real `permit_stage` DB enum (see
-// 20260528000001_phase2a_domain_foundation.sql) — an earlier invented
-// 6-value vocabulary here ('learner'/'risk1'/'risk2'/'theory'/'practical'/
-// 'licensed') never matched any actual stage value, so this widget's
-// percentage, timeline, and recommendation always silently fell back to
-// hardcoded defaults regardless of the student's real progress.
+// STAGE_ORDER/stageIndex/PERMIT_MILESTONES(TIMELINE)/milestoneRank/
+// getProgressPct now live in ../lib/permitStage.ts (Portal Audit SP-02) —
+// this used to be a locally-invented 6-value vocabulary
+// ('learner'/'risk1'/'risk2'/'theory'/'practical'/'licensed') that never
+// matched any actual stage value, so this widget's percentage, timeline,
+// and recommendation always silently fell back to hardcoded defaults
+// regardless of the student's real progress. Extracted to a shared module
+// so Settings' step tracker can't independently reinvent the same bug.
 
-const STAGE_ORDER = [
-  'not_started', 'theory_study',
-  'risk1_booked', 'risk1_completed',
-  'risk2_booked', 'risk2_completed',
-  'theory_exam_booked', 'theory_passed',
-  'practical_exam_booked', 'practical_passed', 'licence_issued',
-] as const;
 type Stage = (typeof STAGE_ORDER)[number];
-
-function stageIndex(stage: string): number {
-  const idx = STAGE_ORDER.indexOf(stage as Stage);
-  return idx === -1 ? 0 : idx;
-}
-
-// Two DB stages per visual milestone (booked + completed), Körkort alone.
-function milestoneRank(stage: string): number {
-  return Math.min(5, Math.floor(stageIndex(stage) / 2));
-}
-
-const TIMELINE: Array<{ label: string }> = [
-  { label: 'Start'      },
-  { label: 'Risk 1'     },
-  { label: 'Risk 2'     },
-  { label: 'Teori'      },
-  { label: 'Uppkörning' },
-  { label: 'Körkort'    },
-];
 
 const STAGE_RECOMMENDATIONS: Record<Stage, { title: string; subtitle: string; link: string }> = {
   not_started:           { title: 'Öva fordonskontroll', subtitle: 'Grunderna för säker körning',      link: '/portal/boka'  },
@@ -73,11 +51,6 @@ const STAGE_RECOMMENDATIONS: Record<Stage, { title: string; subtitle: string; li
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getProgressPct(stage: string): number {
-  if (stage === 'licence_issued') return 100;
-  return Math.round((stageIndex(stage) / (STAGE_ORDER.length - 1)) * 100);
-}
 
 const STOCKHOLM_DAY_KEY: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Stockholm' };
 
@@ -430,20 +403,17 @@ function ProgressJourneyCard({ pct, completedCount, stage, isLoading }: {
 
 // ─── Daily Focus Card (mobile) ────────────────────────────────────────────────
 
+// Portal Audit SP-02: previously kept its own invented 6-value vocabulary
+// ('learner'/'risk1'/'risk2'/'theory'/'practical'/'licensed') that never
+// matched any real permit_stage value, so this card always silently fell
+// back to its defaults regardless of the student's actual progress. Now
+// reuses the same STAGE_RECOMMENDATIONS map the main progress widget
+// already uses, keyed on the real 11-value enum — no second vocabulary.
 function DailyFocusCard({ stage }: { stage: string }) {
-  const messages: Record<string, string> = {
-    learner:   'Fordonskontroll', risk1: 'Förbered Risk 1',
-    risk2:     'Kör bra!',       theory: 'Öva teoriprov',
-    practical: 'Körprovsfokus',  licensed: 'Välkommen! 🎉',
-  };
-  const subtitles: Record<string, string> = {
-    learner:   'Start bra idag',        risk1: 'Ha en bra lektion',
-    risk2:     'Ha en bra lektion idag', theory: 'Öva frågorna',
-    practical: 'Körprovsdagen',          licensed: 'Du klarade det!',
-  };
-  const to = stage === 'theory' ? '/portal/teori' : '/portal/boka';
-  const title    = messages[stage]  ?? 'Kör bra!';
-  const subtitle = subtitles[stage] ?? 'Ha en bra lektion idag';
+  const rec = STAGE_RECOMMENDATIONS[stage as Stage] ?? STAGE_RECOMMENDATIONS.not_started;
+  const to      = rec.link;
+  const title   = rec.title;
+  const subtitle = rec.subtitle;
 
   return (
     <Link
@@ -798,7 +768,10 @@ function KorkortsresaSection({ stage }: { stage: string }) {
 // ─── Motivational Banner ──────────────────────────────────────────────────────
 
 function MotivationalBanner({ stage }: { stage: string }) {
-  const isLicensed = stage === 'licensed';
+  // Portal Audit SP-02: was 'licensed', which never matches the real
+  // 'licence_issued' enum value — this banner never actually showed the
+  // congratulations copy for a real student who'd completed their licence.
+  const isLicensed = stage === 'licence_issued';
   const main = isLicensed ? 'Grattis till körkortet! 🎉' : 'Du närmar dig målet! 🚗💜';
   const sub  = isLicensed
     ? 'Du klarade det — välkommen på vägarna!'

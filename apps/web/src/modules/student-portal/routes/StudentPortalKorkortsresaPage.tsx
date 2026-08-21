@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { CheckCircle, Lock, AlertCircle } from 'lucide-react';
 import { usePortalProgress, usePortalMe } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
+import { stageIndex as stageIdx } from '../lib/permitStage.js';
 
 const BRAND = '#684EFF';
 
@@ -19,17 +20,10 @@ interface StageResult {
   completedAt: string | null;
 }
 
-const PERMIT_STAGE_IDX: Record<string, number> = {
-  not_started: 0, theory_study: 1,
-  risk1_booked: 2, risk1_completed: 3,
-  risk2_booked: 4, risk2_completed: 5,
-  theory_exam_booked: 6, theory_passed: 7,
-  practical_exam_booked: 8, practical_passed: 9, licence_issued: 10,
-};
-
-function stageIdx(stage: string): number {
-  return PERMIT_STAGE_IDX[stage] ?? 0;
-}
+// Portal Audit SP-02: this file already indexed the real 11-value
+// permit_stage enum correctly (unlike Settings/Dashboard, which didn't) —
+// now reuses the single shared mapping instead of keeping its own
+// numerically-equivalent copy, so it can't independently drift from it later.
 
 interface StepDef {
   key:         string;
