@@ -20,15 +20,25 @@ export interface BookingListResponse {
   meta: BookingListMeta;
 }
 
+// F1 fix: SLA counts for bookings awaiting staff approval, computed
+// server-side against the full 'reserved' set — not derived from a
+// paginated/windowed list, so it stays correct at any volume.
+export interface PendingBookingsSummary {
+  pending_total:    number;
+  pending_over_24h: number;
+  pending_over_48h: number;
+}
+
 // ─── Query keys ───────────────────────────────────────────────────────────────
 
 export const bookingKeys = {
-  all:     ['bookings'] as const,
-  lists:   () => [...bookingKeys.all, 'list'] as const,
-  list:    (params: LessonBookingListQueryInput) => [...bookingKeys.lists(), params] as const,
-  bySlot:  (slotId: string) => [...bookingKeys.all, 'by-slot', slotId] as const,
-  details: () => [...bookingKeys.all, 'detail'] as const,
-  detail:  (id: string) => [...bookingKeys.details(), id] as const,
+  all:            ['bookings'] as const,
+  lists:          () => [...bookingKeys.all, 'list'] as const,
+  list:           (params: LessonBookingListQueryInput) => [...bookingKeys.lists(), params] as const,
+  bySlot:         (slotId: string) => [...bookingKeys.all, 'by-slot', slotId] as const,
+  details:        () => [...bookingKeys.all, 'detail'] as const,
+  detail:         (id: string) => [...bookingKeys.details(), id] as const,
+  pendingSummary: () => [...bookingKeys.all, 'pending-summary'] as const,
 };
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -64,6 +74,13 @@ async function apiFetchBooking(id: string): Promise<LessonBooking> {
   return data.data;
 }
 
+async function apiFetchPendingBookingsSummary(): Promise<PendingBookingsSummary> {
+  const { data, error } = await supabase.functions.invoke<{ data: PendingBookingsSummary }>('bookings/pending-summary', { method: 'GET' });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
 export function useBookingList(params: LessonBookingListQueryInput = {}, options?: { enabled?: boolean }) {
@@ -72,6 +89,19 @@ export function useBookingList(params: LessonBookingListQueryInput = {}, options
     queryFn: () => apiFetchBookings({ per_page: 100, sort_by: 'starts_at', sort_dir: 'asc', ...params }),
     enabled:   (options?.enabled ?? true) && Boolean(params.from && params.to),
     staleTime: 2 * 60_000,
+  });
+}
+
+// F1 fix: replaces computing the >24h/>48h "waiting" badges from the
+// paginated/windowed booking list (BokningarPage previously derived them
+// from a ±6-month, 200-row-capped fetch — silently wrong past that volume).
+// This queries a dedicated backend count endpoint instead, so the numbers
+// stay correct regardless of how many bookings exist.
+export function usePendingBookingsSummary() {
+  return useQuery({
+    queryKey:  bookingKeys.pendingSummary(),
+    queryFn:   apiFetchPendingBookingsSummary,
+    staleTime: 60_000,
   });
 }
 

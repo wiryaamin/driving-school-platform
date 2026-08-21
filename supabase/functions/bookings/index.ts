@@ -7,6 +7,7 @@ import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.
 import { resolveLessonPackageCredit, insertLessonBooking, consumeLessonPackageCreditOrCompensate, reverseLessonCreditOnCancellation } from '../_shared/lesson-credits.ts';
 import { getCancellationDeadlineHours, isWithinCancellationDeadline } from '../_shared/cancellation-policy.ts';
 import { transitionBookingAttendance } from '../_shared/booking-lifecycle.ts';
+import { isInstructorTierRole, resolveOwnInstructorId } from '../_shared/instructor-scope.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 // ─── Inline schemas (Deno cannot import workspace packages) ──────────────────
@@ -109,25 +110,53 @@ function requirePerm(ctx: EdgeRequestContext, code: string): Response | null {
   return null;
 }
 
+// Portal Audit P0-1 (IP-02/XP-02): an instructor-tier caller (role
+// 'instructor'/'instructor_senior') may only mutate a booking that belongs
+// to their own instructors row. Every other role (reception, admin, owner,
+// ...) is unaffected — isInstructorTierRole() only returns true for the two
+// instructor roles. Returns an error Response to short-circuit on, or null
+// to proceed.
+async function requireOwnBookingIfInstructor(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  ctx: EdgeRequestContext,
+  bookingInstructorId: string | null,
+): Promise<Response | null> {
+  if (!isInstructorTierRole(ctx)) return null;
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null || bookingInstructorId !== ownInstructorId) {
+    return errorResp(ctx, 403, 'FORBIDDEN', 'You may only act on your own lessons');
+  }
+  return null;
+}
+
 // Parses the URL path to extract booking ID and optional action sub-path.
 // Handles:
-//   /functions/v1/bookings          → { id: null, action: null }
-//   /functions/v1/bookings/{uuid}   → { id: uuid, action: null }
-//   /functions/v1/bookings/{uuid}/cancel     → { id: uuid, action: 'cancel' }
-//   /functions/v1/bookings/{uuid}/reschedule → { id: uuid, action: 'reschedule' }
-function parsePath(req: Request): { id: string | null; action: string | null } {
+//   /functions/v1/bookings          → { id: null, action: null, collectionAction: null }
+//   /functions/v1/bookings/{uuid}   → { id: uuid, action: null, collectionAction: null }
+//   /functions/v1/bookings/{uuid}/cancel     → { id: uuid, action: 'cancel', collectionAction: null }
+//   /functions/v1/bookings/{uuid}/reschedule → { id: uuid, action: 'reschedule', collectionAction: null }
+//   /functions/v1/bookings/pending-summary   → { id: null, action: null, collectionAction: 'pending-summary' }
+function parsePath(req: Request): { id: string | null; action: string | null; collectionAction: string | null } {
   const segments = new URL(req.url).pathname.split('/').filter(Boolean);
   // Find 'bookings' segment index
   const fnIdx = segments.findLastIndex(s => s === 'bookings');
   const after  = segments.slice(fnIdx + 1);
 
-  if (after.length === 0) return { id: null, action: null };
+  if (after.length === 0) return { id: null, action: null, collectionAction: null };
 
   const maybeId = after[0] ?? '';
-  const id      = UUID_RE.test(maybeId) ? maybeId : null;
-  const action  = after[1] ?? null;
+  if (!UUID_RE.test(maybeId)) {
+    // Named collection-level sub-route (not a booking ID) — anything other
+    // than a recognized name still falls through to the plain collection
+    // routes below, unchanged from prior behavior.
+    return { id: null, action: null, collectionAction: maybeId };
+  }
 
-  return { id, action };
+  const id     = maybeId;
+  const action = after[1] ?? null;
+
+  return { id, action, collectionAction: null };
 }
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
@@ -173,6 +202,55 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to list bookings');
   }
   return pagedResp(ctx, data ?? [], count ?? 0, page, per_page);
+}
+
+// F1 fix: pending-request SLA counts (>24h / >48h waiting for staff approval),
+// computed as head-only exact counts against the full 'reserved' set — not
+// derived from any paginated/windowed list, so the count is correct
+// regardless of how many bookings exist. Backed by idx_lesson_bookings_org_reserved.
+async function handlePendingSummary(req: Request, ctx: EdgeRequestContext): Promise<Response> {
+  const guard = requirePerm(ctx, 'scheduling:booking:read');
+  if (guard) return guard;
+
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const now = Date.now();
+  const cutoff24 = new Date(now - 24 * 3_600_000).toISOString();
+  const cutoff48 = new Date(now - 48 * 3_600_000).toISOString();
+
+  const pendingCount = (extra?: (q: any) => any) => {
+    let q = (client as any)
+      .from('lesson_bookings')
+      .select('*', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .eq('status', 'reserved')
+      .is('deleted_at', null);
+    return extra ? extra(q) : q;
+  };
+
+  const [totalRes, over24Res, over48Res] = await Promise.all([
+    pendingCount(),
+    pendingCount((q) => q.lt('created_at', cutoff24)),
+    pendingCount((q) => q.lt('created_at', cutoff48)),
+  ]);
+
+  const firstError = totalRes.error ?? over24Res.error ?? over48Res.error;
+  if (firstError) {
+    logger.error('bookings.pending_summary_failed', { correlation_id: ctx.correlationId, error: firstError.message });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to compute pending booking summary');
+  }
+
+  // over24Res counts everything older than 24h, which includes the >48h
+  // bucket — subtract it so the two buckets are mutually exclusive, matching
+  // how the frontend banner has always displayed them (a request is either
+  // in the 24-48h band or the 48h+ band, never counted in both).
+  const over48Count = over48Res.count ?? 0;
+  const over24Count = (over24Res.count ?? 0) - over48Count;
+
+  return successResp(ctx, {
+    pending_total:    totalRes.count ?? 0,
+    pending_over_24h: over24Count,
+    pending_over_48h: over48Count,
+  });
 }
 
 async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Response> {
@@ -376,7 +454,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id, status')
+    .select('id, status, starts_at, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
@@ -384,20 +462,10 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
 
-  const { status: newStatus } = parsed.data;
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, existing.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
 
-  // Idempotent no-op: a retried PATCH (e.g. after a gateway timeout whose
-  // original request actually succeeded) re-applying the status the booking
-  // is already in should succeed, not be treated as an invalid transition
-  // from a terminal state.
-  if (existing.status === newStatus) {
-    const { data: current } = await (client as any)
-      .from('lesson_bookings')
-      .select('*')
-      .eq('id', id)
-      .single();
-    return successResp(ctx, current);
-  }
+  const { status: newStatus } = parsed.data;
 
   // Cancellation requires cancelled_at/cancelled_by (enforced by the
   // lesson_bookings_cancel_consistency check constraint) and package-credit
@@ -442,13 +510,16 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id, status, starts_at')
+    .select('id, status, starts_at, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .maybeSingle();
 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, existing.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
 
   const allowed = VALID_TRANSITIONS[existing.status] ?? [];
   if (!allowed.includes('cancelled')) {
@@ -543,7 +614,16 @@ async function handleCancel(req: Request, ctx: EdgeRequestContext, id: string): 
 }
 
 async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
-  const guard = requirePerm(ctx, 'scheduling:booking:create');
+  // P1-2: the 'instructor'/'instructor_senior' system roles hold
+  // scheduling:booking:update (used by cancel/attendance/notes/feedback
+  // above) but not scheduling:booking:create — granting it would widen a
+  // platform-wide role shared by every organization, not a scoped fix. An
+  // instructor-tier caller is let through here instead, exactly like every
+  // other mutation in this file; requireOwnBookingIfInstructor() below is
+  // still the real boundary — this only changes who reaches that check.
+  const guard = ctx.permissions.includes('scheduling:booking:create')
+    ? null
+    : requirePerm(ctx, isInstructorTierRole(ctx) ? 'scheduling:booking:update' : 'scheduling:booking:create');
   if (guard) return guard;
 
   let body: unknown;
@@ -558,16 +638,25 @@ async function handleReschedule(req: Request, ctx: EdgeRequestContext, id: strin
   // Fetch old booking
   const { data: oldBooking } = await (client as any)
     .from('lesson_bookings')
-    .select('id, status, student_id, slot_id, price_sek')
+    .select('id, status, student_id, slot_id, price_sek, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .maybeSingle();
 
   if (oldBooking === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, oldBooking.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
+
   if (!['reserved', 'confirmed'].includes(oldBooking.status)) {
     return errorResp(ctx, 409, 'CONFLICT', `Cannot reschedule a booking in '${oldBooking.status}' status. Only reserved or confirmed bookings may be rescheduled.`);
   }
+
+  // F3 V1 clarification: staff/admin rescheduling is ALWAYS allowed, any time
+  // — the cancellation-deadline window only blocks STUDENT self-service
+  // rescheduling (see student-portal/index.ts). A trafikskola must be able to
+  // operationally move a lesson regardless of how soon it starts.
 
   // Fetch new slot
   const { data: newSlot } = await (client as any)
@@ -676,13 +765,16 @@ async function handleAddNote(req: Request, ctx: EdgeRequestContext, id: string):
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id')
+    .select('id, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .maybeSingle();
 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, existing.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
 
   const { data: note, error } = await (client as any)
     .from('booking_notes')
@@ -722,13 +814,17 @@ async function handleFeedback(req: Request, ctx: EdgeRequestContext, id: string)
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id, status')
+    .select('id, status, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .maybeSingle();
 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, existing.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
+
   if (!['completed', 'no_show'].includes(existing.status)) {
     return errorResp(ctx, 409, 'CONFLICT', `Feedback can only be set on completed or no_show bookings (current: ${existing.status})`);
   }
@@ -761,13 +857,16 @@ async function handleArchive(req: Request, ctx: EdgeRequestContext, id: string):
 
   const { data: existing } = await (client as any)
     .from('lesson_bookings')
-    .select('id')
+    .select('id, instructor_id')
     .eq('id', id)
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .maybeSingle();
 
   if (existing === null) return errorResp(ctx, 404, 'NOT_FOUND', `Booking '${id}' not found`);
+
+  const ownershipGuard = await requireOwnBookingIfInstructor(client, ctx, existing.instructor_id ?? null);
+  if (ownershipGuard) return ownershipGuard;
 
   const { error } = await (client as any).rpc('soft_delete', {
     p_table_name: 'lesson_bookings',
@@ -809,7 +908,7 @@ Deno.serve((req: Request) => serveCors(req, async () => {
   let response: Response;
 
   try {
-    const { id, action } = parsePath(req);
+    const { id, action, collectionAction } = parsePath(req);
 
     if (id !== null && action !== null) {
       // Sub-resource action routes
@@ -838,6 +937,8 @@ Deno.serve((req: Request) => serveCors(req, async () => {
           { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
         );
       }
+    } else if (collectionAction === 'pending-summary' && req.method === 'GET') {
+      response = await handlePendingSummary(req, ctx);
     } else {
       // Collection routes
       if (req.method === 'GET')       { response = await handleList(req, ctx); }

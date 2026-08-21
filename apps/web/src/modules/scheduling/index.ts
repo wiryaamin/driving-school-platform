@@ -20,8 +20,8 @@ export { useSlot, useSlotList, useInstructorUpcomingSlots, slotKeys } from './ho
 export type { SlotListResponse, SlotListMeta } from './hooks/useSlots.js';
 
 // ─── Booking query hooks + keys ───────────────────────────────────────────────
-export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBookings, useInstructorUpcomingBookings, bookingKeys } from './hooks/useBookings.js';
-export type { LessonBooking, BookingListResponse, BookingListMeta } from './hooks/useBookings.js';
+export { useBooking, useBookingList, useBookingsForSlot, useStudentUpcomingBookings, useInstructorUpcomingBookings, usePendingBookingsSummary, bookingKeys } from './hooks/useBookings.js';
+export type { LessonBooking, BookingListResponse, BookingListMeta, PendingBookingsSummary } from './hooks/useBookings.js';
 
 // ─── Cancellation policy (F3) ─────────────────────────────────────────────────
 export { useCancellationDeadlineHours, DEFAULT_CANCELLATION_DEADLINE_HOURS } from './hooks/useCancellationPolicy.js';

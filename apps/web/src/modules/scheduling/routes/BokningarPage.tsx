@@ -9,6 +9,7 @@ import {
   useBookingList,
   useUpdateBookingStatus,
   useCancelBooking,
+  usePendingBookingsSummary,
   BookingStatusBadge,
   type LessonBooking,
 } from '@modules/scheduling/index.js';
@@ -692,10 +693,13 @@ function BookingDetailContent({
 }
 
 // ─── SLA banner ───────────────────────────────────────────────────────────────
+//
+// F1 fix: counts come from a dedicated backend aggregate (usePendingBookingsSummary),
+// not from the currently-loaded booking list — the list is capped and windowed
+// (see WIDE_FROM/WIDE_TO/per_page above) and was silently undercounting past
+// ~200 pending requests. See GET /bookings/pending-summary.
 
-function SlaBanner({ bookings }: { bookings: LessonBooking[] }) {
-  const over48 = bookings.filter((b) => slaHours(b.created_at) >= 48).length;
-  const over24 = bookings.filter((b) => slaHours(b.created_at) >= 24 && slaHours(b.created_at) < 48).length;
+function SlaBanner({ over24, over48 }: { over24: number; over48: number }) {
   if (over48 === 0 && over24 === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-4 px-4 md:px-6 py-2 bg-muted/30 border-b border-border text-xs">
@@ -723,10 +727,13 @@ export function BokningarPage() {
   const [rebookStudent, setRebookStudent] = useState<{ studentId: string; studentName: string } | null>(null);
 
   // ── Data fetching ────────────────────────────────────────────────────────────
-  const allBookings = useBookingList({ from: WIDE_FROM, to: WIDE_TO, per_page: 200 });
-  const instructors = useInstructorList({ per_page: 200 });
-  const students    = useStudentList({ per_page: 200 });
-  const lessonTypes = useLessonTypes();
+  const allBookings   = useBookingList({ from: WIDE_FROM, to: WIDE_TO, per_page: 200 });
+  const instructors   = useInstructorList({ per_page: 200 });
+  const students      = useStudentList({ per_page: 200 });
+  const lessonTypes   = useLessonTypes();
+  // F1 fix: authoritative pending-request SLA counts, independent of the
+  // capped/windowed fetch above — see SlaBanner.
+  const pendingSummary = usePendingBookingsSummary();
 
   // ── Name lookup maps ─────────────────────────────────────────────────────────
   const instructorMap = useMemo(() => {
@@ -851,7 +858,10 @@ export function BokningarPage() {
       <div className="bg-background mt-0">
         {tab === 'inkommande' && (
           <>
-            <SlaBanner bookings={byTab.inkommande} />
+            <SlaBanner
+              over24={pendingSummary.data?.pending_over_24h ?? 0}
+              over48={pendingSummary.data?.pending_over_48h ?? 0}
+            />
             <InkommandaTab
               bookings={byTab.inkommande}
               isLoading={isLoading}
