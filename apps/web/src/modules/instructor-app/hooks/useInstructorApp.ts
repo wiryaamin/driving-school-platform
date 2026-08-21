@@ -59,6 +59,7 @@ export const instructorAppKeys = {
   studentSummary:(instructorId: string, studentId: string) => [...instructorAppKeys.all, 'student-summary', instructorId, studentId] as const,
   stats:         (instructorId: string) => [...instructorAppKeys.all, 'stats', instructorId] as const,
   timeOff:       (instructorId: string) => [...instructorAppKeys.all, 'time-off', instructorId] as const,
+  availability:  (instructorId: string) => [...instructorAppKeys.all, 'availability', instructorId] as const,
 };
 
 // ─── Raw Supabase row shapes (pre-mapping) ────────────────────────────────────
@@ -329,6 +330,41 @@ export function useLessonContext(studentId: string | null | undefined) {
   });
 }
 
+// ─── Lesson history (P2-1) — bounded list, students/:id/lesson-history ────────
+
+export interface LessonHistoryEntry {
+  id:                        string;
+  starts_at:                 string;
+  status:                    string;
+  lesson_type_name:          string | null;
+  performance_rating:        number | null;
+  evaluation_outcome:        string | null;
+  evaluation_strengths:      string | null;
+  evaluation_improvements:   string | null;
+  evaluation_recommendation: string | null;
+}
+
+export function useLessonHistory(studentId: string | null | undefined, opts?: { limit?: number; before?: string }) {
+  const limit  = opts?.limit ?? 20;
+  const before = opts?.before;
+  return useQuery({
+    queryKey: [...instructorAppKeys.all, 'lesson-history', studentId ?? '', limit, before ?? ''],
+    enabled:  Boolean(studentId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<{ lessons: LessonHistoryEntry[]; has_more: boolean }> => {
+      if (!studentId) return { lessons: [], has_more: false };
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (before) params.set('before', before);
+      const { data, error } = await supabase.functions.invoke<{ data: { lessons: LessonHistoryEntry[]; has_more: boolean } }>(
+        `students/${studentId}/lesson-history?${params.toString()}`,
+        { method: 'GET' },
+      );
+      if (error) throw error;
+      return data?.data ?? { lessons: [], has_more: false };
+    },
+  });
+}
+
 export type AttendanceStatus = 'completed' | 'no_show' | 'confirmed';
 
 export function useMarkAttendance() {
@@ -492,6 +528,49 @@ export function useInstructorTimeOff(instructorId: string | null | undefined) {
         .limit(20);
       if (error) throw error;
       return (data ?? []) as TimeOffEntry[];
+    },
+  });
+}
+
+// ─── Instructor recurring availability (P1-1, read-only) ──────────────────────
+// instructor_availability_rules already has a self-select RLS policy
+// ("instructor_availability_rules_select_self", 20260528000003) letting an
+// instructor read their own rows — this was never consumed by any UI. Write
+// access intentionally stays reception-only (permission
+// scheduling:availability:update): recurring availability drives slot
+// generation for the whole org, so changes stay behind the same
+// admin/reception approval the rest of the schedule already requires. This
+// gives the instructor visibility only, same read-only boundary as the
+// staff-authored source of truth.
+
+export interface AvailabilityRule {
+  id:                    string;
+  day_of_week:           number; // 0=Sunday … 6=Saturday
+  start_time:            string;
+  end_time:              string;
+  effective_from:        string;
+  effective_until:       string | null;
+  is_active:             boolean;
+  location_id:           string | null;
+}
+
+export function useInstructorAvailabilityRules(instructorId: string | null | undefined) {
+  const { user } = useSessionStore();
+  return useQuery({
+    queryKey: instructorAppKeys.availability(instructorId ?? ''),
+    enabled:  Boolean(instructorId && user?.organization_id),
+    staleTime: 60_000,
+    queryFn: async (): Promise<AvailabilityRule[]> => {
+      if (!instructorId || !user?.organization_id) return [];
+      const { data, error } = await supabase
+        .from('instructor_availability_rules')
+        .select('id, day_of_week, start_time, end_time, effective_from, effective_until, is_active, location_id')
+        .eq('instructor_id', instructorId)
+        .eq('organization_id', user.organization_id)
+        .order('day_of_week')
+        .order('start_time');
+      if (error) throw error;
+      return (data ?? []) as AvailabilityRule[];
     },
   });
 }

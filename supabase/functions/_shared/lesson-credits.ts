@@ -15,6 +15,7 @@
 
 export type CreditPreflightResult =
   | { kind: 'not_applicable' }
+  | { kind: 'expired'; category: string }
   | { kind: 'insufficient'; category: string }
   | { kind: 'available'; assignmentId: string; category: string };
 
@@ -45,7 +46,16 @@ export async function resolveLessonPackageCredit(
   const activeValid: Array<{ id: string; package_quantity: number; lessons_used: number; expires_at: string | null }> =
     (asgnRows ?? []).filter((r: any) => r.expires_at === null || (r.expires_at as string) > now);
 
-  if (activeValid.length === 0) return { kind: 'not_applicable' };
+  if (activeValid.length === 0) {
+    // A student with no package row at all for this category is genuinely
+    // pay-per-lesson (existing, correct behavior). A student whose only
+    // package(s) for this category exist but have all passed expires_at is a
+    // different case — silently falling through to 'not_applicable' here
+    // used to make the two indistinguishable, letting a lapsed package book
+    // for free with nothing consumed and no one told (Final Gap Analysis P1-2).
+    if ((asgnRows ?? []).length > 0) return { kind: 'expired', category: lt.category as string };
+    return { kind: 'not_applicable' };
+  }
 
   const firstWithCredits = activeValid.find(r => r.lessons_used < r.package_quantity);
   if (!firstWithCredits) return { kind: 'insufficient', category: lt.category as string };

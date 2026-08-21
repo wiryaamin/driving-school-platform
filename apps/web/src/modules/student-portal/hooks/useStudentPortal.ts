@@ -227,6 +227,19 @@ export function useRegisterPushToken() {
   });
 }
 
+// Final Gap Analysis P2-4 — the backend DELETE /push/register route already
+// existed with zero frontend consumer; this is the missing piece, not a new
+// endpoint.
+export function useRevokePushToken() {
+  return useMutation({
+    mutationFn: (tokenId: string) =>
+      portalFetch<{ revoked: boolean }>('/push/register', {
+        method: 'DELETE',
+        body:   JSON.stringify({ token_id: tokenId }),
+      }),
+  });
+}
+
 // ─── Student portal hooks ─────────────────────────────────────────────────────
 
 export function usePortalMe() {
@@ -236,6 +249,22 @@ export function usePortalMe() {
     enabled:  Boolean(getStoredPortalSession()),
     staleTime: 5 * 60_000,
     retry: 0,
+  });
+}
+
+// Final Gap Analysis P2-3 — the one profile field a student may edit
+// themselves; every other field stays staff-mediated by existing design.
+export function useUpdatePhone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (phone: string) =>
+      portalFetch<{ success: boolean; phone: string }>('/me/phone', {
+        method: 'PATCH',
+        body:   JSON.stringify({ phone }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal', 'me'] });
+    },
   });
 }
 

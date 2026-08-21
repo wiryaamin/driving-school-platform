@@ -252,6 +252,18 @@ export function useRegisterInstructorPushToken() {
   });
 }
 
+// Final Gap Analysis P2-4 — the backend DELETE /push/register route already
+// existed with zero frontend consumer; this is the missing piece.
+export function useRevokeInstructorPushToken() {
+  return useMutation({
+    mutationFn: (tokenId: string) =>
+      portalFetch<{ revoked: boolean }>('/push/register', {
+        method: 'DELETE',
+        body:   JSON.stringify({ token_id: tokenId }),
+      }),
+  });
+}
+
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
 export function useInstructorPortalMe() {

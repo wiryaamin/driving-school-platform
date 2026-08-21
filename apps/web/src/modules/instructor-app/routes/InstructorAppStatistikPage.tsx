@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, Clock, Star, AlertCircle, CalendarX, Plus, X } from 'lucide-react';
+import { CheckCircle, Clock, Star, AlertCircle, CalendarX, Plus, X, CalendarClock } from 'lucide-react';
 import { useInstructorCtx } from './InstructorAppLayout.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import {
@@ -7,6 +7,7 @@ import {
   useInstructorTimeOff,
   useCreateTimeOff,
   useCancelTimeOff,
+  useInstructorAvailabilityRules,
 } from '../hooks/useInstructorApp.js';
 import { cn } from '@/lib/utils.js';
 
@@ -55,6 +56,13 @@ const STATUS_CFG: Record<string, { label: string; cls: string }> = {
   pending:  { label: 'Väntar på godkännande', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
   approved: { label: 'Godkänd',               cls: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' },
 };
+
+// day_of_week: 0=Sunday … 6=Saturday (matches instructor_availability_rules)
+const DAY_LABEL = ['Söndag', 'Måndag', 'Tisdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lördag'];
+
+function fmtHM(t: string): string {
+  return t.slice(0, 5);
+}
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
@@ -114,6 +122,7 @@ export function InstructorAppStatistikPage() {
 
   const { data: stats,   isLoading: statsLoading  } = useInstructorStats(instructor.id, user?.organization_id);
   const { data: entries, isLoading: entriesLoading } = useInstructorTimeOff(instructor.id);
+  const { data: availRules, isLoading: availLoading } = useInstructorAvailabilityRules(instructor.id);
   const createTimeOff  = useCreateTimeOff();
   const cancelTimeOff  = useCancelTimeOff();
 
@@ -168,6 +177,16 @@ export function InstructorAppStatistikPage() {
   const noShowRate = stats && (stats.total_completed + stats.total_no_show) > 0
     ? Math.round(stats.total_no_show / (stats.total_completed + stats.total_no_show) * 100)
     : 0;
+
+  // Active, currently-effective rules only, displayed Monday→Sunday.
+  const today = todayStr();
+  const activeAvailRules = (availRules ?? [])
+    .filter(r => r.is_active && (!r.effective_until || r.effective_until >= today))
+    .sort((a, b) => {
+      const wa = a.day_of_week === 0 ? 7 : a.day_of_week;
+      const wb = b.day_of_week === 0 ? 7 : b.day_of_week;
+      return wa - wb || a.start_time.localeCompare(b.start_time);
+    });
 
   return (
     <div className="px-4 py-5 max-w-lg mx-auto space-y-5">
@@ -248,6 +267,41 @@ export function InstructorAppStatistikPage() {
             />
           </div>
         )}
+      </section>
+
+      {/* Recurring availability / Tillgänglighet (P1-1, read-only) */}
+      <section>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">
+          Tillgänglighet
+        </p>
+
+        {availLoading && (
+          <div className="space-y-2">
+            {[1, 2].map(i => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-800 rounded-2xl animate-pulse" />)}
+          </div>
+        )}
+
+        {!availLoading && activeAvailRules.length === 0 && (
+          <div className="flex items-center gap-3 p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+            <CalendarClock className="w-5 h-5 text-gray-300 dark:text-gray-600 shrink-0" />
+            <p className="text-sm text-gray-400 dark:text-gray-500">Ingen ordinarie tillgänglighet är registrerad ännu.</p>
+          </div>
+        )}
+
+        {!availLoading && activeAvailRules.length > 0 && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden divide-y divide-gray-50 dark:divide-gray-800">
+            {activeAvailRules.map(rule => (
+              <div key={rule.id} className="px-4 py-3 flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{DAY_LABEL[rule.day_of_week]}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400 tabular-nums">{fmtHM(rule.start_time)} – {fmtHM(rule.end_time)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-2 leading-snug">
+          Din ordinarie tillgänglighet sätts av skolans administratör. Kontakta administrationen om den behöver ändras.
+        </p>
       </section>
 
       {/* Time-off / Ledigheter */}

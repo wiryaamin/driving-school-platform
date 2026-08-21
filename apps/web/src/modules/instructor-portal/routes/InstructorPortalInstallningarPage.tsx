@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { User, CheckCircle2, Bell, BellOff } from 'lucide-react';
 import { useInstructorPortalSession } from './InstructorPortalLayout.js';
-import { useInstructorPortalMe, useRegisterInstructorPushToken } from '../hooks/useInstructorPortal.js';
+import { useInstructorPortalMe, useRegisterInstructorPushToken, useRevokeInstructorPushToken } from '../hooks/useInstructorPortal.js';
 import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
 
@@ -17,9 +17,11 @@ const PUSH_STATUS_LABEL: Record<string, string> = {
 
 function InstructorNotificationsCard() {
   const registerMutation = useRegisterInstructorPushToken();
-  const { status, error, subscribe } = usePushSubscription({
+  const revokeMutation   = useRevokeInstructorPushToken();
+  const { status, error, subscribe, unsubscribe } = usePushSubscription({
     storageNamespace: 'instructor-portal',
-    register: (input) => registerMutation.mutateAsync(input),
+    register:   (input) => registerMutation.mutateAsync(input),
+    unregister: (tokenId) => revokeMutation.mutateAsync(tokenId),
   });
 
   const isGranted = status === 'granted';
@@ -44,6 +46,14 @@ function InstructorNotificationsCard() {
             style={{ color: BRAND, borderColor: `${BRAND}40` }}
           >
             Aktivera
+          </button>
+        )}
+        {isGranted && (
+          <button
+            onClick={() => void unsubscribe()}
+            className="text-xs font-semibold text-gray-500 px-3 py-1.5 rounded-full border border-gray-200 hover:bg-gray-50 transition-colors shrink-0"
+          >
+            Inaktivera
           </button>
         )}
       </div>

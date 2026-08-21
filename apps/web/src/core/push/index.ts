@@ -140,6 +140,30 @@ export async function requestPushToken(): Promise<RequestPushTokenResult> {
 }
 
 /**
+ * Final Gap Analysis P2-4 — tears down this browser's push registration:
+ * the raw PushManager subscription plus FCM's cached token. Mirrors the
+ * defensive double-teardown requestPushToken() already does before
+ * re-subscribing (see the comment above), reused here for the same reason —
+ * deleteToken() alone can leave the lower-level PushManager subscription
+ * behind. Does not and cannot touch the OS/browser notification permission
+ * itself (that's the user's browser setting, not this app's to revoke) —
+ * callers are still responsible for revoking the server-side device token
+ * via DELETE /push/register so the backend stops targeting this device.
+ */
+export async function unsubscribeCurrentDevice(): Promise<void> {
+  if (!isPushConfigured()) return;
+  try {
+    const swRegistration = await navigator.serviceWorker.ready;
+    const existingSub = await swRegistration.pushManager.getSubscription();
+    if (existingSub) await existingSub.unsubscribe();
+  } catch { /* nothing to unsubscribe — fine */ }
+  try {
+    const messaging = getMessagingInstance();
+    if (messaging) await deleteToken(messaging);
+  } catch { /* nothing cached — fine */ }
+}
+
+/**
  * Foreground message handler — fires when a push arrives while the tab is
  * focused (background delivery instead goes through sw.js's `push` event).
  * Returns an unsubscribe function; no-ops (returns a no-op unsubscribe) if

@@ -257,6 +257,8 @@ interface BookingSummary {
   lesson_type_name:      string | null;
   instructor_first_name: string | null;
   instructor_last_name:  string | null;
+  location_name?:        string | null;
+  vehicle_label?:        string | null;
 }
 
 function NextLessonCard({
@@ -357,6 +359,18 @@ function NextLessonCard({
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-white/40 text-sm">🚗</span>
                 <p className="text-white/65 text-xs">{booking.lesson_type_name}</p>
+              </div>
+            )}
+            {booking.vehicle_label && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-white/40 text-sm">🚙</span>
+                <p className="text-white/65 text-xs">{booking.vehicle_label}</p>
+              </div>
+            )}
+            {booking.location_name && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-white/40 text-sm">📍</span>
+                <p className="text-white/65 text-xs">{booking.location_name}</p>
               </div>
             )}
             <Link

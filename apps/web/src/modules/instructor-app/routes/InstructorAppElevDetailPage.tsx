@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import {
   ArrowLeft, Phone, Mail, Star, AlertTriangle, AlertCircle,
@@ -5,7 +6,10 @@ import {
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useInstructorCtx } from './InstructorAppLayout.js';
-import { useMyStudents, useStudentSummary, useLessonContext } from '../hooks/useInstructorApp.js';
+import {
+  useMyStudents, useStudentSummary, useLessonContext, useLessonHistory,
+  type LessonHistoryEntry,
+} from '../hooks/useInstructorApp.js';
 import { PERMIT_STAGE_LABELS, getProgressPct, type PermitStage } from '@modules/student-portal/lib/permitStage.js';
 import { cn } from '@/lib/utils.js';
 
@@ -192,6 +196,74 @@ function LessonContextSection({ studentId }: { studentId: string }) {
   );
 }
 
+// ─── Lesson history (Final Gap Analysis P2-1) ──────────────────────────────────
+// LessonContextSection above shows only the single most recent lesson — this
+// gives the instructor the full chronological list, bounded and paginated via
+// GET /students/:id/lesson-history, same authorization and same fields as the
+// last_lesson entry already exposed there (no financial/personnummer/guardian
+// data added).
+
+function LessonHistorySection({ studentId }: { studentId: string }) {
+  const [before, setBefore] = useState<string | undefined>(undefined);
+  const [allLessons, setAllLessons] = useState<LessonHistoryEntry[]>([]);
+  const { data, isLoading, isError } = useLessonHistory(studentId, before ? { before } : {});
+
+  useEffect(() => {
+    if (data) {
+      setAllLessons(prev => (before ? [...prev, ...data.lessons] : data.lessons));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  if (isLoading && allLessons.length === 0) {
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3].map(i => <div key={i} className="h-14 bg-gray-100 dark:bg-gray-800 rounded-2xl animate-pulse" />)}
+      </div>
+    );
+  }
+  if (isError) {
+    return <p className="text-xs text-red-600 dark:text-red-400">Kunde inte hämta lektionshistorik.</p>;
+  }
+  if (allLessons.length === 0) {
+    return <p className="text-xs text-gray-400 dark:text-gray-500">Inga tidigare lektioner ännu.</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 overflow-hidden divide-y divide-gray-50 dark:divide-gray-800">
+        {allLessons.map(lesson => (
+          <div key={lesson.id} className="px-4 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">
+                {lesson.lesson_type_name ?? 'Körlektion'}
+              </p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">{formatShortDate(lesson.starts_at)}</p>
+            </div>
+            <span className={cn(
+              'shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full',
+              lesson.status === 'completed'
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                : 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400',
+            )}>
+              {lesson.status === 'completed' ? 'Genomförd' : 'Uteblev'}
+            </span>
+          </div>
+        ))}
+      </div>
+      {data?.has_more && (
+        <button
+          onClick={() => setBefore(allLessons[allLessons.length - 1]?.starts_at)}
+          disabled={isLoading}
+          className="w-full py-2 text-xs font-semibold text-purple-600 dark:text-purple-400 hover:underline disabled:opacity-50"
+        >
+          {isLoading ? 'Laddar...' : 'Visa fler'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── InstructorAppElevDetailPage ──────────────────────────────────────────────
 
 export function InstructorAppElevDetailPage() {
@@ -366,6 +438,15 @@ export function InstructorAppElevDetailPage() {
 
         {/* Lesson context (Phase 3) */}
         <LessonContextSection studentId={student.id} />
+
+        {/* Lesson history (P2-1) */}
+        <div className="space-y-2">
+          <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <History className="w-3.5 h-3.5" />
+            Lektionshistorik
+          </p>
+          <LessonHistorySection studentId={student.id} />
+        </div>
       </div>
     </div>
   );

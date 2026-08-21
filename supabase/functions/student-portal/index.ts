@@ -30,6 +30,14 @@ const CreateBookingSchema = z.object({
   lesson_type_id:  z.string().uuid().optional(),
 });
 
+// Final Gap Analysis P2-3: only phone is student-self-editable — name, email,
+// personnummer, and address stay staff-mediated (audited as correct, not a
+// gap). Swedish mobile/landline: optional leading +, 7-15 digits, spaces and
+// hyphens allowed as separators.
+const UpdatePhoneSchema = z.object({
+  phone: z.string().trim().regex(/^\+?[0-9 -]{7,20}$/, 'Ogiltigt telefonnummer'),
+});
+
 const RescheduleSchema = z.object({
   new_slot_id: z.string().uuid(),
 });
@@ -328,6 +336,26 @@ Deno.serve((req: Request) =>
       return ok({ ...rest, personnummer });
     }
 
+    // ── PATCH /me/phone (Final Gap Analysis P2-3) ─────────────────────────────
+    // Narrow, single-field self-edit — every other profile field (name,
+    // email, personnummer, address) stays staff-mediated by design. Scoped by
+    // student_id + organization_id, same as every other write in this file;
+    // student_id comes from the verified portal token, never the request body.
+    if (req.method === 'PATCH' && path === '/me/phone') {
+      const body   = await req.json().catch(() => null);
+      const parsed = UpdatePhoneSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Ogiltigt telefonnummer');
+
+      const { error } = await supabase
+        .from('students')
+        .update({ phone: parsed.data.phone })
+        .eq('id', student_id)
+        .eq('organization_id', organization_id);
+
+      if (error) return fail(500, 'Kunde inte uppdatera telefonnumret');
+      return ok({ success: true, phone: parsed.data.phone });
+    }
+
     // ── GET /progress — lesson stats + permit milestones ─────────────────────
     if (req.method === 'GET' && path === '/progress') {
       const [bookingsRes, studentRes] = await Promise.all([
@@ -483,7 +511,7 @@ Deno.serve((req: Request) =>
       // Verify slot exists and has capacity
       const { data: slot } = await supabase
         .from('lesson_slots')
-        .select('id, status, current_bookings, max_bookings, lesson_type_id')
+        .select('id, status, current_bookings, max_bookings, lesson_type_id, starts_at, ends_at')
         .eq('id', slot_id)
         .eq('organization_id', organization_id)
         .is('deleted_at', null)
@@ -519,6 +547,24 @@ Deno.serve((req: Request) =>
 
       if (existing) return fail(409, 'Du har redan en bokning för detta pass');
 
+      // Booking-conflict pre-flight (Final Gap Analysis P1-5) — mirrors the
+      // staff booking path's check_student_booking_availability call. Without
+      // this, the only thing catching a genuine time-overlap conflict was the
+      // DB exclusion constraint at insert time, which this endpoint then
+      // reported as "Platsen är fullbokad" (slot full) below — true for a
+      // capacity conflict, false and misleading for a schedule conflict.
+      // Running the same check the staff path already trusts lets us tell the
+      // two cases apart with an accurate message before insert is even tried.
+      const { data: availOk, error: availErr } = await supabase.rpc('check_student_booking_availability', {
+        p_student_id: student_id,
+        p_starts_at:  (slot as { starts_at: string }).starts_at,
+        p_ends_at:    (slot as { ends_at: string }).ends_at,
+      });
+      if (availErr) return fail(500, 'Failed to check booking availability');
+      if (!availOk) {
+        return fail(409, 'Du har redan en bokning som krockar med den här tiden — välj en annan tid eller avboka den befintliga bokningen först.');
+      }
+
       // Package credit pre-flight — same rule the staff booking path enforces,
       // via the shared implementation in _shared/lesson-credits.ts. This
       // endpoint previously never checked package credit at all (ISSUE-1).
@@ -530,6 +576,13 @@ Deno.serve((req: Request) =>
 
       if (preflight.kind === 'insufficient') {
         return fail(409, 'Eleven saknar lektionstillgodokvitton för det här passet');
+      }
+      if (preflight.kind === 'expired') {
+        // Final Gap Analysis P1-2: previously fell through to 'not_applicable'
+        // and let the booking through free, with nothing consumed and nothing
+        // said. Block with a message the student can actually act on, same as
+        // the staff path.
+        return fail(409, 'Ditt lektionspaket för den här kategorin har gått ut — kontakta skolan för att förnya paketet.');
       }
 
       const { data: booking, error: insertErr } = await insertLessonBooking(
@@ -546,8 +599,13 @@ Deno.serve((req: Request) =>
       if (insertErr) {
         // 23505 = unique_violation: duplicate booking (TOCTOU race — same student, same slot)
         if (insertErr.code === '23505') return fail(409, 'Du har redan en bokning för detta pass');
-        // 23P01 = exclusion_violation: slot overbooked concurrently
-        if (insertErr.code === '23P01') return fail(409, 'Platsen är fullbokad');
+        // 23P01 = exclusion_violation: the student_no_overlap constraint — a
+        // concurrent booking created the same schedule conflict the pre-flight
+        // check above just missed (TOCTOU race), not a capacity issue. Slot
+        // capacity is a separate check earlier in this handler.
+        if (insertErr.code === '23P01') {
+          return fail(409, 'Du har redan en bokning som krockar med den här tiden — välj en annan tid eller avboka den befintliga bokningen först.');
+        }
         logger.error('student-portal: booking insert failed', { error: insertErr.message });
         return fail(500, 'Booking failed — please try again');
       }

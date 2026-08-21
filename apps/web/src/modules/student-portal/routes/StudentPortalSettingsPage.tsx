@@ -4,7 +4,7 @@ import {
   Lock, Sun, Moon, Monitor, ChevronRight, AlertTriangle,
   CheckCircle2, ClipboardCheck, Star, BookOpen, Award, Bell, BellOff,
 } from 'lucide-react';
-import { usePortalMe, useRegisterPushToken } from '../hooks/useStudentPortal.js';
+import { usePortalMe, useRegisterPushToken, useRevokePushToken, useUpdatePhone } from '../hooks/useStudentPortal.js';
 import { usePortalSession } from './StudentPortalLayout.js';
 import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
@@ -65,6 +65,96 @@ function InfoRow({ label, value }: { label: string; value: string | null | undef
     <div className="flex flex-col gap-0.5 py-3 border-b border-gray-50 last:border-0">
       <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">{label}</p>
       <p className="text-sm font-medium text-gray-800">{value ?? '—'}</p>
+    </div>
+  );
+}
+
+// ─── Editable phone row (Final Gap Analysis P2-3) ──────────────────────────────
+// The one profile field a student may edit themselves — every other field on
+// this card (name, email, personnummer, address) stays staff-mediated, which
+// the audit found correct as-is and this leaves untouched.
+
+const PHONE_PATTERN = /^\+?[0-9 -]{7,20}$/;
+
+function EditablePhoneRow({ value }: { value: string | null | undefined }) {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(value ?? '');
+  const [saved,   setSaved]   = useState(false);
+  const updatePhone = useUpdatePhone();
+
+  function startEdit() {
+    setDraft(value ?? '');
+    setSaved(false);
+    setEditing(true);
+  }
+
+  function handleSave() {
+    const trimmed = draft.trim();
+    if (!PHONE_PATTERN.test(trimmed)) return;
+    updatePhone.mutate(trimmed, {
+      onSuccess: () => {
+        setEditing(false);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2500);
+      },
+    });
+  }
+
+  const invalid = editing && draft.trim().length > 0 && !PHONE_PATTERN.test(draft.trim());
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-between gap-2 py-3 border-b border-gray-50 last:border-0">
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Telefonnummer</p>
+          <p className="text-sm font-medium text-gray-800 truncate">
+            {saved ? 'Uppdaterat!' : (value ?? '—')}
+          </p>
+        </div>
+        <button
+          onClick={startEdit}
+          className="shrink-0 text-xs font-semibold text-[#684EFF] px-3 py-1 rounded-full border border-[#684EFF]/30 bg-blue-50 hover:bg-blue-100 transition-colors"
+        >
+          Ändra
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 py-3 border-b border-gray-50 last:border-0">
+      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Telefonnummer</p>
+      <div className="flex items-center gap-2">
+        <input
+          type="tel"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          autoFocus
+          placeholder="07X-XXX XX XX"
+          className={cn(
+            'flex-1 min-w-0 px-3 py-1.5 text-sm rounded-lg border focus:outline-none focus:ring-2',
+            invalid ? 'border-red-300 focus:ring-red-200' : 'border-gray-200 focus:ring-[#684EFF]/30',
+          )}
+        />
+        <button
+          onClick={handleSave}
+          disabled={updatePhone.isPending || draft.trim().length === 0 || invalid}
+          className="shrink-0 text-xs font-semibold text-white px-3 py-1.5 rounded-lg bg-[#684EFF] hover:bg-[#5a3fe0] disabled:opacity-50 transition-colors"
+        >
+          {updatePhone.isPending ? 'Sparar...' : 'Spara'}
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          disabled={updatePhone.isPending}
+          className="shrink-0 text-xs font-semibold text-gray-500 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        >
+          Avbryt
+        </button>
+      </div>
+      {invalid && <p className="text-[11px] text-red-500">Ange ett giltigt telefonnummer.</p>}
+      {updatePhone.isError && (
+        <p className="text-[11px] text-red-500">Kunde inte spara — försök igen.</p>
+      )}
     </div>
   );
 }
@@ -131,9 +221,11 @@ const PUSH_STATUS_LABEL: Record<string, string> = {
 
 function NotificationsCard() {
   const registerMutation = useRegisterPushToken();
-  const { status, error, subscribe } = usePushSubscription({
+  const revokeMutation   = useRevokePushToken();
+  const { status, error, subscribe, unsubscribe } = usePushSubscription({
     storageNamespace: 'student-portal',
-    register: (input) => registerMutation.mutateAsync(input),
+    register:   (input) => registerMutation.mutateAsync(input),
+    unregister: (tokenId) => revokeMutation.mutateAsync(tokenId),
   });
 
   const isGranted = status === 'granted';
@@ -164,6 +256,14 @@ function NotificationsCard() {
               className="text-xs font-semibold text-[#684EFF] px-3 py-1.5 rounded-full border border-[#684EFF]/30 bg-blue-50 hover:bg-blue-100 transition-colors shrink-0"
             >
               Aktivera
+            </button>
+          )}
+          {isGranted && (
+            <button
+              onClick={() => void unsubscribe()}
+              className="text-xs font-semibold text-gray-500 px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors shrink-0"
+            >
+              Inaktivera
             </button>
           )}
         </div>
@@ -231,7 +331,7 @@ function AllmantTab() {
               <InfoRow label="Förnamn"      value={me?.first_name ?? session.student_name.split(' ')[0]} />
               <InfoRow label="Efternamn"    value={me?.last_name  ?? session.student_name.split(' ').slice(1).join(' ')} />
               <InfoRow label="E-postadress" value={me?.email} />
-              <InfoRow label="Telefonnummer" value={me?.phone} />
+              <EditablePhoneRow value={me?.phone} />
               <InfoRow label="Adress"       value={me?.address_line1} />
               <InfoRow label="Postnummer"   value={me?.postal_code} />
               <InfoRow label="Stad"         value={me?.city} />
@@ -239,7 +339,7 @@ function AllmantTab() {
           )}
         </div>
         <p className="text-xs text-gray-400 mt-2 text-center">
-          Kontakta {session.organization_name} för att uppdatera personuppgifter.
+          Kontakta {session.organization_name} för att uppdatera övriga personuppgifter.
         </p>
       </div>
 

@@ -720,6 +720,68 @@ async function handleSaveAssessment(req: Request, ctx: EdgeRequestContext, stude
   return successResp(ctx, { success: true });
 }
 
+// ─── Instructor lesson history (Final Gap Analysis P2-1) ──────────────────────
+// handleGetLessonContext above already gives an instructor the single most
+// recent completed/no_show lesson; this adds the bounded, paginated list of
+// all of them for the same student, reusing the exact same authorization
+// boundary and the exact same columns already exposed there — no financial,
+// personnummer, or guardian-only data, same as lesson-context.
+const LESSON_HISTORY_DEFAULT_LIMIT = 20;
+const LESSON_HISTORY_MAX_LIMIT     = 50;
+
+async function handleGetLessonHistory(req: Request, ctx: EdgeRequestContext, studentId: string): Promise<Response> {
+  if (!isInstructorTierRole(ctx)) return errorResp(ctx, 403, 'FORBIDDEN', 'Only instructors may view lesson history here');
+  const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
+  const ownInstructorId = await resolveOwnInstructorId(client, ctx);
+  if (ownInstructorId === null) return errorResp(ctx, 403, 'FORBIDDEN', 'No instructor record found for this account');
+
+  const orgId = ctx.organizationId!;
+  const visibleIds = await resolveInstructorVisibleStudentIds(client, orgId, ownInstructorId);
+  if (!visibleIds.includes(studentId)) return errorResp(ctx, 404, 'NOT_FOUND', `Student '${studentId}' not found`);
+
+  const url = new URL(req.url);
+  const limitParam = Number(url.searchParams.get('limit') ?? '');
+  const limit  = Number.isFinite(limitParam) && limitParam > 0
+    ? Math.min(LESSON_HISTORY_MAX_LIMIT, Math.floor(limitParam))
+    : LESSON_HISTORY_DEFAULT_LIMIT;
+  const before = url.searchParams.get('before'); // ISO timestamp cursor — starts_at of the last row already seen
+
+  let query = (client as any)
+    .from('lesson_bookings')
+    .select('id, starts_at, status, performance_rating, lesson_types(name), booking_attendance(evaluation_outcome, evaluation_strengths, evaluation_improvements, evaluation_recommendation)')
+    .eq('student_id', studentId)
+    .eq('organization_id', orgId)
+    .in('status', ['completed', 'no_show'])
+    .order('starts_at', { ascending: false })
+    .limit(limit);
+
+  if (before) query = query.lt('starts_at', before);
+
+  const { data, error } = await query;
+  if (error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to load lesson history');
+
+  const rows = (data ?? []) as Array<{
+    id: string; starts_at: string; status: string; performance_rating: number | null;
+    lesson_types: { name: string } | null;
+    booking_attendance: { evaluation_outcome: string | null; evaluation_strengths: string | null; evaluation_improvements: string | null; evaluation_recommendation: string | null }[] | null;
+  }>;
+
+  return successResp(ctx, {
+    lessons: rows.map(r => ({
+      id:                        r.id,
+      starts_at:                 r.starts_at,
+      status:                    r.status,
+      lesson_type_name:          r.lesson_types?.name ?? null,
+      performance_rating:        r.performance_rating,
+      evaluation_outcome:        r.booking_attendance?.[0]?.evaluation_outcome        ?? null,
+      evaluation_strengths:      r.booking_attendance?.[0]?.evaluation_strengths      ?? null,
+      evaluation_improvements:   r.booking_attendance?.[0]?.evaluation_improvements   ?? null,
+      evaluation_recommendation: r.booking_attendance?.[0]?.evaluation_recommendation ?? null,
+    })),
+    has_more: rows.length === limit,
+  });
+}
+
 async function handleGetById(req: Request, ctx: EdgeRequestContext, id: string): Promise<Response> {
   const guard = requirePerm(ctx, 'students:student:read');
   if (guard) return guard;
@@ -962,6 +1024,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       const studentId = pathname.split('/')[2]!;
       response = req.method === 'GET'
         ? await handleGetLessonContext(req, ctx, studentId)
+        : new Response(
+            JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
+            { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }
+          );
+    } else if (/^\/students\/[0-9a-f-]+\/lesson-history$/.test(pathname)) {
+      const studentId = pathname.split('/')[2]!;
+      response = req.method === 'GET'
+        ? await handleGetLessonHistory(req, ctx, studentId)
         : new Response(
             JSON.stringify({ code: 'NOT_FOUND', message: 'Route not found', trace_id: ctx.correlationId, request_id: ctx.requestId, version: 1 }),
             { status: 404, headers: { ...JSON_CT, 'X-Correlation-ID': ctx.correlationId, 'X-Request-ID': ctx.requestId } }

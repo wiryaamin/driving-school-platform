@@ -242,6 +242,12 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
       { student_id: dto.student_id, required_quantity: 1, available_quantity: 0 },
     );
   }
+  if (preflight.kind === 'expired') {
+    return errorResp(ctx, 409, 'PACKAGE_EXPIRED',
+      'Elevens lektionspaket för den här kategorin har gått ut — förnya paketet innan bokning',
+      { student_id: dto.student_id, category: preflight.category },
+    );
+  }
 
   const insertPayload: Record<string, unknown> = {
     slot_id:          dto.slot_id,

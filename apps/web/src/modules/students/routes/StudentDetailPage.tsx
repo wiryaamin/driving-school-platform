@@ -44,6 +44,7 @@ import { StudentStatusBadge, PermitStageBadge } from '../components/StudentStatu
 import { StudentTrainingPlanPanel } from '@modules/curriculum/index.js';
 import { StudentForm } from '../components/StudentForm.js';
 import { useGeneratePortalToken } from '@modules/student-portal/index.js';
+import { stageIndex, STAGE_ORDER } from '@modules/student-portal/lib/permitStage.js';
 import { useInstructorList } from '@modules/instructors/index.js';
 import {
   useStudentGuardians, useCreateGuardian, useUpdateGuardian, useDeleteGuardian, useGenerateGuardianToken,
@@ -2356,6 +2357,18 @@ function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeo
   ];
   const completedCount = milestones.filter((m) => m.completedAt).length;
 
+  // P1-4: risk1_completed_at/risk2_completed_at now auto-populate on first
+  // completed lesson of that category (Phase 1), but permit_stage — the
+  // field this badge actually shows — stays a fully manual staff edit with
+  // no automatic mapping (deliberately: see Final Gap Analysis P1-4, "never
+  // invent an automatic permit-stage mapping"). This only flags the case
+  // where the two have visibly diverged, using stage names that already
+  // exist 1:1 with these timestamps — it never changes permit_stage itself.
+  const stageIdx = stageIndex(student.permit_stage);
+  const stagePossiblyStale =
+    (student.risk1_completed_at && stageIdx < STAGE_ORDER.indexOf('risk1_completed')) ||
+    (student.risk2_completed_at && stageIdx < STAGE_ORDER.indexOf('risk2_completed'));
+
   return (
     <div className="bg-card border border-border rounded-lg p-4">
       <SectionHeading title="Utbildningsstatus" />
@@ -2377,6 +2390,15 @@ function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeo
       <div className="mb-3">
         <PermitStageBadge stage={student.permit_stage} />
       </div>
+
+      {stagePossiblyStale && (
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
+            Ett genomfört moment är registrerat men permit-stage har inte uppdaterats manuellt — kontrollera om steget behöver ändras.
+          </p>
+        </div>
+      )}
 
       {/* Milestone rows */}
       <div className="space-y-2">

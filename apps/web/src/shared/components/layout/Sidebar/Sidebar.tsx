@@ -18,6 +18,7 @@ import { usePermissions } from '@core/rbac/hooks.js';
 import type { Permission } from '@core/rbac/permissions.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import type { Organization } from '@platform/types';
+import { useQueueHealth } from '@modules/communication/hooks/useCommunication.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -236,6 +237,14 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   const location = useLocation();
   const showSetup = organization != null && organization.go_live_at == null;
 
+  // P2-2 (Final Gap Analysis): reuses the existing communications queue-health
+  // endpoint — the same summary CommunicationHubPage already renders on open —
+  // as an ambient nudge on the nav item itself, so a staff member doesn't have
+  // to already know to go check for a delivery failure. Not a second
+  // notification system, just this count surfaced one level higher up.
+  const { data: queueHealth } = useQueueHealth();
+  const commBadge = queueHealth?.total_retryable ?? 0;
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
     () => computeInitialOpenGroups(location.pathname),
   );
@@ -370,7 +379,11 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
               </p>
               <div className="space-y-0.5">
                 {visibleItems.map((item) => (
-                  <SidebarItem key={item.key} item={item} onNavClick={onNavClick} />
+                  <SidebarItem
+                    key={item.key}
+                    item={item.key === 'communication' && commBadge > 0 ? { ...item, badge: commBadge } : item}
+                    onNavClick={onNavClick}
+                  />
                 ))}
               </div>
             </div>
