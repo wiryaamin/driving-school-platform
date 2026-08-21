@@ -56,6 +56,15 @@ const TEMPLATE_LABELS: Record<string, string> = {
   waitlist_promoted:         'Plats tillgänglig',
   invoice_issued:            'Ny faktura',
   invoice_overdue:           'Betalningspåminnelse',
+  // Bug fix: 'student.welcome' is queued directly by event-worker's
+  // handleStudentCreated with no subject set at all (it bypasses the
+  // trigger_event/TRIGGER_EVENT_META pipeline every other notification here
+  // goes through — it's channel:'internal' only, never delivered via email/
+  // sms). notifLabel()'s fallback (replacing '_' with a space) does nothing
+  // for a dot-separated key, so the raw template_key rendered verbatim as
+  // the card's title. This map is exactly the mechanism meant to prevent
+  // that for a subject-less row — it just never had this key added.
+  'student.welcome':         'Välkommen till elevportalen!',
 };
 
 const TEMPLATE_ICONS: Record<string, React.ElementType> = {
