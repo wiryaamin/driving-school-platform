@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, Star, AlertCircle, Loader2, BookOpen } from 'lucide-react';
-import { usePortalHistory } from '../hooks/useStudentPortal.js';
+import { ChevronDown, ChevronUp, Star, AlertCircle, Loader2, BookOpen, ClipboardCheck } from 'lucide-react';
+import { usePortalHistory, usePortalAssessments } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#684EFF';
@@ -190,6 +190,71 @@ function CompetencyCard({ comp, result }: { comp: CompetencyDef; result: Compete
   );
 }
 
+// ─── Real instructor assessment (Portal Audit SP-01/XP-03) ───────────────────
+//
+// The competency list below this section is derived by keyword-matching
+// lesson-type names — a heuristic, not the real thing. Guardian Portal has
+// been able to show the actual instructor-authored assessment
+// (instructor_student_assessments) all along; this section is the same
+// data, now also shown to the student it's actually about. Additive only —
+// the heuristic grid below is unchanged.
+function InstructorAssessmentSection() {
+  const { data: assessments = [], isLoading, isError } = usePortalAssessments();
+
+  if (isLoading || isError || assessments.length === 0) return null;
+
+  const latest = assessments[0]!;
+  const readinessLabels: Record<string, string> = {
+    risk1:     'Risk 1',
+    risk2:     'Risk 2',
+    theory:    'Teoriprov',
+    practical: 'Uppkörning',
+  };
+
+  return (
+    <div>
+      <p className="text-[#684EFF] text-xs font-bold uppercase tracking-wide mb-2">
+        Instruktörens bedömning
+      </p>
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ClipboardCheck className="w-4 h-4" style={{ color: BRAND }} />
+            <p className="text-sm font-semibold text-gray-900">{latest.instructor_name}</p>
+          </div>
+          <p className="text-[10px] text-gray-400">{formatDate(latest.updated_at)}</p>
+        </div>
+
+        {Object.keys(latest.competencies).length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(latest.competencies).map(([key, value]) => (
+              <span key={key} className="text-[11px] px-2 py-1 rounded-full bg-gray-50 border border-gray-100 text-gray-600">
+                {key}: {value}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {Object.values(latest.readiness).some(Boolean) && (
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(latest.readiness).filter(([, ready]) => ready).map(([key]) => (
+              <span key={key} className="text-[11px] px-2 py-1 rounded-full bg-green-50 border border-green-100 text-green-700 font-medium">
+                ✓ Redo för {readinessLabels[key] ?? key}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {latest.notes && (
+          <p className="text-xs text-gray-500 leading-relaxed italic border-t border-gray-50 pt-3">
+            "{latest.notes}"
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── StudentPortalUtbildningskortPage ─────────────────────────────────────────
 
 export function StudentPortalUtbildningskortPage() {
@@ -205,6 +270,8 @@ export function StudentPortalUtbildningskortPage() {
         <h1 className="text-xl font-bold text-gray-900">Utbildningskort</h1>
         <p className="text-sm text-gray-400 mt-0.5">Körkompetenser från dina lektioner</p>
       </div>
+
+      <InstructorAssessmentSection />
 
       {isLoading && (
         <div className="flex justify-center py-10">
