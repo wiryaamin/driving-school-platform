@@ -495,12 +495,18 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
             {/* ── Behörigheter ─────────────────────────────────────────── */}
             <Separator />
             <div className="space-y-4">
-              <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Behörigheter & certifikat
-              </p>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                  Behörigheter & certifikat
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Godkänd trafiklärare — att läraren finns registrerad här innebär att skolan har godkänt personen som trafiklärare.
+                </p>
+              </div>
 
               <div>
-                <p className="text-sm font-medium mb-2">Undervisningskategorier</p>
+                <p className="text-sm font-medium mb-2">Körkortsbehörigheter</p>
+                <p className="text-xs text-muted-foreground mb-2">Vilka körkortsbehörigheter läraren är godkänd att undervisa på.</p>
                 <div className="grid grid-cols-2 gap-y-2 gap-x-4">
                   {TEACHING_CATEGORIES.map(({ key, label }) => (
                     <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
@@ -516,15 +522,23 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                 </div>
               </div>
 
+              {/* Godkännande/certifiering — internt referens-/certifikatnummer.
+                  Not labeled as an official Transportstyrelsen-issued number:
+                  Transportstyrelsen's actual process ("godkännande som
+                  trafiklärare") was not confirmed to issue a numbered
+                  credential of this shape, so these fields (DB columns
+                  adi_number/adi_valid_until, unchanged for compatibility)
+                  are presented as an optional internal record, not an
+                  official identifier. */}
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="adi_number"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>ADI-nummer</FormLabel>
+                      <FormLabel>Godkännande-/certifikatnummer</FormLabel>
                       <FormControl>
-                        <Input placeholder="ADI-12345" {...field} />
+                        <Input placeholder="Valfritt internt referensnummer" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -535,7 +549,7 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                   name="adi_valid_until"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>ADI gäller till</FormLabel>
+                      <FormLabel>Giltigt till</FormLabel>
                       <FormControl>
                         <Input type="date" {...field} />
                       </FormControl>
