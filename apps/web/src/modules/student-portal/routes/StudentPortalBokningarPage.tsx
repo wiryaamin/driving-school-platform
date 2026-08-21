@@ -324,7 +324,7 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
         </div>
 
         {/* Expanded actions */}
-        {expanded && isUpcoming && (
+        {expanded && !isTerminal && (
           <div className="px-4 pb-4 pt-0 border-t border-gray-50 dark:border-gray-800">
             {(booking.location_name || booking.vehicle_label) && (
               <div className="flex flex-wrap gap-x-4 gap-y-1 pt-3 text-xs text-gray-500 dark:text-gray-400">
@@ -332,36 +332,53 @@ function BookingCard({ booking }: { booking: PortalBooking }) {
                 {booking.vehicle_label && <span>{booking.vehicle_label}</span>}
               </div>
             )}
-            <div className="flex gap-2 pt-3">
-              {canReschedule && (
-                <button
-                  onClick={() => setShowResch(true)}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-blue-200 dark:border-blue-800 rounded-xl text-blue-600 dark:text-blue-400 text-sm font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Boka om
-                </button>
-              )}
-              <button
-                onClick={() => setShowCancelSheet(true)}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-              >
-                <X className="w-4 h-4" />
-                Avboka
-              </button>
-            </div>
-            {isLate ? (
-              <div className="flex items-start gap-2.5 mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800/60">
-                <Lock className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-700 dark:text-amber-300 font-medium leading-relaxed">
-                  Mindre än {deadlineHours} timmar kvar till lektionen — du kan fortfarande avboka, men lektionskrediten
-                  återställs inte. Ombokning är inte längre möjlig; kontakta skolan om du behöver ändra tiden.
+            {isUpcoming ? (
+              <>
+                <div className="flex gap-2 pt-3">
+                  {canReschedule && (
+                    <button
+                      onClick={() => setShowResch(true)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-blue-200 dark:border-blue-800 rounded-xl text-blue-600 dark:text-blue-400 text-sm font-semibold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Boka om
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowCancelSheet(true)}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400 text-sm font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                    Avboka
+                  </button>
+                </div>
+                {isLate ? (
+                  <div className="flex items-start gap-2.5 mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800/60">
+                    <Lock className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700 dark:text-amber-300 font-medium leading-relaxed">
+                      Mindre än {deadlineHours} timmar kvar till lektionen — du kan fortfarande avboka, men lektionskrediten
+                      återställs inte. Ombokning är inte längre möjlig; kontakta skolan om du behöver ändra tiden.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
+                    Avbokning senast {deadlineHours} timmar innan lektionen för att behålla lektionskrediten.
+                  </p>
+                )}
+              </>
+            ) : (
+              // Bug fix: lektionstiden har passerat men skolan har ännu inte
+              // registrerat närvaro (status är fortfarande 'reserved'/
+              // 'confirmed', inte 'completed'/'no_show') — varken avbokning
+              // eller ombokning är meningsfullt för en lektion som redan
+              // skett. Utan denna text visades panelen helt tom vid
+              // expandering, vilket ser ut som ett fel.
+              <div className="flex items-start gap-2.5 pt-3">
+                <Lock className="w-4 h-4 text-gray-400 dark:text-gray-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                  Lektionstiden har passerat. Väntar på att skolan registrerar närvaro — kontakta skolan om något behöver ändras.
                 </p>
               </div>
-            ) : (
-              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-3">
-                Avbokning senast {deadlineHours} timmar innan lektionen för att behålla lektionskrediten.
-              </p>
             )}
           </div>
         )}
