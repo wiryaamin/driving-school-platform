@@ -1,8 +1,9 @@
+import { CheckCircle2, Bell, BellOff } from 'lucide-react';
 import { useState } from 'react';
-import { User, CheckCircle2, Bell, BellOff } from 'lucide-react';
 import { useInstructorPortalSession } from './InstructorPortalLayout.js';
 import { useInstructorPortalMe, useRegisterInstructorPushToken, useRevokeInstructorPushToken } from '../hooks/useInstructorPortal.js';
 import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
+import { useUiStore } from '@core/store/ui.store.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#1055C9';
@@ -62,17 +63,16 @@ function InstructorNotificationsCard() {
   );
 }
 
-type Tab    = 'allmant' | 'utseende';
-type ThemeMode = 'system' | 'dark' | 'light';
-
-const THEME_KEY = 'instructor_portal_theme_mode';
+type Tab       = 'allmant' | 'utseende';
+// P2-3: this used to write 'instructor_portal_theme_mode' to localStorage —
+// a key nothing else in the app reads, so picking a theme here had zero
+// visible effect. Wired to the real app-wide useUiStore/ThemeProvider theme
+// instead (the same one used elsewhere in the app), which only supports
+// 'light'/'dark' — the "Systempreferens" card is dropped rather than kept as
+// a third option the store can't represent.
+type ThemeMode = 'dark' | 'light';
 
 const THEME_CARDS: { key: ThemeMode; label: string; dots: string[] }[] = [
-  {
-    key: 'system',
-    label: 'Systempreferens',
-    dots: ['#0f172a', '#1e3a5f', '#1055C9', '#94a3b8', '#e2e8f0'],
-  },
   {
     key: 'dark',
     label: 'Mörk',
@@ -130,15 +130,8 @@ export function InstructorPortalInstallningarPage() {
   const session  = useInstructorPortalSession();
   const { data: me } = useInstructorPortalMe();
 
-  const [activeTab, setActiveTab]   = useState<Tab>('allmant');
-  const [themeMode, setThemeMode]   = useState<ThemeMode>(
-    () => (localStorage.getItem(THEME_KEY) as ThemeMode | null) ?? 'system',
-  );
-
-  function handleThemeSelect(mode: ThemeMode) {
-    setThemeMode(mode);
-    localStorage.setItem(THEME_KEY, mode);
-  }
+  const [activeTab, setActiveTab] = useState<Tab>('allmant');
+  const { theme, setTheme } = useUiStore();
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'allmant',  label: 'Allmänt'  },
@@ -189,11 +182,6 @@ export function InstructorPortalInstallningarPage() {
               </div>
               <div>
                 <p className="font-bold text-gray-900">{session.instructor_name}</p>
-                <button className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full border mt-1.5 hover:bg-blue-50 transition-colors"
-                  style={{ color: BRAND, borderColor: `${BRAND}40` }}>
-                  <User className="w-3.5 h-3.5" />
-                  Byt profilbild
-                </button>
               </div>
             </div>
 
@@ -232,13 +220,13 @@ export function InstructorPortalInstallningarPage() {
                 mode={key}
                 label={label}
                 dots={dots}
-                selected={themeMode === key}
-                onSelect={() => handleThemeSelect(key)}
+                selected={theme === key}
+                onSelect={() => setTheme(key)}
               />
             ))}
           </div>
           <p className="text-xs text-gray-400">
-            Temainställningen sparas lokalt på denna enhet.
+            Temat gäller i hela appen och sparas på denna enhet.
           </p>
         </div>
       )}
