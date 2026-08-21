@@ -473,27 +473,36 @@ Deno.serve((req: Request) =>
       return ok(mapBookings(data ?? []));
     }
 
-    // ── GET /students — students who have had a lesson with this instructor ─
+    // ── GET /students — instructor's students ──────────────────────────────
     if (req.method === 'GET' && path === '/students') {
       const now = new Date().toISOString();
       // Limit to last 12 months to avoid loading unbounded all-time history
       // for veteran instructors who may have thousands of historical bookings.
       const twelveMonthsAgo = new Date(Date.now() - 365 * 86_400_000).toISOString();
 
-      // Get distinct student IDs from bookings with this instructor
-      const { data: bookingRows, error: bookingErr } = await supabase
-        .from('lesson_bookings')
-        .select('student_id, starts_at, ends_at, status')
-        .eq('instructor_id', instructor_id)
-        .eq('organization_id', organization_id)
-        .is('deleted_at', null)
-        .not('status', 'in', '(cancelled,rescheduled)')
-        .gte('starts_at', twelveMonthsAgo)
-        .limit(500);
+      // P1-6: student ids now come from resolveInstructorVisibleStudentIds —
+      // the same union (assigned_instructor_id OR ever taught, no time
+      // window) instructor-app's own student list already uses post P0-1.
+      // Two surfaces previously derived "my students" two different ways;
+      // this is the one server-authorized definition for both. Recency
+      // stats below (completed/last/next) stay a separate, 12-month-windowed
+      // query — an assigned-but-not-yet-taught student simply gets zero
+      // stats, which is correct, not a display bug.
+      const [studentIds, bookingRowsRes] = await Promise.all([
+        resolveInstructorVisibleStudentIds(supabase, organization_id, instructor_id),
+        supabase
+          .from('lesson_bookings')
+          .select('student_id, starts_at, ends_at, status')
+          .eq('instructor_id', instructor_id)
+          .eq('organization_id', organization_id)
+          .is('deleted_at', null)
+          .not('status', 'in', '(cancelled,rescheduled)')
+          .gte('starts_at', twelveMonthsAgo)
+          .limit(500),
+      ]);
 
-      if (bookingErr) return fail(500, bookingErr.message);
-
-      const rows = bookingRows as Array<{ student_id: string; starts_at: string; ends_at: string; status: string }>;
+      if (bookingRowsRes.error) return fail(500, bookingRowsRes.error.message);
+      const rows = (bookingRowsRes.data ?? []) as Array<{ student_id: string; starts_at: string; ends_at: string; status: string }>;
 
       // Aggregate per student. Bucket by status first, not by comparing
       // starts_at to "now" — a booking can be marked completed slightly
@@ -512,9 +521,8 @@ Deno.serve((req: Request) =>
         byStudent.set(row.student_id, entry);
       }
 
-      if (byStudent.size === 0) return ok([]);
+      if (studentIds.length === 0) return ok([]);
 
-      const studentIds = [...byStudent.keys()];
       const { data: students, error: studErr } = await supabase
         .from('students')
         .select('id, first_name, last_name, email, phone, permit_stage, target_licence_category')
