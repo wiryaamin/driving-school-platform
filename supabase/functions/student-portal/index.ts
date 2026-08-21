@@ -523,6 +523,15 @@ Deno.serve((req: Request) =>
         return fail(409, 'Slot is fully booked');
       }
 
+      // Closure guard (F5 V1): mirrors the staff booking path in bookings/index.ts.
+      const { data: closureOpen, error: closureErr } = await supabase.rpc('check_organization_closure_availability', {
+        p_organization_id: organization_id,
+        p_starts_at:       (slot as { starts_at: string }).starts_at,
+        p_ends_at:         (slot as { ends_at: string }).ends_at,
+      });
+      if (closureErr) return fail(500, 'Failed to check closure status');
+      if (!closureOpen) return fail(409, 'Skolan är stängd under den här perioden — nya bokningar kan inte skapas');
+
       const slotLessonTypeId = (slot as { lesson_type_id: string | null }).lesson_type_id;
       if (!slotLessonTypeId && !dtoLessonTypeId) {
         return fail(422, 'Detta pass har ingen förvald lektionstyp — ange lektionstyp vid bokning.');

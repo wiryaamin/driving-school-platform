@@ -8,6 +8,7 @@ export { WaitlistPage } from './routes/WaitlistPage.js';
 export { TrafikPlatsPage } from './routes/TrafikPlatsPage.js';
 export { SchedulingGenerationPage } from './routes/SchedulingGenerationPage.js';
 export { SlotTemplatesPage } from './routes/SlotTemplatesPage.js';
+export { ClosuresPage } from './routes/ClosuresPage.js';
 export { SchedulingStatistikPage } from './routes/SchedulingStatistikPage.js';
 export { KursoverSiktPage } from './routes/KursoverSiktPage.js';
 export { InstructorIcalPage } from './routes/InstructorIcalPage.js';
@@ -24,6 +25,13 @@ export type { LessonBooking, BookingListResponse, BookingListMeta } from './hook
 
 // ─── Cancellation policy (F3) ─────────────────────────────────────────────────
 export { useCancellationDeadlineHours, DEFAULT_CANCELLATION_DEADLINE_HOURS } from './hooks/useCancellationPolicy.js';
+
+// ─── Organization closures (F5 V1) ─────────────────────────────────────────────
+export {
+  useClosures, useCreateClosure, useUpdateClosure, useToggleClosureActive,
+  useBookingsAffectedByClosure, closureKeys,
+} from './hooks/useClosures.js';
+export type { OrganizationClosure, CreateClosureInput, UpdateClosureInput, AffectedBooking } from './hooks/useClosures.js';
 
 // ─── Waitlist query hooks + keys ──────────────────────────────────────────────
 export { useWaitlistForSlot, useWaitlistList, usePromoteFromWaitlist, useMarkWaitlistNotified, useRemoveFromWaitlist, waitlistKeys } from './hooks/useWaitlist.js';

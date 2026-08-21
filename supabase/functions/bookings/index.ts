@@ -205,6 +205,18 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Slot is at full capacity');
   }
 
+  // Closure guard (F5 V1): an active organization closure blocks new bookings,
+  // including into a slot that already existed before the closure was created.
+  const { data: closureOpen, error: closureErr } = await (client as any).rpc('check_organization_closure_availability', {
+    p_organization_id: ctx.organizationId,
+    p_starts_at:       slot.starts_at,
+    p_ends_at:         slot.ends_at,
+  });
+  if (closureErr) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check organization closure status');
+  if (!closureOpen) {
+    return errorResp(ctx, 409, 'ORGANIZATION_CLOSED', 'Skolan är stängd under den här perioden — nya bokningar kan inte skapas');
+  }
+
   // Generic-availability slots (lesson_type_id null) carry no lesson type of
   // their own — the booker must supply one. Typed slots ignore whatever the
   // caller sends here (the trigger keeps the slot's own type authoritative).
