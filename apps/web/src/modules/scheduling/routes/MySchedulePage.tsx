@@ -79,6 +79,10 @@ function AgendaBookingRow({
   const updateStatus = useUpdateBookingStatus();
   const terminal     = isTerminalBookingStatus(booking.status);
   const busy         = updateStatus.isPending;
+  // F4 correctness rule: "Uteblev" is a completed-lesson outcome, not
+  // available before the lesson has started — mirrors the same gate in
+  // SlotDetailSheet's BookingRow. Backend enforces this too.
+  const lessonHasStarted = new Date(booking.starts_at).getTime() <= Date.now();
 
   const studentName = student
     ? `${student.first_name} ${student.last_name}`
@@ -136,15 +140,17 @@ function AgendaBookingRow({
               {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
               <span className="hidden sm:inline">Närvaro</span>
             </button>
-            <button
-              onClick={() => handleAttendance('no_show')}
-              disabled={busy}
-              title="Registrera uteblivande"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/20 disabled:opacity-50 transition-colors"
-            >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
-              <span className="hidden sm:inline">Uteblev</span>
-            </button>
+            {lessonHasStarted && (
+              <button
+                onClick={() => handleAttendance('no_show')}
+                disabled={busy}
+                title="Registrera uteblivande"
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/20 disabled:opacity-50 transition-colors"
+              >
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
+                <span className="hidden sm:inline">Uteblev</span>
+              </button>
+            )}
           </div>
         </PermissionGate>
       ) : !terminal ? (

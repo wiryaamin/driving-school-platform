@@ -49,7 +49,10 @@ export interface CancelBookingInput {
 // credit_reversal_failed is only ever present (and true) when the booking had
 // consumed a package credit and the automatic reversal on cancel failed —
 // the cancellation itself still succeeded, so callers should warn, not block.
-export type CancelBookingResult = LessonBooking & { credit_reversal_failed?: boolean };
+// credit_forfeited (F3 V1) is true when the credit was deliberately NOT
+// reversed because this was a late student-initiated cancellation — a
+// distinct outcome from a failed reversal, not an error.
+export type CancelBookingResult = LessonBooking & { credit_reversal_failed?: boolean; credit_forfeited?: boolean };
 
 export interface UpdateBookingStatusInput {
   id:      string;
@@ -154,7 +157,10 @@ async function apiUpdateBookingStatus(input: UpdateBookingStatusInput): Promise<
     method: 'PATCH',
     body: { status: input.status },
   });
-  if (error) throw error;
+  // Surfaces the backend's real message (e.g. F4's "Kan inte markera som
+  // uteblev innan lektionen har börjat") instead of supabase-js's generic
+  // non-2xx string, matching the pattern already used elsewhere in this file.
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera bokningsstatus'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -242,6 +248,7 @@ export function useCreateBooking() {
     mutationFn: apiCreateBooking,
     onSuccess: (_data, { slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.pendingSummary() });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(slot_id) });
@@ -257,6 +264,7 @@ export function useCancelBooking() {
     mutationFn: apiCancelBooking,
     onSuccess: (_data, { id, slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.pendingSummary() });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.detail(id) });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
@@ -273,6 +281,7 @@ export function useUpdateBookingStatus() {
     mutationFn: apiUpdateBookingStatus,
     onSuccess: (_data, { id, slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.pendingSummary() });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.detail(id) });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
@@ -288,6 +297,7 @@ export function useRescheduleBooking() {
     mutationFn: apiRescheduleBooking,
     onSuccess: (_data, { id, slot_id, new_slot_id }) => {
       void queryClient.invalidateQueries({ queryKey: bookingKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.pendingSummary() });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.detail(id) });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(slot_id) });
       void queryClient.invalidateQueries({ queryKey: bookingKeys.bySlot(new_slot_id) });

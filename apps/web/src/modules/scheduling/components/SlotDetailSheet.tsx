@@ -133,6 +133,11 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
   const terminal      = isTerminalBookingStatus(booking.status);
   const studentName   = student ? `${student.first_name} ${student.last_name}` : '';
   const reminderBusy  = sendMessage.isPending;
+  // F4 correctness rule: "Uteblev" (no-show) is a completed-lesson outcome —
+  // it must not be an available action for a lesson that hasn't happened
+  // yet. The backend enforces this too (bookings/index.ts handleUpdate), so
+  // this is UX clarity, not the only guard.
+  const lessonHasStarted = new Date(booking.starts_at).getTime() <= Date.now();
 
   function handleSendReminder() {
     if (!student?.phone) return;
@@ -227,16 +232,24 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
               {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
               Närvaro
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1 text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-800 dark:hover:bg-amber-900/20"
-              disabled={busy}
-              onClick={() => handleStatus('no_show')}
-            >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
-              Uteblev
-            </Button>
+            {lessonHasStarted ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 text-amber-700 border-amber-300 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-800 dark:hover:bg-amber-900/20"
+                disabled={busy}
+                onClick={() => handleStatus('no_show')}
+              >
+                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserX className="w-3 h-3" />}
+                Uteblev
+              </Button>
+            ) : (
+              // F4: "Uteblev" records a completed lesson's outcome — it isn't
+              // an available action until the lesson has actually started.
+              <span className="text-xs text-muted-foreground italic">
+                Uteblev tillgängligt efter lektionens starttid
+              </span>
+            )}
           </div>
         </PermissionGate>
       )}
