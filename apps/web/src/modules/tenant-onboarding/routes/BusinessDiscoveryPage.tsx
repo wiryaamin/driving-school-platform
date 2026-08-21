@@ -50,7 +50,7 @@ export function BusinessDiscoveryPage() {
   const [branches, setBranches]       = useState(1);
   const [instructors, setInstructors] = useState(1);
   const [vehicles, setVehicles]       = useState(1);
-  const [duration, setDuration]       = useState(45);
+  const [duration, setDuration]       = useState(40);
   const [categories, setCategories]   = useState<string[]>([]);
   const [result, setResult]           = useState<{ archetype: Archetype; businessType: BusinessType; lessonTypesCreated: number; branchCreated: number; packageTemplatesCreated: number; capabilities: CapabilityAssessment[] } | null>(null);
   const notableCapabilities = result?.capabilities.filter((c) => c.active && c.key !== 'core_operations') ?? [];
@@ -65,7 +65,7 @@ export function BusinessDiscoveryPage() {
     setBranches(existing.branches ?? 1);
     setInstructors(existing.instructors ?? 1);
     setVehicles(existing.vehicles ?? 1);
-    setDuration(existing.standard_lesson_duration_minutes ?? 45);
+    setDuration(existing.standard_lesson_duration_minutes ?? 40);
     setCategories(existing.licence_categories ?? []);
   }, [existing]);
 
@@ -163,8 +163,8 @@ export function BusinessDiscoveryPage() {
           <div className="space-y-1.5 max-w-xs">
             <label className="text-sm font-medium text-foreground">Normal längd på en körlektion (minuter)</label>
             <input
-              type="number" min={15} max={240} step={5} value={duration}
-              onChange={(e) => setDuration(Math.max(15, Number(e.target.value) || 45))}
+              type="number" min={40} max={240} step={5} value={duration}
+              onChange={(e) => setDuration(Math.max(40, Number(e.target.value) || 40))}
               className="w-full h-9 px-3 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
           </div>

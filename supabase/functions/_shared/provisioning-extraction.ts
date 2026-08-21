@@ -106,8 +106,11 @@ export function extractConfiguration(
   if (vehicles.source === 'tenant_answer' && (!Number.isInteger(vehicles.value) || vehicles.value < 0 || vehicles.value > 2000)) {
     return { ok: false, error: { field: 'vehicles', message: 'vehicles must be a non-negative integer' } };
   }
-  if (!Number.isInteger(duration) || duration < 15 || duration > 240) {
-    return { ok: false, error: { field: 'standard_lesson_duration_minutes', message: 'standard_lesson_duration_minutes must be between 15 and 240' } };
+  // Platform floor: 40 minutes, 5-minute granularity (lesson_types_default_dur_rule /
+  // lesson_types_min_dur_granularity DB constraints) — must match here or the
+  // provisioning DB insert fails instead of surfacing a clear onboarding error.
+  if (!Number.isInteger(duration) || duration < 40 || duration % 5 !== 0 || duration > 240) {
+    return { ok: false, error: { field: 'standard_lesson_duration_minutes', message: 'standard_lesson_duration_minutes must be at least 40 and in steps of 5 minutes' } };
   }
   if (!Array.isArray(raw.licence_categories) || raw.licence_categories.length === 0) {
     return { ok: false, error: { field: 'licence_categories', message: 'licence_categories must be a non-empty array' } };

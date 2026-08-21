@@ -12,6 +12,30 @@ const LESSON_SLOT_STATUSES = ['open', 'full', 'in_progress', 'completed', 'cance
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 
+// Scheduling — Admin-Friendly Booking: platform-wide duration rule, mirrored
+// from the DB CHECK constraint (lesson_slots_duration_rule /
+// lesson_bookings_duration_rule, migration 20260821095807) so a violation is
+// rejected here with a clear message instead of falling through to a raw
+// 23514 constraint-violation error. No maximum — none exists in the
+// architecture and none is introduced here.
+const MIN_LESSON_DURATION_MINUTES = 40;
+const DURATION_GRANULARITY_MINUTES = 5;
+
+function durationMinutes(startsAt: string, endsAt: string): number {
+  return Math.round((new Date(endsAt).getTime() - new Date(startsAt).getTime()) / 60_000);
+}
+
+function validateDuration(startsAt: string, endsAt: string): string | null {
+  const mins = durationMinutes(startsAt, endsAt);
+  if (mins < MIN_LESSON_DURATION_MINUTES) {
+    return `Lektionslängden måste vara minst ${MIN_LESSON_DURATION_MINUTES} minuter.`;
+  }
+  if (mins % DURATION_GRANULARITY_MINUTES !== 0) {
+    return `Lektionslängden måste anges i steg om ${DURATION_GRANULARITY_MINUTES} minuter.`;
+  }
+  return null;
+}
+
 const CreateSlotSchema = z.object({
   instructor_id:   z.string().uuid(),
   vehicle_id:      z.string().uuid().nullable().optional(),
@@ -150,6 +174,10 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   if (!parsed.success) return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Validation failed', parsed.error.issues);
 
   const dto = parsed.data;
+
+  const durationErr = validateDuration(dto.starts_at, dto.ends_at);
+  if (durationErr) return errorResp(ctx, 422, 'VALIDATION_ERROR', durationErr);
+
   const client = createSupabaseClient(req, false, { correlationId: ctx.correlationId, requestId: ctx.requestId });
 
   const hasVehicle = dto.vehicle_id !== undefined && dto.vehicle_id !== null;
@@ -289,6 +317,12 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   const newInstructorId = dto.instructor_id ?? existing.instructor_id;
   const newVehicleId    = dto.vehicle_id !== undefined ? dto.vehicle_id : existing.vehicle_id;
 
+  const timingChanged = dto.starts_at !== undefined || dto.ends_at !== undefined;
+  if (timingChanged) {
+    const durationErr = validateDuration(newStartsAt, newEndsAt);
+    if (durationErr) return errorResp(ctx, 422, 'VALIDATION_ERROR', durationErr);
+  }
+
   const instrChanged = dto.instructor_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined;
   const vehChanged   = newVehicleId !== null && (dto.vehicle_id !== undefined || dto.starts_at !== undefined || dto.ends_at !== undefined);
 
@@ -334,6 +368,62 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
       }
       updateBody.status_changed_at = new Date().toISOString();
     }
+  }
+
+  // Scheduling — Admin-Friendly Booking: lesson_bookings.starts_at/ends_at is
+  // only ever set from the slot at INSERT time (lesson_booking_set_slot_fields,
+  // BEFORE INSERT only — no UPDATE-time equivalent exists). A plain
+  // .update() on lesson_slots here would leave any active booking's own
+  // denormalised copy stale. When timing actually changes, route through
+  // update_slot_timing_with_booking_sync() instead, which updates both rows
+  // in one transaction — a genuine conflict on the booking side (e.g. the
+  // student's own EXCLUDE constraint) then rolls back the slot change too,
+  // rather than leaving slot and booking disagreeing.
+  if (timingChanged) {
+    const { data: synced, error: syncErr } = await (client as any).rpc('update_slot_timing_with_booking_sync', {
+      p_slot_id:         id,
+      p_organization_id: ctx.organizationId,
+      p_starts_at:       newStartsAt,
+      p_ends_at:         newEndsAt,
+      p_actor_id:        ctx.actorId,
+    });
+
+    if (syncErr) {
+      if (syncErr.code === 'P0002')  return errorResp(ctx, 404, 'NOT_FOUND', `Slot '${id}' not found`);
+      if (syncErr.code === '23P01') {
+        return errorResp(ctx, 409, 'CONFLICT',
+          'Den nya tiden krockar med en annan bokning eleven redan har — välj en annan tid.');
+      }
+      if (syncErr.code === '23514') return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Ogiltig lektionslängd.');
+      logger.error('slots.timing_sync_failed', { correlation_id: ctx.correlationId, slot_id: id, error: syncErr.message });
+      return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to update slot timing');
+    }
+
+    // Every other field (instructor/vehicle/notes/status/max_bookings) still
+    // goes through the exact same path as before — starts_at/ends_at/
+    // updated_by are already applied by the RPC above, so they're excluded
+    // here to avoid a redundant second write.
+    const remainingBody = { ...updateBody };
+    delete remainingBody.starts_at;
+    delete remainingBody.ends_at;
+    delete remainingBody.updated_by;
+
+    if (Object.keys(remainingBody).length === 0) return successResp(ctx, synced);
+
+    const { data: slot, error } = await (client as any)
+      .from('lesson_slots')
+      .update({ ...remainingBody, updated_by: ctx.actorId })
+      .eq('id', id)
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return errorResp(ctx, 404, 'NOT_FOUND', `Slot '${id}' not found`);
+      return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to update slot');
+    }
+    return successResp(ctx, slot);
   }
 
   const { data: slot, error } = await (client as any)

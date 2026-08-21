@@ -70,10 +70,14 @@ const CATEGORY_LABELS: Record<LessonCategory, string> = {
   other:        'Övrigt',
 };
 
+// Scheduling — Admin-Friendly Booking: platform default is 40 minutes, not
+// the old 60/45 figures — matches the new DB column default
+// (lesson_types.default_duration_minutes, migration 20260821095807) for any
+// newly-created lesson type. Existing lesson types are never rewritten.
 function emptyForm(): FormFields {
   return {
     name: '', code: '', category: 'driving',
-    default_duration_minutes: 60, requires_vehicle: true, requires_instructor: true,
+    default_duration_minutes: 40, requires_vehicle: true, requires_instructor: true,
     max_students_per_slot: 1, color_hex: '#3B82F6', display_order: 0, is_active: true,
     pricing_sek: '', group_id: null,
   };
@@ -96,7 +100,11 @@ function validateForm(f: FormFields): Record<string, string> {
   if (!f.name.trim()) e['name'] = 'Namn krävs.';
   if (!f.code.trim()) e['code'] = 'Kod krävs.';
   else if (!/^[a-z0-9_]+$/.test(f.code.trim())) e['code'] = 'Endast gemener, siffror och understreck.';
-  if (f.default_duration_minutes < 1) e['default_duration_minutes'] = 'Måste vara minst 1 minut.';
+  // Scheduling — Admin-Friendly Booking: platform rule (mirrors the DB CHECK
+  // constraint lesson_types_default_dur_rule) — minimum 40 minutes, 5-minute
+  // granularity, no maximum.
+  if (f.default_duration_minutes < 40) e['default_duration_minutes'] = 'Måste vara minst 40 minuter.';
+  else if (f.default_duration_minutes % 5 !== 0) e['default_duration_minutes'] = 'Måste anges i steg om 5 minuter.';
   if (f.max_students_per_slot < 1) e['max_students_per_slot'] = 'Måste vara minst 1.';
   if (f.pricing_sek.trim() && !/^\d+(\.\d{1,2})?$/.test(f.pricing_sek.trim())) e['pricing_sek'] = 'Ogiltigt pris.';
   return e;
@@ -371,7 +379,7 @@ export function LektionstyperSettingsPage() {
             <div className="grid grid-cols-2 gap-3">
               <Field id="lt_duration" label="Längd (minuter)" error={errors['default_duration_minutes']}>
                 <Input
-                  type="number" min={1}
+                  type="number" min={40} step={5}
                   value={form.default_duration_minutes}
                   onChange={e => setForm(f => ({ ...f, default_duration_minutes: Number(e.target.value) }))}
                 />

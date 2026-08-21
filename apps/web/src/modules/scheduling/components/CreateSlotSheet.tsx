@@ -99,6 +99,12 @@ function generateRecurringDates(from: string, to: string, weekdays: readonly num
   return dates;
 }
 
+// Scheduling — Admin-Friendly Booking: platform default/floor. No maximum.
+// Mirrored in supabase/functions/slots/index.ts (validateDuration) and the
+// lesson_slots/lesson_bookings DB CHECK constraints — this is the same rule
+// enforced in three places for defence in depth, not three different rules.
+const MIN_LESSON_DURATION_MINUTES = 40;
+
 function computeDurationMinutes(start: string, end: string): number {
   const sp = start.split(':');
   const ep = end.split(':');
@@ -340,6 +346,7 @@ export function CreateSlotSheet({
 
   const previewReady = !!(
     lessonTypeId && instructorId && startTime && endTime && endTime > startTime &&
+    computeDurationMinutes(startTime, endTime) >= MIN_LESSON_DURATION_MINUTES &&
     (mode === 'single' ? !!date : recurringDates.length > 0)
   );
 
@@ -351,6 +358,14 @@ export function CreateSlotSheet({
     if (!instructorId) missing.push('Välj en lärare');
     if (!startTime || !endTime) missing.push('Ange start- och sluttid');
     else if (endTime <= startTime) missing.push('Sluttid måste vara efter starttid');
+    // Scheduling — Admin-Friendly Booking: platform rule (mirrors the backend
+    // CHECK constraint / slots/index.ts validateDuration) — minimum 40
+    // minutes, 5-minute granularity, no maximum. The start/end time pickers
+    // already only offer 5-minute increments, so this only ever fires for
+    // the under-40-minutes case.
+    else if (computeDurationMinutes(startTime, endTime) < MIN_LESSON_DURATION_MINUTES) {
+      missing.push(`Lektionslängden måste vara minst ${MIN_LESSON_DURATION_MINUTES} minuter`);
+    }
     if (mode === 'single') {
       if (!date) missing.push('Välj ett datum');
     } else {

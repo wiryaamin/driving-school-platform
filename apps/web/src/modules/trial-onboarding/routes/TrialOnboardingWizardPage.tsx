@@ -95,7 +95,7 @@ const EMPTY_ANSWERS: Answers = {
   country: 'SE', default_language: 'sv', timezone: 'Europe/Stockholm',
   address_line1: '', postal_code: '', city: '',
   branches: 1, branch_entries: [],
-  licence_categories: [], standard_lesson_duration_minutes: 45,
+  licence_categories: [], standard_lesson_duration_minutes: 40,
   lesson_type_durations: {},
   standard_lesson_price_sek: 0,
   teaching_languages: ['sv'],
@@ -299,7 +299,7 @@ export function TrialOnboardingWizardPage() {
     });
   }
   function setLessonTypeDuration(category: string, minutes: number) {
-    setAnswers((prev) => ({ ...prev, lesson_type_durations: { ...prev.lesson_type_durations, [category]: Math.max(15, minutes || 45) } }));
+    setAnswers((prev) => ({ ...prev, lesson_type_durations: { ...prev.lesson_type_durations, [category]: Math.max(40, minutes || 40) } }));
   }
 
   function updateVehicleEntry(idx: number, patch: Partial<VehicleEntry>) {
@@ -557,7 +557,7 @@ export function TrialOnboardingWizardPage() {
               {fieldErrors.licence_categories && <p className="text-xs text-destructive font-medium">{fieldErrors.licence_categories}</p>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field label="Standardlängd för nya behörigheter (minuter)">
-                  <Input type="number" min={15} max={240} step={5} value={answers.standard_lesson_duration_minutes} onChange={(e) => set('standard_lesson_duration_minutes', Math.max(15, Number(e.target.value) || 45))} />
+                  <Input type="number" min={40} max={240} step={5} value={answers.standard_lesson_duration_minutes} onChange={(e) => set('standard_lesson_duration_minutes', Math.max(40, Number(e.target.value) || 40))} />
                 </Field>
                 <Field label="Pris per lektion (kr) *" error={fieldErrors.standard_lesson_price_sek}>
                   <Input type="number" min={0} step={50} value={answers.standard_lesson_price_sek || ''} onChange={(e) => set('standard_lesson_price_sek', Math.max(0, Number(e.target.value) || 0))} placeholder="T.ex. 595" className={cn(fieldErrors.standard_lesson_price_sek && 'border-destructive focus-visible:ring-destructive')} />
@@ -575,7 +575,7 @@ export function TrialOnboardingWizardPage() {
                         <span className="text-sm font-medium text-foreground">{cat}</span>
                         <div className="flex items-center gap-1.5">
                           <Input
-                            type="number" min={15} max={240} step={5}
+                            type="number" min={40} max={240} step={5}
                             value={answers.lesson_type_durations[cat] ?? answers.standard_lesson_duration_minutes}
                             onChange={(e) => setLessonTypeDuration(cat, Number(e.target.value))}
                             className="w-20 h-8 text-sm"
