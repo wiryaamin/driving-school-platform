@@ -4,6 +4,8 @@ import {
   ArrowLeft, User, Package, Tag, AlertCircle, CheckCircle2,
   Loader2, X, FileText, Clock, AlertTriangle, BookOpen, ChevronRight,
 } from 'lucide-react';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 import {
   useEnrollment,
   useApproveEnrollment,
@@ -459,7 +461,9 @@ export function EnrollmentDetailPage() {
             <Row label="Namn"         value={`${enrollment.first_name} ${enrollment.last_name}`} />
             <Row label="E-post"       value={enrollment.email} />
             <Row label="Telefon"      value={enrollment.phone} />
-            <Row label="Personnummer" value={enrollment.personnummer ?? null} />
+            <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
+              <Row label="Personnummer" value={enrollment.personnummer ?? null} />
+            </PermissionGate>
             <Row label="Adress"       value={enrollment.address ?? null} />
             <Row label="Språk"        value={enrollment.preferred_language} />
             <Row label="Kategori"     value={enrollment.license_category} />
