@@ -6,6 +6,7 @@ import {
 import {
   usePortalBookings,
   usePortalHistory,
+  usePortalMe,
 } from '../hooks/useStudentPortal.js';
 import { cn } from '@/lib/utils.js';
 
@@ -21,38 +22,22 @@ function formatDate(iso: string): string {
   }).replace(/^./, c => c.toUpperCase());
 }
 
-// ─── Derive primary instructor from bookings history ──────────────────────────
-
-function usePrimaryInstructor() {
+// P1-5: the currently assigned instructor comes from students.assigned_instructor_id
+// (via GET /me) — the authoritative relationship, not an inferred one. A
+// previous session's most-frequent-instructor-by-name heuristic kept showing
+// a student's OLD instructor after a reassignment; this can't drift the same
+// way. "Upcoming/completed with this instructor" below still matches by name
+// against the current assignee — a student's full history with a former
+// instructor isn't lost, it's just not what "Min trafikutbildare" is about.
+function useAssignedInstructor() {
+  const { data: me, isLoading: meLoading } = usePortalMe();
   const { data: bookings, isLoading: bookingsLoading } = usePortalBookings();
   const { data: history, isLoading: historyLoading } = usePortalHistory();
 
   const instructor = useMemo(() => {
-    const all = [
-      ...(bookings ?? []).map(b => ({
-        first: b.instructor_first_name,
-        last:  b.instructor_last_name,
-        upcoming: true,
-      })),
-      ...(history ?? []).map(b => ({
-        first: b.instructor_first_name,
-        last:  b.instructor_last_name,
-        upcoming: false,
-      })),
-    ].filter(b => b.first);
-
-    if (all.length === 0) return null;
-
-    // Find most frequent instructor
-    const counts: Record<string, { first: string; last: string | null; count: number }> = {};
-    for (const b of all) {
-      const key = `${b.first} ${b.last ?? ''}`.trim();
-      if (!counts[key]) counts[key] = { first: b.first!, last: b.last, count: 0 };
-      counts[key]!.count++;
-    }
-
-    return Object.values(counts).sort((a, b) => b.count - a.count)[0] ?? null;
-  }, [bookings, history]);
+    const a = me?.assigned_instructor;
+    return a ? { first: a.first_name, last: a.last_name as string | null } : null;
+  }, [me]);
 
   const upcomingWithInstructor = useMemo(() => {
     if (!instructor) return [];
@@ -69,7 +54,8 @@ function usePrimaryInstructor() {
   return {
     instructor,
     upcomingWithInstructor,
-    isLoading: bookingsLoading || historyLoading,
+    history,
+    isLoading: meLoading || bookingsLoading || historyLoading,
   };
 }
 
@@ -92,8 +78,7 @@ function RatingStars({ rating }: { rating: number | null }) {
 // ─── StudentPortalMinLararePage ───────────────────────────────────────────────
 
 export function StudentPortalMinLararePage() {
-  const { instructor, upcomingWithInstructor, isLoading } = usePrimaryInstructor();
-  const { data: history } = usePortalHistory();
+  const { instructor, upcomingWithInstructor, history, isLoading } = useAssignedInstructor();
 
   const avgRating = useMemo(() => {
     if (!instructor || !history) return null;
