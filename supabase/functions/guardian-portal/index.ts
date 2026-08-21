@@ -154,6 +154,19 @@ const CreateGuardianSchema = z.object({
   can_pay:    z.boolean().default(true),
 });
 
+// Portal Audit P0-2: admin update of an existing guardian record — mirrors
+// CreateGuardianSchema's field set minus student_id (a guardian's linked
+// student is not reassignable through this route). Every field optional so
+// a caller can patch just can_pay without resending the rest.
+const UpdateGuardianSchema = z.object({
+  first_name: z.string().min(1).max(100).optional(),
+  last_name:  z.string().min(1).max(100).optional(),
+  email:      z.string().email().optional(),
+  phone:      z.string().max(30).nullable().optional(),
+  relation:   z.string().max(50).nullable().optional(),
+  can_pay:    z.boolean().optional(),
+});
+
 const RegisterPushTokenSchema = z.object({
   token:          z.string().min(16),
   previous_token: z.string().min(16).optional(),
@@ -294,6 +307,41 @@ Deno.serve((req: Request) =>
 
       if (error) return fail(500, 'Failed to fetch guardians');
       return ok(guardians ?? []);
+    }
+
+    // ── PATCH /guardians/:id — admin updates a guardian record ────────────────
+    // Portal Audit P0-2: StudentDetailPage.tsx's useUpdateGuardian has always
+    // called this route (including to toggle can_pay) — there was simply no
+    // handler here, so every edit 401'd behind the guardian-token gate below.
+    const patchMatch = path.match(/^\/guardians\/([0-9a-f-]+)$/);
+    if (req.method === 'PATCH' && patchMatch) {
+      const ctxResult = await buildEdgeContext(req);
+      if (!ctxResult.ok) return ctxResult.response;
+      const { ctx } = ctxResult;
+      if (!ctx.organizationId) return fail(403, 'Organization context required');
+      const permGuard = requirePerm(ctx, 'students:student:update');
+      if (permGuard) return permGuard;
+
+      const body   = await req.json().catch(() => null);
+      const parsed = UpdateGuardianSchema.safeParse(body);
+      if (!parsed.success) return fail(400, 'Invalid guardian data');
+      if (Object.keys(parsed.data).length === 0) return fail(400, 'No fields to update');
+
+      const svc = createServiceClient();
+      const { data: guardian, error } = await svc
+        .from('student_guardians')
+        .update({ ...parsed.data, updated_at: new Date().toISOString() })
+        .eq('id', patchMatch[1]!)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .select('id, first_name, last_name, email, phone, relation, can_pay, created_at')
+        .single();
+
+      if (error || !guardian) {
+        logger.error('guardian-portal: update guardian failed', { error: error?.message });
+        return fail(error?.code === 'PGRST116' ? 404 : 500, error?.code === 'PGRST116' ? 'Guardian not found' : 'Failed to update guardian');
+      }
+      return ok(guardian);
     }
 
     // ── DELETE /guardians/:id — soft-delete a guardian ────────────────────────
