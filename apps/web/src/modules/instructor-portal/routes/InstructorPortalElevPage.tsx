@@ -2,32 +2,37 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users, Search, Loader2, ChevronRight, TrendingUp,
-  Target, AlertCircle, Phone, Mail,
+  AlertCircle, Phone, Mail,
 } from 'lucide-react';
 import { useInstructorPortalStudents } from '../hooks/useInstructorPortal.js';
+import { PERMIT_STAGE_LABELS, getProgressPct, milestoneRank, type PermitStage } from '@modules/student-portal/lib/permitStage.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#1055C9';
 
-// ─── Permit stage config ──────────────────────────────────────────────────────
+// P2-2: this used its own invented 6-value vocabulary
+// ('learner'/'risk1'/'risk2'/'theory'/'practical'/'licensed') with a
+// hardcoded percentage per stage — the exact same obsolete-vocabulary bug
+// Portal Audit SP-02 already fixed in the Student Portal, just never caught
+// here because it's a different surface. Reuses the same authoritative
+// 11-value permitStage module instead of a second invented one; the
+// hardcoded per-stage "tip" text is dropped rather than re-invented for the
+// new vocabulary — there was no real curriculum data behind it.
 
-const STAGE_CFG: Record<string, {
-  label:  string;
-  cls:    string;
-  next:   string;
-  tip:    string;
-  pct:    number;
-}> = {
-  learner:   { label: 'Nybörjare',  cls: 'bg-gray-100 text-gray-600',    pct: 10, next: 'Grundläggande körövningar',        tip: 'Fokusera på grunderna: styrning, gas, broms och backspegling.' },
-  risk1:     { label: 'Risk 1',     cls: 'bg-amber-100 text-amber-700',   pct: 30, next: 'Boka och genomföra Riskettan',     tip: 'Elever är redo för Risk 1 när de behärskar grundläggande körning.' },
-  risk2:     { label: 'Risk 2',     cls: 'bg-orange-100 text-orange-700', pct: 50, next: 'Boka och genomföra Risktvåan',     tip: 'Mörkerövning. Planera lektioner med siktsträckor.' },
-  theory:    { label: 'Teoriprov',  cls: 'bg-blue-100 text-blue-700',     pct: 65, next: 'Teorirepetition & kunskapsprov',  tip: 'Repetera trafikregler och frekvent missade frågor.' },
-  practical: { label: 'Körprov',    cls: 'bg-purple-100 text-purple-700', pct: 80, next: 'Finslipa körtekniken',             tip: 'Fokusera på körprovets delmoment: manöver, stadskörning, motorväg.' },
-  licensed:  { label: 'Körkort',    cls: 'bg-green-100 text-green-700',   pct: 100,next: 'Körkort klart!',                  tip: 'Grattis — eleven har tagit körkortet!' },
-};
+const MILESTONE_CLS = [
+  'bg-gray-100 text-gray-600',
+  'bg-amber-100 text-amber-700',
+  'bg-orange-100 text-orange-700',
+  'bg-blue-100 text-blue-700',
+  'bg-purple-100 text-purple-700',
+  'bg-green-100 text-green-700',
+] as const;
 
-function defaultStage(stage: string) {
-  return STAGE_CFG[stage] ?? { label: stage, cls: 'bg-gray-100 text-gray-600', pct: 0, next: '–', tip: '' };
+function stageDisplay(stage: string) {
+  const label = PERMIT_STAGE_LABELS[stage as PermitStage] ?? stage;
+  const pct   = getProgressPct(stage);
+  const cls   = MILESTONE_CLS[milestoneRank(stage)] ?? MILESTONE_CLS[0];
+  return { label, pct, cls };
 }
 
 // ─── Progress bar ─────────────────────────────────────────────────────────────
@@ -64,7 +69,7 @@ function StudentDetail({
     next_lesson_at:          string | null;
   };
 }) {
-  const cfg = defaultStage(s.permit_stage);
+  const cfg = stageDisplay(s.permit_stage);
 
   function fmtDate(iso: string | null): string {
     if (!iso) return '–';
@@ -126,18 +131,6 @@ function StudentDetail({
         </div>
       )}
 
-      {/* Recommended focus */}
-      {cfg.tip && (
-        <div className="rounded-xl border px-3 py-3 bg-blue-50 border-blue-100">
-          <div className="flex items-start gap-2">
-            <Target className="w-4 h-4 shrink-0 mt-0.5" style={{ color: BRAND }} />
-            <div>
-              <p className="text-xs font-bold" style={{ color: BRAND }}>Rekommenderat fokus</p>
-              <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">{cfg.tip}</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Link to utbildningskort */}
       <Link
@@ -210,7 +203,7 @@ export function InstructorPortalElevPage() {
       {!isLoading && filtered.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm divide-y divide-gray-50">
           {filtered.map(s => {
-            const cfg        = defaultStage(s.permit_stage);
+            const cfg        = stageDisplay(s.permit_stage);
             const isExpanded = s.id === expandedId;
             const initial    = s.first_name.charAt(0).toUpperCase();
 

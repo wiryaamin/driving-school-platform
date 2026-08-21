@@ -14,6 +14,7 @@ import {
   type InstructorPortalBooking,
   type InstructorPortalStudent,
 } from '../hooks/useInstructorPortal.js';
+import { PERMIT_MILESTONES, milestoneRank } from '@modules/student-portal/lib/permitStage.js';
 import { cn } from '@/lib/utils.js';
 
 // ─── Brand tokens ──────────────────────────────────────────────────────────────
@@ -84,14 +85,23 @@ function getFollowUpStudents(students: InstructorPortalStudent[] | undefined, li
 
 // ─── Static desktop data ──────────────────────────────────────────────────────
 
-const STAGE_MAP = [
-  { key: 'risk1',     label: 'Risk 1',     color: '#4338CA' },
-  { key: 'risk2',     label: 'Risk 2',     color: '#818CF8' },
-  { key: 'theory',    label: 'Teori',      color: '#93C5FD' },
-  { key: 'practical', label: 'Uppkörning', color: '#F59E0B' },
-  { key: 'licensed',  label: 'Körkort',    color: '#34D399' },
-  { key: 'learner',   label: 'Nybörjare',  color: '#A78BFA' },
-] as const;
+// P2-2: bucketed by counts[s.permit_stage] against these 6 invented keys —
+// real permit_stage values are the 11-value enum (permitStage.ts), so this
+// lookup was always a miss and the donut below has shown zero segments since
+// it was built. milestoneRank() collapses the real enum into the same 6
+// visual buckets this chart was already designed around.
+const MILESTONE_COLORS = ['#A78BFA', '#4338CA', '#818CF8', '#93C5FD', '#F59E0B', '#34D399'] as const;
+
+function bucketByMilestone(students: { permit_stage: string }[]): DonutSegment[] {
+  const counts = new Array(PERMIT_MILESTONES.length).fill(0) as number[];
+  for (const s of students) {
+    const rank = milestoneRank(s.permit_stage);
+    counts[rank] = (counts[rank] ?? 0) + 1;
+  }
+  return PERMIT_MILESTONES
+    .map((m, i) => ({ label: m.label, color: MILESTONE_COLORS[i] ?? '#9CA3AF', value: counts[i] ?? 0 }))
+    .filter(s => s.value > 0);
+}
 
 interface DonutSegment { label: string; color: string; value: number }
 
@@ -270,12 +280,7 @@ function MobileDagensOchFramsteg() {
 
   const { segments, total } = useMemo(() => {
     if (!students || students.length === 0) return { segments: [] as DonutSegment[], total: 0 };
-    const counts: Record<string, number> = {};
-    for (const s of students) counts[s.permit_stage] = (counts[s.permit_stage] ?? 0) + 1;
-    const segs = STAGE_MAP
-      .map(({ key, label, color }) => ({ label, color, value: counts[key] ?? 0 }))
-      .filter(s => s.value > 0);
-    return { segments: segs, total: students.length };
+    return { segments: bucketByMilestone(students), total: students.length };
   }, [students]);
 
   return (
@@ -592,14 +597,7 @@ function ElevFramstegCard() {
     if (!students || students.length === 0) {
       return { segments: [] as DonutSegment[], total: 0 };
     }
-    const counts: Record<string, number> = {};
-    for (const s of students) {
-      counts[s.permit_stage] = (counts[s.permit_stage] ?? 0) + 1;
-    }
-    const segs = STAGE_MAP
-      .map(({ key, label, color }) => ({ label, color, value: counts[key] ?? 0 }))
-      .filter(s => s.value > 0);
-    return { segments: segs, total: students.length };
+    return { segments: bucketByMilestone(students), total: students.length };
   }, [students]);
 
   return (
