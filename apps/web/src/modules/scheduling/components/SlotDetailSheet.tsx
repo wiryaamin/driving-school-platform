@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell,
-  GraduationCap, ArrowLeftRight, ExternalLink, Car, FileText, Search, UserCheck, Phone, Mail,
-  Ban, Trash2, Pencil, Copy, MapPin, Tag, CreditCard, Languages, History, UserSearch,
+  GraduationCap, ArrowLeftRight, ExternalLink, FileText, Search, UserCheck, Phone, Mail,
+  Ban, Trash2, Pencil, Copy, CreditCard, Languages, History, UserSearch,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -63,6 +63,13 @@ const PERMIT_STAGE_LABELS: Record<string, string> = {
   practical_passed:     'Uppkörning godkänd',
   licence_issued:       'Körkort utfärdat',
 };
+
+// Scheduling — Admin-Friendly Booking: platform default/floor, no maximum.
+// Mirrors supabase/functions/slots/index.ts (validateDuration) and the
+// lesson_slots/lesson_bookings DB CHECK constraints — one rule enforced in
+// three places for defence in depth, not three different rules.
+const MIN_LESSON_DURATION_MINUTES  = 40;
+const DURATION_GRANULARITY_MINUTES = 5;
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -254,84 +261,95 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
         </PermissionGate>
       )}
 
-      {/* Secondary actions */}
+      {/* Actions — "Vad vill du göra?" */}
       {!terminal && (
         <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
-          <div className="flex flex-wrap gap-1.5 ml-9">
-            {/* Bekräfta — draft or reserved */}
-            {(booking.status === 'draft' || booking.status === 'reserved') && (
+          <div className="ml-9 space-y-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5 dark:border-rose-900/40 dark:bg-rose-950/10">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              Vad vill du göra?
+            </p>
+
+            {/* Primary operational actions — Bekräfta/Omboka/Avboka */}
+            <div className="flex flex-wrap gap-1.5">
+              {/* Bekräfta — draft or reserved */}
+              {(booking.status === 'draft' || booking.status === 'reserved') && (
+                <Button
+                  size="sm"
+                  className="h-8 text-xs gap-1 bg-green-600 hover:bg-green-700 text-white border-0"
+                  disabled={busy}
+                  onClick={() => handleStatus('confirmed')}
+                >
+                  {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarCheck className="w-3 h-3" />}
+                  Bekräfta
+                </Button>
+              )}
+
+              {/* Omboka — available for all non-terminal bookings */}
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs gap-1"
+                className="h-8 text-xs gap-1"
                 disabled={busy}
-                onClick={() => handleStatus('confirmed')}
+                onClick={() => onReschedule(booking.id, studentName, student)}
               >
-                {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarCheck className="w-3 h-3" />}
-                Bekräfta
+                <ArrowLeftRight className="w-3 h-3" />
+                Omboka
               </Button>
-            )}
 
-            {/* Omboka — available for all non-terminal bookings */}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1"
-              disabled={busy}
-              onClick={() => onReschedule(booking.id, studentName, student)}
-            >
-              <ArrowLeftRight className="w-3 h-3" />
-              Omboka
-            </Button>
-
-            {/* Avboka */}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
-              disabled={busy}
-              onClick={() => onCancel(booking.id, booking.student_id)}
-            >
-              <XCircle className="w-3 h-3" />
-              Avboka
-            </Button>
-
-            {/* Påminnelse SMS — only for confirmed bookings with a phone number */}
-            {booking.status === 'confirmed' && student?.phone && (
+              {/* Avboka */}
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs gap-1 text-blue-600 border-blue-200 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-900/40 dark:hover:bg-blue-950/20"
-                disabled={reminderBusy}
-                onClick={handleSendReminder}
+                className="h-8 text-xs gap-1 text-destructive border-destructive/30 hover:bg-destructive/10"
+                disabled={busy}
+                onClick={() => onCancel(booking.id, booking.student_id)}
               >
-                {reminderBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
-                Påminnelse
+                <XCircle className="w-3 h-3" />
+                Avboka
               </Button>
-            )}
+            </div>
 
-            {/* Ring — direct tel: link */}
-            {student?.phone && (
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" asChild>
-                <a href={`tel:${student.phone}`}>
-                  <Phone className="w-3 h-3" />
-                  Ring
-                </a>
-              </Button>
-            )}
+            {/* Communication actions — Ring/E-post/Påminnelse, visually lighter */}
+            {(student?.phone || student?.email || (booking.status === 'confirmed' && student?.phone)) && (
+              <div className="flex flex-wrap gap-1.5">
+                {/* Ring — direct tel: link */}
+                {student?.phone && (
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-muted-foreground" asChild>
+                    <a href={`tel:${student.phone}`}>
+                      <Phone className="w-3 h-3" />
+                      Ring
+                    </a>
+                  </Button>
+                )}
 
-            {/* Skicka e-post */}
-            {student?.email && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs gap-1"
-                disabled={sendMessage.isPending}
-                onClick={handleSendEmail}
-              >
-                {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
-                E-post
-              </Button>
+                {/* Skicka e-post */}
+                {student?.email && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs gap-1 text-muted-foreground"
+                    disabled={sendMessage.isPending}
+                    onClick={handleSendEmail}
+                  >
+                    {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+                    E-post
+                  </Button>
+                )}
+
+                {/* Påminnelse SMS — only for confirmed bookings with a phone number */}
+                {booking.status === 'confirmed' && student?.phone && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs gap-1 text-blue-600 dark:text-blue-400"
+                    disabled={reminderBusy}
+                    onClick={handleSendReminder}
+                  >
+                    {reminderBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                    Påminnelse
+                  </Button>
+                )}
+              </div>
             )}
           </div>
         </PermissionGate>
@@ -463,8 +481,8 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
 
   if (editing) {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Car className="w-3.5 h-3.5 shrink-0" />
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Fordon:</span>
         <select
           autoFocus
           value={vehicleId ?? ''}
@@ -486,8 +504,8 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
   }
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Car className="w-3.5 h-3.5 shrink-0" />
+    <div className="flex items-baseline gap-1.5 text-sm">
+      <span className="text-muted-foreground shrink-0">Fordon:</span>
       {current ? (
         <button
           type="button"
@@ -495,7 +513,7 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
           className="font-medium text-foreground hover:text-primary transition-colors"
         >
           {current.registration_number} · {current.make} {current.model}
-          <span className="ml-1 text-muted-foreground font-normal">
+          <span className="ml-1 text-muted-foreground font-normal text-xs">
             ({current.transmission === 'automatic' ? 'Automat' : 'Manuell'})
           </span>
         </button>
@@ -503,9 +521,9 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="italic hover:text-foreground transition-colors"
+          className="text-muted-foreground hover:text-foreground transition-colors"
         >
-          Inget fordon tilldelat
+          Inte tilldelat
         </button>
       )}
     </div>
@@ -519,9 +537,9 @@ function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
 
   if (lessonTypeId == null) {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Tag className="w-3.5 h-3.5 shrink-0" />
-        <span className="italic">Ingen förvald lektionstyp — tillgängligt för valfri bokning</span>
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Lektion:</span>
+        <span className="text-foreground">Valfri lektionstyp</span>
       </div>
     );
   }
@@ -531,29 +549,29 @@ function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
   if (!lessonType) {
     if (isLoading) {
       return (
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Tag className="w-3.5 h-3.5 shrink-0" />
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm text-muted-foreground shrink-0">Lektion:</span>
           <Skeleton className="h-4 w-24 inline-block" />
         </div>
       );
     }
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Tag className="w-3.5 h-3.5 shrink-0" />
-        <span className="italic">Okänd lektionstyp</span>
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Lektion:</span>
+        <span className="text-foreground">Okänd lektionstyp</span>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
-      <Tag className="w-3.5 h-3.5 shrink-0" />
+    <div className="flex items-baseline gap-1.5 text-sm flex-wrap">
+      <span className="text-muted-foreground shrink-0">Lektion:</span>
       <span className="font-medium text-foreground">{lessonType.name}</span>
       <Badge variant="outline" className="text-[10px] font-normal py-0">
         {CATEGORY_LABELS[lessonType.category] ?? lessonType.category}
       </Badge>
       {lessonType.pricing_sek != null && (
-        <span className="text-muted-foreground">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
+        <span className="text-muted-foreground text-xs">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
       )}
     </div>
   );
@@ -565,23 +583,23 @@ function BranchRow({ locationId }: { locationId: string | null }) {
   const { data: locations = [] } = useLocations();
   if (!locationId) {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 italic">
-        <MapPin className="w-3.5 h-3.5 shrink-0" />
-        Ingen filial/mötesplats angiven
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Plats:</span>
+        <span className="text-muted-foreground">Inte vald</span>
       </div>
     );
   }
   const location = locations.find(l => l.id === locationId);
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <MapPin className="w-3.5 h-3.5 shrink-0" />
+    <div className="flex items-baseline gap-1.5 text-sm">
+      <span className="text-muted-foreground shrink-0">Plats:</span>
       {location ? (
         <span className="font-medium text-foreground">
           {location.name}
-          <span className="ml-1 font-normal text-muted-foreground">— {formatLocationAddress(location)}</span>
+          <span className="ml-1 font-normal text-muted-foreground text-xs">— {formatLocationAddress(location)}</span>
         </span>
       ) : (
-        <span className="font-mono text-[10px]">{locationId.slice(0, 8)}…</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{locationId.slice(0, 8)}…</span>
       )}
     </div>
   );
@@ -593,12 +611,95 @@ function LicenceCategoriesRow({ instructorId }: { instructorId: string }) {
   const { data: instructor } = useInstructor(instructorId);
   if (!instructor || instructor.teaching_categories.length === 0) return null;
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
-      <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-      <span>Behörighet:</span>
+    <div className="flex items-baseline gap-1.5 text-sm flex-wrap">
+      <span className="text-muted-foreground shrink-0">Körkortsbehörighet:</span>
       {instructor.teaching_categories.map(cat => (
         <Badge key={cat} variant="outline" className="text-[10px] font-normal py-0">{cat}</Badge>
       ))}
+    </div>
+  );
+}
+
+// ─── Duration — inline change, keeps start time fixed, moves end time ────────
+// Complements EditSlotPanel's free-form "Ändra tid och plats" (start + end
+// time both editable) with the common single-field case shown directly in
+// the details grid: change just the length, same rule (>=40 min, 5-min
+// steps) enforced by update_slot_timing_with_booking_sync via useUpdateSlotTiming.
+
+function DurationRow({ slot }: { slot: LessonSlot }) {
+  const [editing, setEditing] = useState(false);
+  const updateTiming = useUpdateSlotTiming();
+  const duration = slotDurationMinutes(slot);
+  const isTerminal = TERMINAL_SLOT_STATUSES.has(slot.status);
+
+  const durationOptions = useMemo(() => {
+    const opts = new Set<number>();
+    for (let m = MIN_LESSON_DURATION_MINUTES; m <= 240; m += DURATION_GRANULARITY_MINUTES) opts.add(m);
+    opts.add(duration);
+    return Array.from(opts).sort((a, b) => a - b);
+  }, [duration]);
+
+  function handleChange(newDuration: number) {
+    if (newDuration === duration) { setEditing(false); return; }
+    const dateStr   = slot.starts_at.slice(0, 10);
+    const startTime = slot.starts_at.slice(11, 16);
+    const [sh, sm]  = startTime.split(':').map(Number);
+    const totalEnd  = (Number(sh) * 60 + Number(sm)) + newDuration;
+    const eh = String(Math.floor(totalEnd / 60) % 24).padStart(2, '0');
+    const em = String(totalEnd % 60).padStart(2, '0');
+
+    updateTiming.mutate(
+      { id: slot.id, starts_at: `${dateStr}T${startTime}:00`, ends_at: `${dateStr}T${eh}:${em}:00` },
+      {
+        onSuccess: () => { toast({ title: 'Längd uppdaterad' }); setEditing(false); },
+        onError:   (err) => toast({
+          title:       'Kunde inte uppdatera längd',
+          description: err instanceof Error ? err.message : 'Försök igen',
+          variant:     'destructive',
+        }),
+      },
+    );
+  }
+
+  if (isTerminal) {
+    return (
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Längd:</span>
+        <span className="text-foreground">{duration} min</span>
+      </div>
+    );
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-baseline gap-1.5 text-sm">
+        <span className="text-muted-foreground shrink-0">Längd:</span>
+        <select
+          autoFocus
+          value={duration}
+          onChange={(e) => handleChange(Number(e.target.value))}
+          onBlur={() => setEditing(false)}
+          disabled={updateTiming.isPending}
+          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+        >
+          {durationOptions.map(m => <option key={m} value={m}>{m} min</option>)}
+        </select>
+        {updateTiming.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-baseline gap-1.5 text-sm">
+      <span className="text-muted-foreground shrink-0">Längd:</span>
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-0.5"
+      >
+        {duration} min
+        <ChevronDown className="w-3 h-3 text-muted-foreground" />
+      </button>
     </div>
   );
 }
@@ -701,8 +802,8 @@ function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | nu
         </div>
       ) : (
         <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
-          <button type="button" onClick={startEdit} className="italic hover:text-foreground transition-colors">
-            Lägg till anteckning...
+          <button type="button" onClick={startEdit} className="text-muted-foreground hover:text-foreground transition-colors">
+            Lägg till anteckning
           </button>
         </PermissionGate>
       )}
@@ -756,18 +857,34 @@ function EditSlotPanel({
       }));
   }
 
+  // Scheduling — Admin-Friendly Booking: same platform rule as CreateSlotSheet
+  // (minimum 40 minutes, 5-minute granularity, no maximum) — mirrors the
+  // backend's validateDuration()/DB CHECK constraints so the admin sees a
+  // clear message here instead of the request failing after "Spara".
+  const editDurationMinutes = (() => {
+    if (!startTime || !endTime) return 0;
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    return (Number(eh) * 60 + Number(em)) - (Number(sh) * 60 + Number(sm));
+  })();
+  const durationTooShort = endTime > startTime && editDurationMinutes < MIN_LESSON_DURATION_MINUTES;
+  const durationInvalid  = endTime > startTime && editDurationMinutes % DURATION_GRANULARITY_MINUTES !== 0;
+
   return (
     <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div>
           <label className="text-[10px] text-muted-foreground block mb-1">Starttid</label>
-          <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-xs" />
+          <Input type="time" step={DURATION_GRANULARITY_MINUTES * 60} value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-xs" />
         </div>
         <div>
           <label className="text-[10px] text-muted-foreground block mb-1">Sluttid</label>
-          <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="h-8 text-xs" />
+          <Input type="time" step={DURATION_GRANULARITY_MINUTES * 60} value={endTime} onChange={(e) => setEndTime(e.target.value)} className="h-8 text-xs" />
         </div>
       </div>
+      {endTime > startTime && !durationTooShort && !durationInvalid && (
+        <p className="text-[10px] text-muted-foreground">Längd: {editDurationMinutes} min</p>
+      )}
       <div>
         <label className="text-[10px] text-muted-foreground block mb-1">Antal platser</label>
         <div className="flex items-center gap-1.5">
@@ -776,14 +893,16 @@ function EditSlotPanel({
           <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setCapacity(v => Math.min(50, v + 1))} disabled={capacity >= 50}>+</Button>
         </div>
       </div>
-      <div className="flex items-center gap-1.5">
-        <Button size="sm" className="h-7 text-xs" disabled={busy || endTime <= startTime} onClick={handleSave}>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Button size="sm" className="h-7 text-xs" disabled={busy || endTime <= startTime || durationTooShort || durationInvalid} onClick={handleSave}>
           {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Spara'}
         </Button>
         <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={onClose}>
           Avbryt
         </Button>
         {endTime <= startTime && <span className="text-[10px] text-destructive">Sluttid måste vara efter starttid</span>}
+        {durationTooShort && <span className="text-[10px] text-destructive">Lektionslängden måste vara minst {MIN_LESSON_DURATION_MINUTES} minuter</span>}
+        {durationInvalid && <span className="text-[10px] text-destructive">Lektionslängden måste anges i steg om {DURATION_GRANULARITY_MINUTES} minuter</span>}
       </div>
     </div>
   );
@@ -989,6 +1108,8 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const [editSlotOpen,          setEditSlotOpen]          = useState(false);
   const [duplicateSheetOpen,    setDuplicateSheetOpen]    = useState(false);
   const [deleteConfirmOpen,     setDeleteConfirmOpen]     = useState(false);
+  const [moreOptionsOpen,       setMoreOptionsOpen]       = useState(false);
+  const [moreInfoOpen,          setMoreInfoOpen]          = useState(false);
 
   const updateStatus = useUpdateSlotStatus();
   const deleteSlot   = useDeleteSlot();
@@ -1013,6 +1134,8 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     setEditSlotOpen(false);
     setDuplicateSheetOpen(false);
     setDeleteConfirmOpen(false);
+    setMoreOptionsOpen(false);
+    setMoreInfoOpen(false);
   }
 
   // Reset all internal dialog state when the sheet closes or a different slot is opened.
@@ -1139,83 +1262,64 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
           <ScrollArea className="flex-1">
             <div className="px-5 py-4 space-y-5">
 
-              {/* ── Slot Info ─────────────────────────────────────── */}
-              <div className="space-y-3">
-                <div className="space-y-0.5">
-                  <p className="text-xl font-bold text-foreground tracking-tight">
-                    {startLabel}–{endLabel}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{duration} min</p>
-                </div>
-
-                {/* Capacity bar */}
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <Users className="w-4 h-4 shrink-0" />
-                    <span>
-                      {formatCapacity(slot.current_bookings, slot.max_bookings)} bokningar
-                    </span>
-                  </div>
+              {/* ── Layer 1: Lesson identity ──────────────────────── */}
+              <div className="space-y-1.5">
+                <p className="text-2xl font-bold text-foreground tracking-tight">
+                  {startLabel}–{endLabel}
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">{duration} min</span>
+                </p>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">
+                    {formatCapacity(slot.current_bookings, slot.max_bookings)} bokningar
+                  </span>
                   {full && (
                     <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-900/40">
                       Fullbokad
                     </Badge>
                   )}
                 </div>
+              </div>
 
-                {/* Lesson type */}
-                <LessonTypeRow lessonTypeId={slot.lesson_type_id} />
+              <Separator />
 
-                {/* Instructor */}
-                <InstructorRow
-                  slotId={slot.id}
-                  instructorId={slot.instructor_id}
-                  slotStatus={slot.status}
-                  onNavigate={handleNavigate}
-                />
-
-                {/* Licence categories this instructor may teach */}
-                <LicenceCategoriesRow instructorId={slot.instructor_id} />
-
-                {/* Vehicle */}
-                <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
-
-                {/* Branch / meeting location */}
-                <BranchRow locationId={slot.location_id} />
-
-                {/* Session notes */}
-                <SessionNotesRow slotId={slot.id} notes={slot.notes} />
-
-                {/* Edit slot — time + capacity */}
-                {!TERMINAL_SLOT_STATUSES.has(slot.status) && (
-                  <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
-                    {editSlotOpen ? (
-                      <EditSlotPanel slot={slot} onClose={() => setEditSlotOpen(false)} />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setEditSlotOpen(true)}
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors"
-                      >
-                        <Pencil className="w-3.5 h-3.5 shrink-0" />
-                        Redigera tid & platser
-                      </button>
-                    )}
-                  </PermissionGate>
+              {/* ── Layer 2: People — elev prominent, receptionist manages their booking ── */}
+              <div className={`grid gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20 ${bookings.length === 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                {bookings.length === 1 && (
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Elev</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-base font-semibold">
+                        <StudentName
+                          id={bookings[0]!.student_id}
+                          student={studentMap[bookings[0]!.student_id]}
+                          isLoading={studentsLoading}
+                          onNavigate={handleNavigate}
+                        />
+                      </span>
+                      <BookingStatusBadge status={bookings[0]!.status} />
+                    </div>
+                  </div>
                 )}
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Lärare</p>
+                  <InstructorRow
+                    slotId={slot.id}
+                    instructorId={slot.instructor_id}
+                    slotStatus={slot.status}
+                    onNavigate={handleNavigate}
+                  />
+                </div>
+              </div>
 
-                {/* Timing detail + operational history */}
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Clock className="w-3.5 h-3.5 shrink-0" />
-                  <span className="font-mono">{slot.starts_at.slice(0, 16).replace('T', ' ')}</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
-                  <History className="w-3 h-3 shrink-0" />
-                  <span>
-                    Skapat {formatTimestamp(slot.created_at)}
-                    {slot.updated_at !== slot.created_at && ` · Ändrat ${formatTimestamp(slot.updated_at)}`}
-                  </span>
-                </div>
+              <Separator />
+
+              {/* ── Layer 3: Lesson / operational details ─────────── */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/10">
+                <LessonTypeRow lessonTypeId={slot.lesson_type_id} />
+                <DurationRow slot={slot} />
+                <LicenceCategoriesRow instructorId={slot.instructor_id} />
+                <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
+                <BranchRow locationId={slot.location_id} />
               </div>
 
               <Separator />
@@ -1251,6 +1355,90 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                         studentsLoading={studentsLoading}
                       />
                     ))}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              {/* ── Fler alternativ — less frequently used actions ─── */}
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="flex items-center justify-between w-full text-left"
+                  onClick={() => setMoreOptionsOpen((v) => !v)}
+                >
+                  <h3 className="text-sm font-semibold text-foreground">Fler alternativ</h3>
+                  {moreOptionsOpen
+                    ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                    : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+                </button>
+
+                {moreOptionsOpen && (
+                  <div className="space-y-3 pt-1 rounded-lg border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-900/40 dark:bg-violet-950/10">
+                    {editSlotOpen && !TERMINAL_SLOT_STATUSES.has(slot.status) && (
+                      <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                        <EditSlotPanel slot={slot} onClose={() => setEditSlotOpen(false)} />
+                      </PermissionGate>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {!TERMINAL_SLOT_STATUSES.has(slot.status) && !editSlotOpen && (
+                        <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                          <button
+                            type="button"
+                            onClick={() => setEditSlotOpen(true)}
+                            className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                          >
+                            <Pencil className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-xs font-medium text-foreground">Ändra tid och plats</span>
+                          </button>
+                        </PermissionGate>
+                      )}
+
+                      <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                        <button
+                          type="button"
+                          onClick={() => setDuplicateSheetOpen(true)}
+                          className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                        >
+                          <Copy className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-xs font-medium text-foreground">Kopiera bokning</span>
+                        </button>
+                      </PermissionGate>
+                    </div>
+
+                    <SessionNotesRow slotId={slot.id} notes={slot.notes} />
+                  </div>
+                )}
+              </div>
+
+              {/* ── Bokningsinformation — technical/audit details, de-emphasised ── */}
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="flex items-center justify-between w-full text-left"
+                  onClick={() => setMoreInfoOpen((v) => !v)}
+                >
+                  <h3 className="text-xs font-medium text-muted-foreground">Bokningsinformation</h3>
+                  {moreInfoOpen
+                    ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" />
+                    : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+                </button>
+
+                {moreInfoOpen && (
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
+                      <Clock className="w-3 h-3 shrink-0" />
+                      <span className="font-mono">{slot.starts_at.slice(0, 16).replace('T', ' ')}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
+                      <History className="w-3 h-3 shrink-0" />
+                      <span>
+                        Skapat {formatTimestamp(slot.created_at)}
+                        {slot.updated_at !== slot.created_at && ` · Ändrat ${formatTimestamp(slot.updated_at)}`}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1390,17 +1578,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                 </PermissionGate>
               )}
 
-              <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs gap-1 flex-1"
-                  onClick={() => setDuplicateSheetOpen(true)}
-                >
-                  <Copy className="w-3 h-3" />
-                  Kopiera
-                </Button>
-              </PermissionGate>
+              {/* Kopiera moved to "Fler alternativ" above — same handler (setDuplicateSheetOpen), not duplicated. */}
 
               {!TERMINAL_SLOT_STATUSES.has(slot.status) && slot.current_bookings === 0 && (
                 <PermissionGate permission={Permissions.SCHEDULING_SLOT_DELETE}>
