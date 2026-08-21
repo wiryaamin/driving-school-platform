@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   MessageSquare, CalendarDays, Bell, Loader2, AlertCircle,
@@ -350,6 +350,22 @@ export function StudentPortalMeddelandenPage() {
 
   const isLoading  = histLoading || bookLoading || notifLoading;
   const unreadCount = notifications.filter(n => n.read_at === null).length;
+
+  // Bug fix: the unread bell badge only ever cleared via an explicit click on
+  // an individual notification card or the small "Markera alla som lästa"
+  // link — confirmed live that read_at stayed null in the database for a
+  // student who had opened this page and considered the message "read".
+  // Every comparable notification-center pattern clears the badge once the
+  // list has actually been viewed, not on a second deliberate action. Fires
+  // once per page visit, only when there's something to clear.
+  const autoMarkedRef = useRef(false);
+  useEffect(() => {
+    if (!isLoading && unreadCount > 0 && !autoMarkedRef.current) {
+      autoMarkedRef.current = true;
+      markAllRead.mutate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, unreadCount]);
 
   const notesItems = useMemo(
     () => history
