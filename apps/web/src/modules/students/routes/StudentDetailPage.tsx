@@ -1504,7 +1504,7 @@ function KundkortTab({
   const [internalNotes,       setInternalNotes]       = useState(false);
   const [korkortsGrupp,       setKorkortsGrupp]       = useState('');
   const [favInstructorId,     setFavInstructorId]     = useState(student.assigned_instructor_id ?? '');
-  const [cancelTarget,        setCancelTarget]        = useState<{ bookingId: string; slotId: string; slotLabel: string } | null>(null);
+  const [cancelTarget,        setCancelTarget]        = useState<{ bookingId: string; slotId: string; slotLabel: string; slotStartsAt: string } | null>(null);
   const [rescheduleTarget,    setRescheduleTarget]    = useState<{ bookingId: string; slotId: string } | null>(null);
 
   type MilestoneKey = 'risk1_completed_at' | 'risk2_completed_at' | 'theory_passed_at' | 'practical_passed_at';
@@ -2040,7 +2040,7 @@ function KundkortTab({
                     Boka om
                   </button>
                   <button
-                    onClick={() => setCancelTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id, slotLabel: `${nextDateStr} ${nextTimeStr}` })}
+                    onClick={() => setCancelTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id, slotLabel: `${nextDateStr} ${nextTimeStr}`, slotStartsAt: nextLesson.starts_at })}
                     className="text-xs text-red-500 hover:underline"
                   >
                     Avboka
@@ -2217,6 +2217,7 @@ function KundkortTab({
         slotId={cancelTarget?.slotId ?? ''}
         student={student}
         slotLabel={cancelTarget?.slotLabel}
+        slotStartsAt={cancelTarget?.slotStartsAt}
         onSuccess={() => setCancelTarget(null)}
       />
       <RescheduleBookingDialog
@@ -3469,7 +3470,7 @@ function BokningarTab({
   });
   const pastBookings: LessonBooking[] = pastBookingsQuery.data?.data ?? [];
 
-  const [cancelTarget,     setCancelTarget]     = useState<{ bookingId: string; slotId: string; slotLabel: string } | null>(null);
+  const [cancelTarget,     setCancelTarget]     = useState<{ bookingId: string; slotId: string; slotLabel: string; slotStartsAt: string } | null>(null);
   const [rescheduleTarget, setRescheduleTarget] = useState<{ bookingId: string; slotId: string } | null>(null);
 
   return (
@@ -3520,7 +3521,7 @@ function BokningarTab({
                     <BokningRow
                       key={b.id}
                       booking={b}
-                      onCancel={(id, slotId, slotLabel) => setCancelTarget({ bookingId: id, slotId, slotLabel })}
+                      onCancel={(id, slotId, slotLabel) => setCancelTarget({ bookingId: id, slotId, slotLabel, slotStartsAt: b.starts_at })}
                       onReschedule={(id, slotId) => setRescheduleTarget({ bookingId: id, slotId })}
                     />
                   ))}
@@ -3758,6 +3759,7 @@ function BokningarTab({
         slotId={cancelTarget?.slotId ?? ''}
         student={student}
         slotLabel={cancelTarget?.slotLabel}
+        slotStartsAt={cancelTarget?.slotStartsAt}
         onSuccess={() => setCancelTarget(null)}
       />
       <RescheduleBookingDialog
