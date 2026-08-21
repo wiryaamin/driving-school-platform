@@ -8,6 +8,7 @@ import { usePortalMe, useRegisterPushToken, useRevokePushToken, useUpdatePhone }
 import { usePortalSession } from './StudentPortalLayout.js';
 import { usePushSubscription } from '@shared/hooks/usePushSubscription.js';
 import { cn } from '@/lib/utils.js';
+import { PERMIT_MILESTONES, PERMIT_STAGE_LABELS, milestoneRank } from '../lib/permitStage.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,28 +26,12 @@ function saveTheme(m: ThemeMode) {
   try { localStorage.setItem(THEME_KEY, m); } catch { /* ignore */ }
 }
 
-const PERMIT_LABELS: Record<string, string> = {
-  learner:   'Elev (aktiv)',
-  risk1:     'Risk 1 genomförd',
-  risk2:     'Risk 2 genomförd',
-  theory:    'Teoriprovet godkänt',
-  practical: 'Uppkörning godkänd',
-  licensed:  'Körkort klart',
-};
-
-const PERMIT_STEPS = [
-  { key: 'learner',   label: 'Påbörjad utbildning' },
-  { key: 'risk1',     label: 'Risk 1' },
-  { key: 'risk2',     label: 'Risk 2' },
-  { key: 'theory',    label: 'Teoriprov' },
-  { key: 'practical', label: 'Uppkörning' },
-  { key: 'licensed',  label: 'Körkort' },
-];
-
-function stageIndex(stage: string | null | undefined): number {
-  if (!stage) return 0;
-  return PERMIT_STEPS.findIndex(s => s.key === stage);
-}
+// Portal Audit SP-02: previously an invented 6-value vocabulary
+// ('learner'/'risk1'/'risk2'/'theory'/'practical'/'licensed') that never
+// matched a real permit_stage value, so this tab's badge and step tracker
+// always showed step 0 / the raw enum string regardless of real progress.
+// Now the same shared vocabulary + milestone collapsing the Dashboard's
+// own progress widget already uses.
 
 // ─── Section heading ──────────────────────────────────────────────────────────
 
@@ -392,7 +377,7 @@ function AllmantTab() {
 function UtbildningTab() {
   const { data: me, isLoading } = usePortalMe();
   const stage = me?.permit_stage ?? null;
-  const currentIdx = stageIndex(stage);
+  const currentIdx = stage === 'licence_issued' ? PERMIT_MILESTONES.length : milestoneRank(stage ?? 'not_started');
 
   return (
     <div className="space-y-6">
@@ -416,7 +401,7 @@ function UtbildningTab() {
               </div>
               {stage && (
                 <span className="ml-auto px-3 py-1.5 rounded-full text-xs font-bold bg-blue-50 text-[#684EFF] border border-blue-100">
-                  {PERMIT_LABELS[stage] ?? stage}
+                  {PERMIT_STAGE_LABELS[stage as keyof typeof PERMIT_STAGE_LABELS] ?? stage}
                 </span>
               )}
             </div>
@@ -428,12 +413,12 @@ function UtbildningTab() {
       <div>
         <SectionHeading>Utbildningssteg</SectionHeading>
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          {PERMIT_STEPS.map((step, i) => {
+          {PERMIT_MILESTONES.map((step, i) => {
             const done    = i < currentIdx;
             const current = i === currentIdx;
             return (
               <div
-                key={step.key}
+                key={step.label}
                 className={cn(
                   'flex items-center gap-4 px-5 py-3.5 border-b border-gray-50 last:border-0',
                   current ? 'bg-blue-50' : '',
