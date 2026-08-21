@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import {
   Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell,
   GraduationCap, ArrowLeftRight, ExternalLink, FileText, Search, UserCheck, Phone, Mail,
-  Ban, Trash2, Pencil, Copy, CreditCard, Languages, History, UserSearch,
+  Ban, Trash2, Pencil, Copy, CreditCard, Languages, History, UserSearch, Car, MapPin, IdCard,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -20,7 +20,7 @@ import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
 import { useWaitlistForSlot, useAddToWaitlist, usePromoteFromWaitlist } from '../hooks/useWaitlist.js';
 import {
-  useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotNotes, useUpdateSlotInstructor,
+  useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotLocation, useUpdateSlotNotes, useUpdateSlotInstructor,
   useUpdateSlotCapacity, useUpdateSlotStatus, useDeleteSlot, useUpdateSlotTiming,
 } from '../hooks/useSchedulingMutations.js';
 import { useVehicles } from '@modules/resources/index.js';
@@ -459,7 +459,24 @@ function InstructorRow({
   );
 }
 
-// ─── Vehicle row — display + inline change ────────────────────────────────────
+// ─── Shared detail-field shell — icon + uppercase caption + value, matching
+// the People (Elev/Lärare) card pattern above it ─────────────────────────────
+
+function DetailField({
+  icon: Icon, label, children,
+}: { icon: typeof Clock; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 min-w-0">
+      <Icon className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">{label}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Vehicle — display + inline change ─────────────────────────────────────────
 
 function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string | null }) {
   const [editing, setEditing] = useState(false);
@@ -479,54 +496,43 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
     );
   }
 
-  if (editing) {
-    return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Fordon:</span>
-        <select
-          autoFocus
-          value={vehicleId ?? ''}
-          onChange={(e) => handleChange(e.target.value)}
-          onBlur={() => setEditing(false)}
-          disabled={updateVehicle.isPending}
-          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-        >
-          <option value="">— Inget fordon —</option>
-          {available.map(v => (
-            <option key={v.id} value={v.id}>
-              {v.registration_number} · {v.make} {v.model} ({v.transmission === 'automatic' ? 'A' : 'M'})
-            </option>
-          ))}
-        </select>
-        {updateVehicle.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
-      </div>
-    );
-  }
-
   return (
-    <div className="flex items-baseline gap-1.5 text-sm">
-      <span className="text-muted-foreground shrink-0">Fordon:</span>
-      {current ? (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="font-medium text-foreground hover:text-primary transition-colors"
-        >
-          {current.registration_number} · {current.make} {current.model}
-          <span className="ml-1 text-muted-foreground font-normal text-xs">
-            ({current.transmission === 'automatic' ? 'Automat' : 'Manuell'})
+    <DetailField icon={Car} label="Fordon">
+      {editing ? (
+        <div className="flex items-center gap-1.5">
+          <select
+            autoFocus
+            value={vehicleId ?? ''}
+            onChange={(e) => handleChange(e.target.value)}
+            onBlur={() => setEditing(false)}
+            disabled={updateVehicle.isPending}
+            className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">— Inget fordon —</option>
+            {available.map(v => (
+              <option key={v.id} value={v.id}>
+                {v.registration_number} · {v.make} {v.model} ({v.transmission === 'automatic' ? 'A' : 'M'})
+              </option>
+            ))}
+          </select>
+          {updateVehicle.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+        </div>
+      ) : current ? (
+        <button type="button" onClick={() => setEditing(true)} className="text-left hover:text-primary transition-colors">
+          <span className="text-sm font-medium text-foreground">{current.registration_number} · {current.make} {current.model}</span>
+          <span className="block text-xs text-muted-foreground">
+            {current.transmission === 'automatic' ? 'Automat' : 'Manuell'}
           </span>
         </button>
       ) : (
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Inte tilldelat
-        </button>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm text-muted-foreground">Inte tilldelat</span>
+          <button type="button" onClick={() => setEditing(true)} className="text-xs text-primary hover:underline shrink-0">
+            Tilldela fordon →
+          </button>
+        </div>
       )}
-    </div>
+    </DetailField>
   );
 }
 
@@ -537,10 +543,9 @@ function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
 
   if (lessonTypeId == null) {
     return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Lektion:</span>
-        <span className="text-foreground">Valfri lektionstyp</span>
-      </div>
+      <DetailField icon={Car} label="Lektion">
+        <span className="text-sm text-foreground">Valfri lektionstyp</span>
+      </DetailField>
     );
   }
 
@@ -549,59 +554,83 @@ function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
   if (!lessonType) {
     if (isLoading) {
       return (
-        <div className="flex items-center gap-1.5">
-          <span className="text-sm text-muted-foreground shrink-0">Lektion:</span>
-          <Skeleton className="h-4 w-24 inline-block" />
-        </div>
+        <DetailField icon={Car} label="Lektion">
+          <Skeleton className="h-4 w-24" />
+        </DetailField>
       );
     }
     return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Lektion:</span>
-        <span className="text-foreground">Okänd lektionstyp</span>
-      </div>
+      <DetailField icon={Car} label="Lektion">
+        <span className="text-sm text-foreground">Okänd lektionstyp</span>
+      </DetailField>
     );
   }
 
   return (
-    <div className="flex items-baseline gap-1.5 text-sm flex-wrap">
-      <span className="text-muted-foreground shrink-0">Lektion:</span>
-      <span className="font-medium text-foreground">{lessonType.name}</span>
-      <Badge variant="outline" className="text-[10px] font-normal py-0">
-        {CATEGORY_LABELS[lessonType.category] ?? lessonType.category}
-      </Badge>
+    <DetailField icon={Car} label="Lektion">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-sm font-medium text-foreground">{lessonType.name}</span>
+        <Badge variant="outline" className="text-[10px] font-normal py-0">
+          {CATEGORY_LABELS[lessonType.category] ?? lessonType.category}
+        </Badge>
+      </div>
       {lessonType.pricing_sek != null && (
-        <span className="text-muted-foreground text-xs">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
+        <span className="text-xs text-muted-foreground">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
       )}
-    </div>
+    </DetailField>
   );
 }
 
-// ─── Branch / meeting location ─────────────────────────────────────────────────
+// ─── Branch / meeting location — display + inline change ─────────────────────
 
-function BranchRow({ locationId }: { locationId: string | null }) {
+function BranchRow({ slotId, locationId }: { slotId: string; locationId: string | null }) {
+  const [editing, setEditing] = useState(false);
   const { data: locations = [] } = useLocations();
-  if (!locationId) {
-    return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Plats:</span>
-        <span className="text-muted-foreground">Inte vald</span>
-      </div>
+  const updateLocation = useUpdateSlotLocation();
+
+  const current = locations.find(l => l.id === locationId) ?? null;
+
+  function handleChange(newId: string) {
+    updateLocation.mutate(
+      { id: slotId, location_id: newId || null },
+      {
+        onSuccess: () => { toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }); setEditing(false); },
+        onError:   () => { toast({ title: 'Kunde inte uppdatera plats', variant: 'destructive' }); },
+      },
     );
   }
-  const location = locations.find(l => l.id === locationId);
+
   return (
-    <div className="flex items-baseline gap-1.5 text-sm">
-      <span className="text-muted-foreground shrink-0">Plats:</span>
-      {location ? (
-        <span className="font-medium text-foreground">
-          {location.name}
-          <span className="ml-1 font-normal text-muted-foreground text-xs">— {formatLocationAddress(location)}</span>
-        </span>
+    <DetailField icon={MapPin} label="Plats">
+      {editing ? (
+        <div className="flex items-center gap-1.5">
+          <select
+            autoFocus
+            value={locationId ?? ''}
+            onChange={(e) => handleChange(e.target.value)}
+            onBlur={() => setEditing(false)}
+            disabled={updateLocation.isPending}
+            className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">— Ingen plats —</option>
+            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          {updateLocation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+        </div>
+      ) : current ? (
+        <button type="button" onClick={() => setEditing(true)} className="text-left hover:text-primary transition-colors">
+          <span className="text-sm font-medium text-foreground">{current.name}</span>
+          <span className="block text-xs text-muted-foreground">{formatLocationAddress(current)}</span>
+        </button>
       ) : (
-        <span className="font-mono text-[10px] text-muted-foreground">{locationId.slice(0, 8)}…</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm text-muted-foreground">Inte vald</span>
+          <button type="button" onClick={() => setEditing(true)} className="text-xs text-primary hover:underline shrink-0">
+            Välj plats →
+          </button>
+        </div>
       )}
-    </div>
+    </DetailField>
   );
 }
 
@@ -611,12 +640,13 @@ function LicenceCategoriesRow({ instructorId }: { instructorId: string }) {
   const { data: instructor } = useInstructor(instructorId);
   if (!instructor || instructor.teaching_categories.length === 0) return null;
   return (
-    <div className="flex items-baseline gap-1.5 text-sm flex-wrap">
-      <span className="text-muted-foreground shrink-0">Körkortsbehörighet:</span>
-      {instructor.teaching_categories.map(cat => (
-        <Badge key={cat} variant="outline" className="text-[10px] font-normal py-0">{cat}</Badge>
-      ))}
-    </div>
+    <DetailField icon={IdCard} label="Körkortsbehörighet">
+      <div className="flex items-center gap-1 flex-wrap">
+        {instructor.teaching_categories.map(cat => (
+          <Badge key={cat} variant="outline" className="text-[10px] font-normal py-0">{cat}</Badge>
+        ))}
+      </div>
+    </DetailField>
   );
 }
 
@@ -626,8 +656,7 @@ function LicenceCategoriesRow({ instructorId }: { instructorId: string }) {
 // the details grid: change just the length, same rule (>=40 min, 5-min
 // steps) enforced by update_slot_timing_with_booking_sync via useUpdateSlotTiming.
 
-function DurationRow({ slot }: { slot: LessonSlot }) {
-  const [editing, setEditing] = useState(false);
+function DurationRow({ slot, onOpenFullEditor }: { slot: LessonSlot; onOpenFullEditor: () => void }) {
   const updateTiming = useUpdateSlotTiming();
   const duration = slotDurationMinutes(slot);
   const isTerminal = TERMINAL_SLOT_STATUSES.has(slot.status);
@@ -640,7 +669,7 @@ function DurationRow({ slot }: { slot: LessonSlot }) {
   }, [duration]);
 
   function handleChange(newDuration: number) {
-    if (newDuration === duration) { setEditing(false); return; }
+    if (newDuration === duration) return;
     const dateStr   = slot.starts_at.slice(0, 10);
     const startTime = slot.starts_at.slice(11, 16);
     const [sh, sm]  = startTime.split(':').map(Number);
@@ -651,7 +680,7 @@ function DurationRow({ slot }: { slot: LessonSlot }) {
     updateTiming.mutate(
       { id: slot.id, starts_at: `${dateStr}T${startTime}:00`, ends_at: `${dateStr}T${eh}:${em}:00` },
       {
-        onSuccess: () => { toast({ title: 'Längd uppdaterad' }); setEditing(false); },
+        onSuccess: () => { toast({ title: 'Längd uppdaterad' }); },
         onError:   (err) => toast({
           title:       'Kunde inte uppdatera längd',
           description: err instanceof Error ? err.message : 'Försök igen',
@@ -663,44 +692,31 @@ function DurationRow({ slot }: { slot: LessonSlot }) {
 
   if (isTerminal) {
     return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Längd:</span>
-        <span className="text-foreground">{duration} min</span>
-      </div>
+      <DetailField icon={Clock} label="Längd">
+        <span className="text-sm text-foreground">{duration} min</span>
+      </DetailField>
     );
   }
 
-  if (editing) {
-    return (
-      <div className="flex items-baseline gap-1.5 text-sm">
-        <span className="text-muted-foreground shrink-0">Längd:</span>
+  return (
+    <DetailField icon={Clock} label="Längd">
+      <div className="flex items-center gap-1.5">
         <select
-          autoFocus
           value={duration}
           onChange={(e) => handleChange(Number(e.target.value))}
-          onBlur={() => setEditing(false)}
           disabled={updateTiming.isPending}
-          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+          className="h-7 text-sm px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
         >
           {durationOptions.map(m => <option key={m} value={m}>{m} min</option>)}
         </select>
         {updateTiming.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
       </div>
-    );
-  }
-
-  return (
-    <div className="flex items-baseline gap-1.5 text-sm">
-      <span className="text-muted-foreground shrink-0">Längd:</span>
-      <button
-        type="button"
-        onClick={() => setEditing(true)}
-        className="font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-0.5"
-      >
-        {duration} min
-        <ChevronDown className="w-3 h-3 text-muted-foreground" />
-      </button>
-    </div>
+      <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+        <button type="button" onClick={onOpenFullEditor} className="text-xs text-primary hover:underline">
+          Ändra tid och längd →
+        </button>
+      </PermissionGate>
+    </DetailField>
   );
 }
 
@@ -739,24 +755,33 @@ function StudentOperationalInfo({ studentId, student }: { studentId: string; stu
 
 // ─── Session notes — add / edit instructor note on the slot ──────────────────
 
-function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | null }) {
-  const [editing, setEditing] = useState(false);
-  const [draft,   setDraft]   = useState('');
+function SessionNotesRow({
+  slotId, notes, open, onOpenChange,
+}: { slotId: string; notes: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [draft, setDraft] = useState('');
   const updateNotes = useUpdateSlotNotes();
 
-  function startEdit() { setDraft(notes ?? ''); setEditing(true); }
-  function cancel()    { setEditing(false); }
+  // Re-seed the draft from the current note whenever the editor is opened —
+  // it can be opened either from here (Redigera) or externally (the "Lägg
+  // till anteckning" tile in Fler alternativ), so seeding can't live inside
+  // a single local "start edit" handler.
+  useEffect(() => {
+    if (open) setDraft(notes ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-seed on open, not on every keystroke-driven notes change
+  }, [open]);
+
+  function cancel() { onOpenChange(false); }
   function save() {
     updateNotes.mutate(
       { id: slotId, notes: draft.trim() || null },
       {
-        onSuccess: () => { toast({ title: 'Anteckning sparad' }); setEditing(false); },
+        onSuccess: () => { toast({ title: 'Anteckning sparad' }); onOpenChange(false); },
         onError:   () => { toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' }); },
       },
     );
   }
 
-  if (editing) {
+  if (open) {
     return (
       <div className="space-y-2">
         <div className="flex items-center gap-1.5 text-xs">
@@ -784,29 +809,23 @@ function SessionNotesRow({ slotId, notes }: { slotId: string; notes: string | nu
     );
   }
 
+  if (!notes) return null;
+
   return (
     <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
       <FileText className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-      {notes ? (
-        <div className="flex-1 min-w-0">
-          <p className="text-foreground whitespace-pre-line break-words leading-relaxed">{notes}</p>
-          <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
-            <button
-              type="button"
-              onClick={startEdit}
-              className="mt-1 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors"
-            >
-              Redigera
-            </button>
-          </PermissionGate>
-        </div>
-      ) : (
+      <div className="flex-1 min-w-0">
+        <p className="text-foreground whitespace-pre-line break-words leading-relaxed">{notes}</p>
         <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
-          <button type="button" onClick={startEdit} className="text-muted-foreground hover:text-foreground transition-colors">
-            Lägg till anteckning
+          <button
+            type="button"
+            onClick={() => onOpenChange(true)}
+            className="mt-1 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors"
+          >
+            Redigera
           </button>
         </PermissionGate>
-      )}
+      </div>
     </div>
   );
 }
@@ -1110,6 +1129,8 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   const [deleteConfirmOpen,     setDeleteConfirmOpen]     = useState(false);
   const [moreOptionsOpen,       setMoreOptionsOpen]       = useState(false);
   const [moreInfoOpen,          setMoreInfoOpen]          = useState(false);
+  const [noteEditorOpen,        setNoteEditorOpen]        = useState(false);
+  const [notifierOpen,          setNotifierOpen]          = useState(false);
 
   const updateStatus = useUpdateSlotStatus();
   const deleteSlot   = useDeleteSlot();
@@ -1117,6 +1138,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
   function handleNavigate(path: string) {
     onOpenChange(false);
     navigate(path);
+  }
+
+  function openFullEditor() {
+    setMoreOptionsOpen(true);
+    setEditSlotOpen(true);
   }
 
   function resetLocalDialogState() {
@@ -1136,6 +1162,8 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     setDeleteConfirmOpen(false);
     setMoreOptionsOpen(false);
     setMoreInfoOpen(false);
+    setNoteEditorOpen(false);
+    setNotifierOpen(false);
   }
 
   // Reset all internal dialog state when the sheet closes or a different slot is opened.
@@ -1255,7 +1283,17 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
           <DialogHeader className="px-5 pt-5 pb-4 border-b border-border">
             <div className="flex items-start justify-between gap-3">
               <DialogTitle className="text-left capitalize">{dateLabel} · {startLabel}–{endLabel}</DialogTitle>
-              <SlotStatusBadge status={slot.status} />
+              <div className="flex items-center gap-2 shrink-0">
+                {!TERMINAL_SLOT_STATUSES.has(slot.status) && (
+                  <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                    <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={openFullEditor}>
+                      <Pencil className="w-3 h-3" />
+                      Redigera
+                    </Button>
+                  </PermissionGate>
+                )}
+                <SlotStatusBadge status={slot.status} />
+              </div>
             </div>
           </DialogHeader>
 
@@ -1264,9 +1302,9 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
               {/* ── Layer 1: Lesson identity ──────────────────────── */}
               <div className="space-y-1.5">
-                <p className="text-2xl font-bold text-foreground tracking-tight">
+                <p className="text-2xl font-bold text-foreground tracking-tight flex items-center flex-wrap gap-2">
                   {startLabel}–{endLabel}
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">{duration} min</span>
+                  <Badge variant="outline" className="text-xs font-medium align-middle">{duration} min</Badge>
                 </p>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">
@@ -1314,12 +1352,12 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
               <Separator />
 
               {/* ── Layer 3: Lesson / operational details ─────────── */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/10">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/10">
                 <LessonTypeRow lessonTypeId={slot.lesson_type_id} />
-                <DurationRow slot={slot} />
+                <BranchRow slotId={slot.id} locationId={slot.location_id} />
                 <LicenceCategoriesRow instructorId={slot.instructor_id} />
+                <DurationRow slot={slot} onOpenFullEditor={openFullEditor} />
                 <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
-                <BranchRow locationId={slot.location_id} />
               </div>
 
               <Separator />
@@ -1382,33 +1420,68 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                       </PermissionGate>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2">
-                      {!TERMINAL_SLOT_STATUSES.has(slot.status) && !editSlotOpen && (
-                        <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                    {!editSlotOpen && (
+                      <div className="grid grid-cols-2 gap-2">
+                        {!TERMINAL_SLOT_STATUSES.has(slot.status) && (
+                          <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+                            <button
+                              type="button"
+                              onClick={() => setEditSlotOpen(true)}
+                              className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                            >
+                              <Clock className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-xs font-medium text-foreground">Ändra tid och plats</span>
+                            </button>
+                          </PermissionGate>
+                        )}
+
+                        <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
                           <button
                             type="button"
-                            onClick={() => setEditSlotOpen(true)}
+                            onClick={() => setNoteEditorOpen((v) => !v)}
                             className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
                           >
                             <Pencil className="w-4 h-4 text-muted-foreground" />
-                            <span className="text-xs font-medium text-foreground">Ändra tid och plats</span>
+                            <span className="text-xs font-medium text-foreground">Lägg till anteckning</span>
                           </button>
                         </PermissionGate>
-                      )}
 
-                      <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
-                        <button
-                          type="button"
-                          onClick={() => setDuplicateSheetOpen(true)}
-                          className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
-                        >
-                          <Copy className="w-4 h-4 text-muted-foreground" />
-                          <span className="text-xs font-medium text-foreground">Kopiera bokning</span>
-                        </button>
-                      </PermissionGate>
-                    </div>
+                        {bookings.length === 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setNotifierOpen((v) => !v)}
+                            className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                          >
+                            <Bell className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-xs font-medium text-foreground">Notiser</span>
+                          </button>
+                        )}
 
-                    <SessionNotesRow slotId={slot.id} notes={slot.notes} />
+                        <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
+                          <button
+                            type="button"
+                            onClick={() => setDuplicateSheetOpen(true)}
+                            className="flex flex-col items-center gap-1 rounded-md border border-border bg-background px-2 py-3 text-center hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                          >
+                            <Copy className="w-4 h-4 text-muted-foreground" />
+                            <span className="text-xs font-medium text-foreground">Kopiera bokning</span>
+                          </button>
+                        </PermissionGate>
+                      </div>
+                    )}
+
+                    <SessionNotesRow
+                      slotId={slot.id}
+                      notes={slot.notes}
+                      open={noteEditorOpen}
+                      onOpenChange={setNoteEditorOpen}
+                    />
+
+                    {notifierOpen && bookings.length === 1 && (
+                      <div className="rounded-md border border-border bg-background p-2">
+                        <BookingMessageHistory studentId={bookings[0]!.student_id} maxCount={5} />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -77,6 +77,11 @@ export interface UpdateSlotVehicleInput {
   vehicle_id: string | null;
 }
 
+export interface UpdateSlotLocationInput {
+  id:          string;
+  location_id: string | null;
+}
+
 export interface UpdateSlotInstructorInput {
   id:            string;
   instructor_id: string;
@@ -199,6 +204,16 @@ async function apiUpdateSlotVehicle(input: UpdateSlotVehicleInput): Promise<Less
   const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
     method: 'PATCH',
     body: { vehicle_id: input.vehicle_id },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
+async function apiUpdateSlotLocation(input: UpdateSlotLocationInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { location_id: input.location_id },
   });
   if (error) throw error;
   if (!data) throw new Error('Inget svar från servern');
@@ -337,6 +352,17 @@ export function useUpdateSlotVehicle() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: apiUpdateSlotVehicle,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
+export function useUpdateSlotLocation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotLocation,
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
