@@ -603,6 +603,62 @@ async function handleLessonUpdated(event: OutboxEvent, _client: unknown): Promis
   return { success: true };
 }
 
+// Lesson.Cancelled: cancel reminders + promote next waitlist entry
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// Notifies every active (non-deleted) guardian linked to a student about a
+// booking change. Reuses the exact same Communication.Requested -> runNotify
+// dispatch path the student notification below already uses — not a
+// separate notification system, just one additional enqueued event per
+// existing guardian row (recipient_type='guardian', same trigger_event, same
+// sms/email templates the student rules already point at). A student with
+// zero guardians simply results in zero extra events.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function notifyGuardiansOfBookingChange(
+  client: any,
+  params: {
+    organizationId: string;
+    studentId:      string;
+    triggerEvent:   'booking_cancelled' | 'booking_rescheduled';
+    förnamn:        string;
+    datum:          string;
+    tid:            string;
+    referenceId?:   string;
+    causationId:    string;
+  },
+): Promise<void> {
+  const { data: guardians } = await client
+    .from('student_guardians')
+    .select('id, email, phone')
+    .eq('student_id', params.studentId)
+    .eq('organization_id', params.organizationId)
+    .is('deleted_at', null);
+
+  for (const g of (guardians ?? []) as Array<{ id: string; email: string; phone: string | null }>) {
+    const commPayload: Record<string, string> = {
+      trigger_event:   params.triggerEvent,
+      organization_id: params.organizationId,
+      guardian_id:     g.id,
+      förnamn:         params.förnamn,
+      datum:           params.datum,
+      tid:             params.tid,
+      reference_type:  'lesson_booking',
+    };
+    if (params.referenceId !== undefined) commPayload['reference_id'] = params.referenceId;
+    if (g.email)              commPayload['guardian_email'] = g.email;
+    if (g.phone !== null)     commPayload['guardian_phone'] = g.phone;
+
+    await client.rpc('insert_outbox_event', {
+      p_event_type:      'Communication.Requested',
+      p_channel:         'internal',
+      p_payload:         commPayload,
+      p_organization_id: params.organizationId,
+      p_causation_id:    params.causationId,
+    }).then(undefined, (enqueueErr: unknown) => {
+      logger.warn(`${params.triggerEvent}.guardian_enqueue_failed`, { guardian_id: g.id, error: String(enqueueErr) });
+    });
+  }
+}
+
 // Notifies the instructor a booking on their own schedule belongs to.
 // PORTALS V1.1 Phase 2 — mirrors notifyGuardiansOfBookingChange's shape
 // exactly, minus the loop: a booking has exactly one instructor (a direct
@@ -663,8 +719,6 @@ async function notifyInstructorOfBookingChange(
   });
 }
 
-// Lesson.Cancelled: cancel reminders + promote next waitlist entry
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<HandlerResult> {
   const bookingId = event.payload['booking_id'] as string | undefined;
   const slotId    = event.payload['slot_id']    as string | undefined;
@@ -764,6 +818,17 @@ async function handleLessonCancelled(event: OutboxEvent, client: any): Promise<H
             p_causation_id:    event.id,
           }).then(undefined, (enqueueErr: unknown) => {
             logger.warn('booking_cancelled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+          });
+
+          await notifyGuardiansOfBookingChange(client, {
+            organizationId: orgId,
+            studentId,
+            triggerEvent:   'booking_cancelled',
+            förnamn:        student.first_name ?? '',
+            datum,
+            tid,
+            referenceId:    bookingId,
+            causationId:    event.id,
           });
 
           // PORTALS V1.1 Phase 2: instructor booking-change notifications.
@@ -867,6 +932,17 @@ async function handleLessonRescheduled(event: OutboxEvent, client: any): Promise
               p_causation_id:    event.id,
             }).then(undefined, (enqueueErr: unknown) => {
               logger.warn('booking_rescheduled.enqueue_failed', { event_id: event.id, error: String(enqueueErr) });
+            });
+
+            await notifyGuardiansOfBookingChange(client, {
+              organizationId: orgId,
+              studentId:      b.student_id,
+              triggerEvent:   'booking_rescheduled',
+              förnamn:        student.first_name ?? '',
+              datum,
+              tid,
+              referenceId:    newBookingId,
+              causationId:    event.id,
             });
 
             // PORTALS V1.1 Phase 2: instructor booking-change notifications.
