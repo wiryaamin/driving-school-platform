@@ -1,4 +1,4 @@
-import { Search, Clock, FileText, Zap, LayoutTemplate } from 'lucide-react';
+import { Search, Clock, FileText, Zap, LayoutTemplate, CalendarOff } from 'lucide-react';
 
 interface SchedulingActionToolbarProps {
   onNavigate:       (path: string) => void;
@@ -61,6 +61,13 @@ export function SchedulingActionToolbar({ onNavigate, onHittaLedigTid }: Schedul
         >
           <LayoutTemplate className="w-3 h-3" />
           Passmallar
+        </button>
+        <button
+          onClick={() => onNavigate('/scheduling/stangningar')}
+          className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-background text-[11px] font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+        >
+          <CalendarOff className="w-3 h-3" />
+          Stängningar
         </button>
       </div>
     </div>
