@@ -190,7 +190,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   // Pre-flight: time-overlap availability checks in parallel
-  const [instrResult, vehResult] = await Promise.all([
+  const [instrResult, vehResult, closureResult] = await Promise.all([
     (client as any).rpc('check_instructor_availability', {
       p_instructor_id: dto.instructor_id,
       p_starts_at:     dto.starts_at,
@@ -203,12 +203,22 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
           p_ends_at:    dto.ends_at,
         })
       : Promise.resolve({ data: true, error: null }),
+    // F5 V1: an active organization closure blocks new slot creation for its window.
+    (client as any).rpc('check_organization_closure_availability', {
+      p_organization_id: ctx.organizationId,
+      p_starts_at:       dto.starts_at,
+      p_ends_at:         dto.ends_at,
+    }),
   ]);
   if (instrResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check instructor availability');
   if (!instrResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
   if (hasVehicle) {
     if (vehResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check vehicle availability');
     if (!vehResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
+  }
+  if (closureResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check organization closure status');
+  if (!closureResult.data) {
+    return errorResp(ctx, 409, 'ORGANIZATION_CLOSED', 'Skolan är stängd under den här perioden — nya pass kan inte skapas');
   }
 
   const { data: slot, error } = await (client as any)
