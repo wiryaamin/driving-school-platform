@@ -96,7 +96,7 @@ function InstructorOverviewBar({
     <div className="flex items-center gap-2 flex-wrap">
       <Chip icon={Users}       label={`${activeCount} aktiva lärare`}          variant="positive" />
       <Chip icon={AlertCircle} label={`${onLeaveCount} tjänstlediga`}           variant={onLeaveCount    > 0 ? 'warning' : 'neutral'} />
-      <Chip icon={BookOpen}    label={`${missingAdiCount} saknar ADI`}          variant={missingAdiCount > 0 ? 'caution' : 'neutral'} />
+      <Chip icon={BookOpen}    label={`${missingAdiCount} saknar godkännandenummer`} variant={missingAdiCount > 0 ? 'caution' : 'neutral'} />
       <Chip icon={Award}       label={`${expiredAdiCount} ${expiredAdiCount === 1 ? 'utgången behörighet' : 'utgångna behörigheter'}`} variant={expiredAdiCount > 0 ? 'caution' : 'neutral'} />
     </div>
   );
@@ -199,18 +199,18 @@ function InstructorAttentionPanel({
           />
           <AttentionSection
             icon={Award}
-            title="Utgångna ADI"
+            title="Utgångna godkännanden"
             instructors={expiredAdi}
-            emptyLabel="Inga utgångna ADI-behörigheter"
+            emptyLabel="Inga utgångna godkännanden/certifieringar"
             getSubtitle={i =>
               i.adi_valid_until ? `Utgick ${formatShortDate(i.adi_valid_until)}` : '—'
             }
           />
           <AttentionSection
             icon={BookOpen}
-            title="Saknar ADI"
+            title="Saknar godkännandenummer"
             instructors={missingAdi}
-            emptyLabel="Alla aktiva lärare har ADI-nummer"
+            emptyLabel="Alla aktiva lärare har godkännande-/certifikatnummer"
             getSubtitle={i => instructorStatusLabel(i.employment_type)}
           />
         </div>
@@ -310,7 +310,7 @@ function buildColumns(onEdit: (i: Instructor) => void): ColumnDef<Instructor>[] 
     },
     {
       accessorKey: 'adi_number',
-      header:      'ADI-nummer',
+      header:      'Godkännande-/certifikatnummer',
       cell:        ({ row }) => (
         <span className="text-sm font-mono text-muted-foreground">
           {row.original.adi_number ?? '—'}
