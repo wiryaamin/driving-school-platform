@@ -170,6 +170,63 @@ export function useMySchedule(
   });
 }
 
+// P1-2: replacement-slot picker for self-service reschedule. Same self-scoped
+// read pattern as useMySchedule above (instructor_id filter backed by the
+// correctly-scoped lesson_slots_select_self RLS policy) — not a new query
+// surface, just a narrower one (open slots with spare capacity, next 30 days).
+export interface OpenSlot {
+  id: string;
+  starts_at: string;
+  ends_at: string;
+  lesson_type_name: string | null;
+}
+
+export function useMyOpenSlots(instructorId: string | null | undefined) {
+  return useQuery({
+    queryKey: [...instructorAppKeys.all, 'open-slots', instructorId ?? ''],
+    enabled:  Boolean(instructorId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<OpenSlot[]> => {
+      if (!instructorId) return [];
+      const now = new Date();
+      const in30 = new Date(now.getTime() + 30 * 86_400_000);
+      const { data, error } = await supabase
+        .from('lesson_slots')
+        .select('id, starts_at, ends_at, status, max_bookings, current_bookings, lesson_types(name)')
+        .eq('instructor_id', instructorId)
+        .eq('status', 'open')
+        .gte('starts_at', now.toISOString())
+        .lte('starts_at', in30.toISOString())
+        .order('starts_at');
+      if (error) throw error;
+      return ((data ?? []) as unknown as Array<{
+        id: string; starts_at: string; ends_at: string;
+        max_bookings: number; current_bookings: number;
+        lesson_types: { name: string } | null;
+      }>)
+        .filter(s => s.current_bookings < s.max_bookings)
+        .map(s => ({ id: s.id, starts_at: s.starts_at, ends_at: s.ends_at, lesson_type_name: s.lesson_types?.name ?? null }));
+    },
+  });
+}
+
+// Portal Audit P0-1 (instructor-app hardening): this previously queried
+// `students` directly with `.eq('assigned_instructor_id', instructorId)` as
+// the only boundary — a client-side filter, not authorization. The
+// `students` RLS policies (students_select_member, students_select_staff)
+// don't scope by instructor, and the instructor role holds
+// students:student:read org-wide, so that filter could be bypassed by
+// anyone calling the table directly with an instructor's own JWT. Routing
+// through the students Edge Function instead reuses its existing
+// server-side scoping (resolveInstructorVisibleStudentIds, students/index.ts)
+// — the same authorization boundary already hardened for admin/reception use,
+// not a second one. per_page=200 covers any realistic instructor roster;
+// this list is not expected to need pagination.
+interface StudentListApiResponse {
+  data: AssignedStudent[];
+  meta: { total: number; page: number; per_page: number; has_more: boolean };
+}
+
 export function useMyStudents(instructorId: string | null | undefined) {
   return useQuery({
     queryKey: instructorAppKeys.students(instructorId ?? ''),
@@ -177,14 +234,12 @@ export function useMyStudents(instructorId: string | null | undefined) {
     staleTime: 60_000,
     queryFn: async (): Promise<AssignedStudent[]> => {
       if (!instructorId) return [];
-      const { data, error } = await supabase
-        .from('students')
-        .select('id, first_name, last_name, phone, email, status, target_licence_category, permit_stage')
-        .eq('assigned_instructor_id', instructorId)
-        .is('deleted_at', null)
-        .order('last_name');
+      const { data, error } = await supabase.functions.invoke<StudentListApiResponse>(
+        'students?per_page=200',
+        { method: 'GET' },
+      );
       if (error) throw error;
-      return (data ?? []) as AssignedStudent[];
+      return data?.data ?? [];
     },
   });
 }
@@ -587,19 +642,21 @@ export function useCreateTimeOff() {
       reason?:       string | undefined;
     }) => {
       if (!user?.organization_id || !user?.id) throw new Error('Ingen aktiv session');
+      // P1-4: previously inserted with status:'approved', approved_by: self —
+      // an instructor approving their own time off with no review. The
+      // column default ('pending') plus the existing reception-side approval
+      // workflow (useUpdateTimeOffStatus, InstructorDetailContent.tsx) is
+      // already a complete review flow; this just stops bypassing it.
       const { data, error } = await supabase
         .from('instructor_time_off')
         .insert({
           organization_id: user.organization_id,
           instructor_id:   input.instructorId,
           time_off_type:   input.time_off_type,
-          status:          'approved',
           starts_at:       input.starts_at,
           ends_at:         input.ends_at,
           is_full_day:     true,
           reason:          input.reason ?? null,
-          approved_by:     user.id,
-          approved_at:     new Date().toISOString(),
           created_by:      user.id,
         } as never)
         .select('id')
@@ -609,6 +666,98 @@ export function useCreateTimeOff() {
     },
     onSuccess: (_data, variables) => {
       void qc.invalidateQueries({ queryKey: instructorAppKeys.timeOff(variables.instructorId) });
+    },
+  });
+}
+
+// ─── Assessment (P1-3) ─────────────────────────────────────────────────────────
+// Reuses the instructor_student_assessments table and the exact scoping
+// pattern instructor-portal already established — students/index.ts's
+// /students/:id/assessment routes, not a second assessment model.
+
+export interface AssessmentData {
+  id: string;
+  competencies: Record<string, string>;
+  readiness: Record<string, boolean>;
+  notes: string | null;
+  assessed_at: string;
+  updated_at: string;
+}
+
+export function useAssessment(studentId: string | null | undefined) {
+  return useQuery({
+    queryKey: [...instructorAppKeys.all, 'assessment', studentId ?? ''],
+    enabled:  Boolean(studentId),
+    staleTime: 60_000,
+    queryFn: async (): Promise<AssessmentData | null> => {
+      const { data, error } = await supabase.functions.invoke<{ data: AssessmentData | null }>(
+        `students/${studentId}/assessment`,
+        { method: 'GET' },
+      );
+      if (error) throw error;
+      return data?.data ?? null;
+    },
+  });
+}
+
+export function useSaveAssessment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      studentId: string;
+      competencies: Record<string, string>;
+      readiness: Record<string, boolean>;
+      notes: string;
+    }) => {
+      const { error } = await supabase.functions.invoke(`students/${input.studentId}/assessment`, {
+        method: 'PUT',
+        body: { competencies: input.competencies, readiness: input.readiness, notes: input.notes },
+      });
+      if (error) throw error;
+    },
+    onSuccess: (_data, { studentId }) => {
+      void qc.invalidateQueries({ queryKey: [...instructorAppKeys.all, 'assessment', studentId] });
+    },
+  });
+}
+
+// ─── Cancel / reschedule (P1-1 / P1-2) ─────────────────────────────────────────
+// Both reuse the canonical bookings Edge Function — the same ownership-guarded
+// handlers reception/admin already use, not a second cancellation/scheduling
+// system.
+
+export function useCancelBooking() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ bookingId, reason }: { bookingId: string; reason?: string | undefined }) => {
+      // 'instructor_sick' (not 'student_request') — an instructor-initiated
+      // cancellation is never subject to the late-cancellation credit-forfeit
+      // rule, which only applies to student-caused cancellations (F3 V1).
+      const { data, error } = await supabase.functions.invoke<{ data: { credit_forfeited?: boolean } }>(
+        `bookings/${bookingId}/cancel`,
+        { method: 'PATCH', body: { cancellation_category: 'instructor_sick', cancellation_reason: reason ?? null } },
+      );
+      if (error) throw error;
+      return data?.data;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: instructorAppKeys.all });
+    },
+  });
+}
+
+export function useRescheduleBooking() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ bookingId, newSlotId }: { bookingId: string; newSlotId: string }) => {
+      const { error } = await supabase.functions.invoke(`bookings/${bookingId}/reschedule`, {
+        method: 'PATCH',
+        body: { new_slot_id: newSlotId },
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: instructorAppKeys.all });
     },
   });
 }
