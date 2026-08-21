@@ -28,11 +28,14 @@
  *     student_email?:          string,
  *     instructor_phone?:       string,
  *     instructor_email?:       string,
+ *     guardian_phone?:         string,
+ *     guardian_email?:         string,
  *     // Recipient identity — required for the push channel, which fans out
  *     // to every active device registered in push_device_tokens for this
  *     // recipient (see _shared/push-tokens.ts) rather than a single address.
  *     student_id?:             string,
  *     instructor_id?:          string,
+ *     guardian_id?:            string,
  *     // Optional — attaches the canonical Notification Center record (see
  *     // runNotify's Step 1) to the business entity it concerns, e.g.
  *     // reference_type: 'lesson_booking', reference_id: <booking id>.
@@ -344,8 +347,9 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
   const meta = notificationMetaFor(trigger_event);
 
   for (const recipientType of new Set(rules.map((r: { recipient_type: string }) => r.recipient_type))) {
-    const recipientId = recipientType === 'student'   ? body['student_id']
+    const recipientId = recipientType === 'student'    ? body['student_id']
                        : recipientType === 'instructor' ? body['instructor_id']
+                       : recipientType === 'guardian'   ? body['guardian_id']
                        : body['admin_id']; // recipientType === 'admin' — the org owner, resolved by the emitting handler
     if (!recipientId) continue; // no identity to attach canonical history to — per-channel errors below still fire
 
@@ -419,9 +423,10 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
       continue;
     }
 
-    const isStudent = rule.recipient_type === 'student';
-    const isAdmin   = rule.recipient_type === 'admin';
-    const cfg       = cfgsByChannel.get(rule.channel as Channel);
+    const isStudent  = rule.recipient_type === 'student';
+    const isAdmin    = rule.recipient_type === 'admin';
+    const isGuardian = rule.recipient_type === 'guardian';
+    const cfg        = cfgsByChannel.get(rule.channel as Channel);
 
     // Apply template variables — override takes priority when the caller
     // supplied one (see overrideBody/overrideSubject above).
@@ -435,14 +440,14 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
     // the way email/sms/whatsapp do.
     if (rule.channel === 'push') {
       // push_device_tokens has no admin/staff owner column — only ever
-      // seeded for student/instructor rules, but guard against a rule an
-      // admin could still hand-create via the rules UI.
+      // seeded for student/instructor/guardian rules, but guard against a
+      // rule an admin could still hand-create via the rules UI.
       if (isAdmin) {
         errors.push(`Push is not supported for recipient_type 'admin' (rule ${rule.id})`);
         continue;
       }
-      const ownerColumn: PushTokenOwnerColumn = isStudent ? 'student_id' : 'instructor_id';
-      const ownerId = isStudent ? body['student_id'] : body['instructor_id'];
+      const ownerColumn: PushTokenOwnerColumn = isStudent ? 'student_id' : isGuardian ? 'guardian_id' : 'instructor_id';
+      const ownerId = isStudent ? body['student_id'] : isGuardian ? body['guardian_id'] : body['instructor_id'];
 
       if (!ownerId) {
         errors.push(`No ${ownerColumn} in payload for rule ${rule.id}`);
@@ -512,8 +517,8 @@ async function runNotify(supabase: any, body: Record<string, string>, correlatio
 
     // Resolve recipient address from payload (email/sms/whatsapp/voice)
     const channelKey = rule.channel === 'email'
-      ? (isAdmin ? 'admin_email' : isStudent ? 'student_email' : 'instructor_email')
-      : (isAdmin ? 'admin_phone' : isStudent ? 'student_phone' : 'instructor_phone');
+      ? (isAdmin ? 'admin_email' : isStudent ? 'student_email' : isGuardian ? 'guardian_email' : 'instructor_email')
+      : (isAdmin ? 'admin_phone' : isStudent ? 'student_phone' : isGuardian ? 'guardian_phone' : 'instructor_phone');
 
     const recipientAddress = body[channelKey] ?? '';
     if (!recipientAddress) {
