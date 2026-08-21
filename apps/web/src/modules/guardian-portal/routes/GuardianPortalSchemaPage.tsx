@@ -1,6 +1,10 @@
-import { useMemo } from 'react';
-import { CalendarDays, Clock, User, CheckCircle2, XCircle, AlertCircle, FileText, MapPin, Car, CalendarPlus } from 'lucide-react';
-import { useGuardianMe, useGuardianBookings, type GuardianBooking } from '../hooks/useGuardianPortal.js';
+import { useMemo, useState } from 'react';
+import { CalendarDays, Clock, User, CheckCircle2, XCircle, AlertCircle, FileText, MapPin, Car, CalendarPlus, Loader2, Ban } from 'lucide-react';
+import { toast } from '@platform/ui';
+import {
+  useGuardianMe, useGuardianBookings, useGuardianCancelBooking,
+  type GuardianBooking,
+} from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
 
 const BRAND = '#2D5BE3';
@@ -92,9 +96,53 @@ function AttendanceBadge({ status }: { status: string }) {
   );
 }
 
-function BookingCard({ booking, past, orgName }: { booking: GuardianBooking; past: boolean; orgName: string }) {
+// ─── Cancellation (F3 V1 — self-service, same rule as Student Portal) ─────────
+// The deadline consequence shown here is informational only, mirroring
+// StudentPortalBokningarPage's identical CancelBookingDialog comment — the
+// backend (guardian-portal/index.ts POST /bookings/:id/cancel) is the real
+// enforcement point and re-checks the deadline itself on every attempt.
+
+function BookingCard({ booking, past, orgName, deadlineHours }: { booking: GuardianBooking; past: boolean; orgName: string; deadlineHours?: number | undefined }) {
   const slot = booking.lesson_slots;
+  const [cancelExpanded, setCancelExpanded] = useState(false);
+  const cancelMutation = useGuardianCancelBooking();
   if (!slot) return null;
+
+  const isLate = Boolean(
+    deadlineHours !== undefined &&
+    (new Date(slot.starts_at).getTime() - Date.now()) <= deadlineHours * 3_600_000,
+  );
+
+  function handleConfirmCancel() {
+    cancelMutation.mutate(
+      { bookingId: booking.id },
+      {
+        onSuccess: (result) => {
+          toast({ title: 'Lektionen avbokad' });
+          if (result.credit_reversal_failed) {
+            toast({
+              title:       'Kredit kunde inte återställas automatiskt',
+              description: 'Lektionen är avbokad, men lektionskrediten kunde inte återställas automatiskt. Kontakta trafikskolan.',
+              variant:     'destructive',
+            });
+          } else if (result.credit_forfeited) {
+            toast({
+              title:       'Lektionskrediten återställdes inte',
+              description: 'Avbokningen skedde inom avbokningsfristen.',
+            });
+          }
+          setCancelExpanded(false);
+        },
+        onError: (err) => {
+          toast({
+            title:       'Avbokning misslyckades',
+            description: err instanceof Error ? err.message : 'Försök igen',
+            variant:     'destructive',
+          });
+        },
+      },
+    );
+  }
 
   return (
     <div className={cn(
@@ -144,7 +192,7 @@ function BookingCard({ booking, past, orgName }: { booking: GuardianBooking; pas
         </div>
       )}
       {!past && (
-        <div className="flex items-center justify-between pt-1 border-t border-gray-50">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-gray-50">
           {slot.organization_locations ? (
             <a
               href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
@@ -160,13 +208,54 @@ function BookingCard({ booking, past, orgName }: { booking: GuardianBooking; pas
           ) : (
             <div />
           )}
-          <button
-            onClick={() => downloadIcs(booking, orgName)}
-            className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50 transition-colors"
-          >
-            <CalendarPlus className="w-3.5 h-3.5" />
-            Lägg till i kalender
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => downloadIcs(booking, orgName)}
+              className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50 transition-colors"
+            >
+              <CalendarPlus className="w-3.5 h-3.5" />
+              Lägg till i kalender
+            </button>
+            {(booking.status === 'confirmed' || booking.status === 'reserved') && !cancelExpanded && (
+              <button
+                onClick={() => setCancelExpanded(true)}
+                className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                Avboka
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {!past && cancelExpanded && (
+        <div className="space-y-2 pt-1 border-t border-gray-50">
+          {isLate ? (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-2 leading-relaxed">
+              Mindre än {deadlineHours} timmar kvar till lektionen — den kan fortfarande avbokas, men lektionskrediten återställs inte.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Lektionen kan avbokas fritt fram till {deadlineHours} timmar innan starttid.
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleConfirmCancel}
+              disabled={cancelMutation.isPending}
+              className="flex items-center gap-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              {cancelMutation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+              Bekräfta avbokning
+            </button>
+            <button
+              onClick={() => setCancelExpanded(false)}
+              disabled={cancelMutation.isPending}
+              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5"
+            >
+              Avbryt
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -230,7 +319,7 @@ export function GuardianPortalSchemaPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {upcoming.map(b => <BookingCard key={b.id} booking={b} past={false} orgName={orgName} />)}
+            {upcoming.map(b => <BookingCard key={b.id} booking={b} past={false} orgName={orgName} deadlineHours={me?.organization.cancellation_deadline_hours} />)}
           </div>
         )}
       </div>

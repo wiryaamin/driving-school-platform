@@ -64,6 +64,9 @@ export interface GuardianMe {
     name:  string;
     phone: string | null;
     email: string | null;
+    // F3 V1 — informational only; the backend is the real enforcement point,
+    // same as StudentPortalBokningarPage's identical use of this value.
+    cancellation_deadline_hours: number;
   };
 }
 
@@ -246,7 +249,7 @@ function guardianDemoResponse<T>(path: string): T {
       permit_stage:            'risk1_completed',
       target_licence_category: 'B',
     },
-    organization: { id: 'demo-org', name: 'Demo Trafikskola AB', phone: '+46 8 123 456 78', email: 'info@demotrafikskola.se' },
+    organization: { id: 'demo-org', name: 'Demo Trafikskola AB', phone: '+46 8 123 456 78', email: 'info@demotrafikskola.se', cancellation_deadline_hours: 24 },
   };
 
   const progress: GuardianProgress = {
@@ -495,6 +498,31 @@ export function useGuardianBookings() {
     queryKey: ['guardian', 'bookings'],
     queryFn:  (): Promise<GuardianBooking[]> => guardianFetch<GuardianBooking[]>('/bookings'),
     staleTime: 60_000,
+  });
+}
+
+// F3 V1 self-service cancellation — mirrors student-portal's identical
+// endpoint and response shape exactly (same deadline rule, same
+// credit-forfeit logic, same booking_status transition, see
+// guardian-portal/index.ts's POST /bookings/:id/cancel).
+export interface GuardianCancelBookingResult {
+  success:                boolean;
+  credit_forfeited?:      boolean;
+  credit_reversal_failed?: boolean;
+}
+
+export function useGuardianCancelBooking() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { bookingId: string; reason?: string }): Promise<GuardianCancelBookingResult> =>
+      guardianFetch<GuardianCancelBookingResult>(`/bookings/${params.bookingId}/cancel`, {
+        method: 'POST',
+        body:   JSON.stringify({ reason: params.reason }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['guardian', 'bookings'] });
+      void qc.invalidateQueries({ queryKey: ['guardian', 'progress'] });
+    },
   });
 }
 
