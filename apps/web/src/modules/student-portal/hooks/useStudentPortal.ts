@@ -29,6 +29,9 @@ export interface PortalStudent {
   address_line1?:          string | null;
   postal_code?:            string | null;
   city?:                   string | null;
+  assigned_instructor?:    { first_name: string; last_name: string } | null;
+  communication_opt_in_email?: boolean;
+  communication_opt_in_sms?:   boolean;
 }
 
 export interface PortalSlot {
@@ -69,6 +72,18 @@ export interface PortalProgress {
   risk2_completed_at:  string | null;
   theory_passed_at:    string | null;
   practical_passed_at: string | null;
+}
+
+// Portal Audit SP-01/XP-03: the student's own instructor-authored
+// competency assessment — same shape/source Guardian Portal already reads
+// (instructor_student_assessments), scoped here to the student's own session.
+export interface PortalAssessment {
+  id:              string;
+  instructor_name: string;
+  competencies:    Record<string, string>;
+  readiness:       Record<string, boolean>;
+  notes:           string | null;
+  updated_at:      string;
 }
 
 export interface PortalBalance {
@@ -252,6 +267,24 @@ export function usePortalMe() {
   });
 }
 
+// P2-4: persists to students.communication_opt_in_email/sms — the real
+// channel-level preference the notification pipeline already enforces
+// (runNotify), not the finer booking/reminder split the old localStorage-only
+// toggles pretended to control.
+export function useUpdateNotificationPrefs() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (prefs: { communication_opt_in_email?: boolean; communication_opt_in_sms?: boolean }) =>
+      portalFetch<{ success: boolean }>('/me/notification-preferences', {
+        method: 'PATCH',
+        body:   JSON.stringify(prefs),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal', 'me'] });
+    },
+  });
+}
+
 // Final Gap Analysis P2-3 — the one profile field a student may edit
 // themselves; every other field stays staff-mediated by existing design.
 export function useUpdatePhone() {
@@ -274,6 +307,16 @@ export function usePortalProgress() {
     queryFn:  () => portalFetch<PortalProgress>('/progress'),
     enabled:  Boolean(getStoredPortalSession()),
     staleTime: 2 * 60_000,
+    retry: 0,
+  });
+}
+
+export function usePortalAssessments() {
+  return useQuery({
+    queryKey: ['portal', 'assessments'],
+    queryFn:  () => portalFetch<PortalAssessment[]>('/assessments'),
+    enabled:  Boolean(getStoredPortalSession()),
+    staleTime: 5 * 60_000,
     retry: 0,
   });
 }
