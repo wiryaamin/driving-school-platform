@@ -78,8 +78,8 @@ export const TEMPLATE_COLUMNS: Record<MigrationEntity, ColumnSpec[]> = {
     { key: 'employment_type',        label: 'Anställningstyp',      required: false, example: 'employed', hint: 'employed, contractor, external, on_leave, inactive' },
     { key: 'teaching_categories',    label: 'Undervisningskategorier', required: false, example: 'B,C', hint: 'Kommaseparerat: B, BE, C, CE, D, A, m.fl.' },
     { key: 'employment_started_at',  label: 'Anställningsstart',    required: false, example: '2020-03-01', hint: 'Format: YYYY-MM-DD' },
-    { key: 'adi_number',             label: 'ADI-nummer',           required: false, example: 'SE-12345', hint: 'Trafikverkets godkännandenummer' },
-    { key: 'adi_valid_until',        label: 'ADI gäller till',      required: false, example: '2028-03-01', hint: 'Format: YYYY-MM-DD' },
+    { key: 'adi_number',             label: 'Godkännande-/certifikatnummer', required: false, example: 'REF-12345', hint: 'Valfritt internt referensnummer' },
+    { key: 'adi_valid_until',        label: 'Giltigt till',         required: false, example: '2028-03-01', hint: 'Format: YYYY-MM-DD' },
     { key: 'languages_spoken',       label: 'Undervisningsspråk',   required: false, example: 'sv,en', hint: 'Kommaseparerat: sv, en, ar, m.fl.' },
   ],
 

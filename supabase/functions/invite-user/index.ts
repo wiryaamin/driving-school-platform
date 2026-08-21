@@ -25,26 +25,55 @@ import { enforceIpRateLimit, enforceUserRateLimit } from '../_shared/rate-limit.
 import { createServiceClient, createAnonClient } from '../_shared/supabase.ts';
 import { getSeatEntitlement } from '../_shared/entitlements.ts';
 import { recordIdentityEvent } from '../_shared/identity-events.ts';
-import { inviteNewStaffMember } from '../_shared/staff-invite.ts';
+import { inviteNewStaffMember, buildProfilePersonFields, buildMembershipEmploymentFields } from '../_shared/staff-invite.ts';
 import { logger } from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
 const JSON_CT = { 'Content-Type': 'application/json' } as const;
 
 // Kept in sync with packages/validation/src/auth/password.schema.ts
-// (INVITABLE_ROLES) — Deno can't import workspace packages, so it's
-// duplicated here per the established Edge Function convention.
+// (INVITABLE_ROLES, PERSONNEL_JOB_TITLES) — Deno can't import workspace
+// packages, so it's duplicated here per the established Edge Function
+// convention.
 const INVITABLE_ROLES = [
   'org_admin', 'org_manager', 'instructor', 'instructor_senior',
   'receptionist', 'finance_admin', 'student_admin', 'reporting_viewer',
   'corporate_contact',
 ] as const;
 
+// 'trafiklarare' is deliberately absent — that professional role is
+// represented by a public.instructors record via the existing InstructorForm
+// flow, not through this invite path.
+const PERSONNEL_JOB_TITLES = [
+  'trafikskolechef', 'utbildningsledare', 'trafiklararpraktikant',
+  'receptionist', 'administrativ_personal', 'ekonomipersonal', 'ovrig_personal',
+] as const;
+
+const EMPLOYMENT_TYPES = ['employed', 'contractor', 'external', 'on_leave', 'inactive'] as const;
+
+// Subset of public.personal_identity_type this form collects — see the
+// matching comment in packages/validation/src/auth/password.schema.ts.
+const PERSONNEL_IDENTITY_TYPES = ['personnummer', 'samordningsnummer'] as const;
+
 const InviteUserSchema = z.object({
   email:      z.string().trim().toLowerCase().email(),
   first_name: z.string().trim().min(1).max(100),
   last_name:  z.string().trim().min(1).max(100),
   role:       z.enum(INVITABLE_ROLES),
+
+  // ── Common personnel record — all optional ────────────────────────────
+  job_title:              z.enum(PERSONNEL_JOB_TITLES).optional(),
+  mobile_phone:           z.string().trim().max(30).optional(),
+  personnummer:           z.string().trim().regex(/^\d{8}-?\d{4}$/).optional(),
+  identity_type:          z.enum(PERSONNEL_IDENTITY_TYPES).optional(),
+  employment_type:        z.enum(EMPLOYMENT_TYPES).optional(),
+  employment_number:      z.string().trim().max(50).optional(),
+  employment_started_at:  z.string().optional(),
+  employment_ended_at:    z.string().optional(), // absent = "Tills vidare"
+  work_location_id:       z.string().uuid().optional(),
+  address_line1:          z.string().trim().max(200).optional(),
+  postal_code:            z.string().trim().max(20).optional(),
+  city:                   z.string().trim().max(100).optional(),
 });
 
 // ─── Response helpers (mirrors instructors/index.ts) ──────────────────────────
@@ -160,10 +189,26 @@ async function addExistingUserToOrg(
     );
   }
 
+  const employmentFields = buildMembershipEmploymentFields(input);
+
+  let personFields: Record<string, unknown>;
+  try {
+    personFields = await buildProfilePersonFields(input);
+  } catch (err) {
+    logger.error('invite-user.personnummer_failed', { correlation_id: ctx.correlationId, error: err instanceof Error ? err.message : String(err) });
+    return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to process personnummer');
+  }
+  if (Object.keys(personFields).length > 0) {
+    const { error: profileUpdateError } = await db.from('profiles').update(personFields).eq('id', userId);
+    if (profileUpdateError) {
+      logger.warn('invite-user.existing_profile_update_failed', { correlation_id: ctx.correlationId, error: profileUpdateError.message });
+    }
+  }
+
   const nowIso = new Date().toISOString();
   const { data: membership, error: membershipError } = existingMembership
-    ? await db.from('memberships').update({ status: 'active', joined_at: nowIso }).eq('id', existingMembership.id).select('id').single()
-    : await db.from('memberships').insert({ user_id: userId, organization_id: orgId, status: 'active', joined_at: nowIso }).select('id').single();
+    ? await db.from('memberships').update({ status: 'active', joined_at: nowIso, ...employmentFields }).eq('id', existingMembership.id).select('id').single()
+    : await db.from('memberships').insert({ user_id: userId, organization_id: orgId, status: 'active', joined_at: nowIso, ...employmentFields }).select('id').single();
 
   if (membershipError || !membership) {
     logger.error('invite-user.existing_membership_failed', { correlation_id: ctx.correlationId, error: membershipError?.message });

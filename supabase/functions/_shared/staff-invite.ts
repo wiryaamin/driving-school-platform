@@ -14,6 +14,7 @@
 
 import { recordIdentityEvent } from './identity-events.ts';
 import { logger } from './logger.ts';
+import { identityCryptoConfigured, encryptPersonalNumber, hashPersonalNumber } from './bankid-crypto.ts';
 
 // deno-lint-ignore no-explicit-any
 type DbClient = any;
@@ -23,6 +24,66 @@ export interface InviteStaffInput {
   first_name: string;
   last_name: string;
   role: string;
+
+  // ── Common personnel record — all optional. Trial-signup callers simply
+  // omit these; only the authenticated Users/Personal "Lägg till personal"
+  // flow supplies them. ──────────────────────────────────────────────────
+  job_title?: string;
+  mobile_phone?: string;
+  personnummer?: string;
+  identity_type?: string; // 'personnummer' | 'samordningsnummer'; defaults to 'personnummer' when personnummer is given without this
+  employment_type?: string;
+  employment_number?: string;
+  employment_started_at?: string;
+  employment_ended_at?: string; // absent = "Tills vidare" (ongoing)
+  work_location_id?: string;
+  address_line1?: string;
+  postal_code?: string;
+  city?: string;
+}
+
+/**
+ * profiles gets person-level fields (identity/personnummer + home address —
+ * these don't change per organization). memberships gets employment-level
+ * fields (Befattning, employment dates, workplace — these CAN legitimately
+ * differ per organization for a multi-org member). See the migration
+ * (20260816010000_personnel_record_common_fields.sql) for the full rationale.
+ *
+ * Personnummer plaintext is encrypted+hashed here and never stored or
+ * returned — mirrors resolvePersonnummer() in instructor-provisioning.ts
+ * exactly, reusing the same crypto (identityCryptoConfigured() guard,
+ * encryptPersonalNumber/hashPersonalNumber from bankid-crypto.ts).
+ */
+export async function buildProfilePersonFields(input: InviteStaffInput): Promise<Record<string, unknown>> {
+  const fields: Record<string, unknown> = {};
+  if (input.mobile_phone)  fields['phone']        = input.mobile_phone;
+  if (input.address_line1) fields['address_line1'] = input.address_line1;
+  if (input.postal_code)   fields['postal_code']   = input.postal_code;
+  if (input.city)          fields['city']          = input.city;
+
+  if (input.personnummer) {
+    if (!identityCryptoConfigured()) {
+      throw new Error('Personnummer encryption is not configured on this environment');
+    }
+    const raw = input.personnummer.replace(/-/g, '');
+    const [encrypted, hash] = await Promise.all([encryptPersonalNumber(raw), hashPersonalNumber(raw)]);
+    fields['identity_type']          = input.identity_type ?? 'personnummer';
+    fields['personnummer_encrypted'] = encrypted;
+    fields['personnummer_hash']      = hash;
+    fields['personnummer_last4']     = raw.slice(-4);
+  }
+  return fields;
+}
+
+export function buildMembershipEmploymentFields(input: InviteStaffInput): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (input.job_title)             fields['job_title']             = input.job_title;
+  if (input.employment_type)       fields['employment_type']       = input.employment_type;
+  if (input.employment_number)     fields['employment_number']     = input.employment_number;
+  if (input.employment_started_at) fields['employment_started_at'] = input.employment_started_at;
+  if (input.employment_ended_at)   fields['employment_ended_at']   = input.employment_ended_at; // absent → stays NULL ("Tills vidare")
+  if (input.work_location_id)      fields['work_location_id']      = input.work_location_id;
+  return fields;
 }
 
 export type InviteStaffResult =
@@ -59,19 +120,39 @@ export async function inviteNewStaffMember(
   }
   const userId = inviteData.user.id as string;
 
+  let personFields: Record<string, unknown>;
+  try {
+    personFields = await buildProfilePersonFields(input);
+  } catch (err) {
+    logger.error('staff-invite.personnummer_failed', { correlation_id: actor.correlationId, error: err instanceof Error ? err.message : String(err) });
+    await rollback({ userId });
+    return { ok: false, code: 'INTERNAL_ERROR', message: 'Failed to process personnummer' };
+  }
+
   const { error: profileError } = await db.from('profiles').upsert({
     id: userId, first_name: input.first_name, last_name: input.last_name, email: input.email, is_active: true,
+    ...personFields,
   }, { onConflict: 'id' });
   if (profileError) {
     logger.error('staff-invite.profile_failed', { correlation_id: actor.correlationId, error: profileError.message });
     await rollback({ userId });
-    return { ok: false, code: 'INTERNAL_ERROR', message: 'Failed to create user profile' };
+    const isDuplicatePersonnummer = (profileError.message ?? '').includes('profiles_personnummer_uniq');
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      message: isDuplicatePersonnummer
+        ? 'A person with this personnummer is already registered on the platform'
+        : 'Failed to create user profile',
+    };
   }
 
   const nowIso = new Date().toISOString();
   const { data: membership, error: membershipError } = await db
     .from('memberships')
-    .insert({ user_id: userId, organization_id: orgId, status: 'pending', joined_at: nowIso })
+    .insert({
+      user_id: userId, organization_id: orgId, status: 'pending', joined_at: nowIso,
+      ...buildMembershipEmploymentFields(input),
+    })
     .select('id').single();
   if (membershipError || !membership) {
     logger.error('staff-invite.membership_failed', { correlation_id: actor.correlationId, error: membershipError?.message });
