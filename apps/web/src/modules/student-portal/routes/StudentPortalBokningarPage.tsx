@@ -514,13 +514,21 @@ export function StudentPortalBokningarPage() {
   const [tab,           setTab]           = useState<'upcoming' | 'past'>('upcoming');
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>('all');
 
-  const now = Date.now();
-
+  // Bug fix: a booking whose slot time has passed but whose attendance
+  // hasn't been recorded yet (still 'reserved'/'confirmed' — an entirely
+  // normal gap, staff often mark attendance well after the lesson ends) used
+  // to fail BOTH filters at once: excluded here for being in the past, and
+  // excluded from "Historik" because GET /history only returns
+  // completed/no_show/cancelled. The booking existed, was never cancelled,
+  // and was simply invisible on the page whose entire purpose is to show it.
+  // "Kommande" (Upcoming) now means "not yet finalized" rather than
+  // "starts_at is still in the future" — status badge (Reserverad/Bekräftad)
+  // already makes clear these are pending, no new UI needed.
   const upcoming = useMemo(
     () => (bookings ?? [])
-      .filter(b => !TERMINAL.has(b.status) && new Date(b.starts_at).getTime() > now)
+      .filter(b => !TERMINAL.has(b.status))
       .sort((a, b) => a.starts_at.localeCompare(b.starts_at)),
-    [bookings, now],
+    [bookings],
   );
 
   const sortedHistory = useMemo(
