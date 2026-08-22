@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -402,8 +402,8 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[1100px] p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 py-4 border-b border-border">
+      <DialogContent className="max-w-[1100px] max-h-[90dvh] flex flex-col p-0 gap-0 overflow-hidden">
+        <DialogHeader className="shrink-0 px-6 py-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="text-muted-foreground">+</span>
             {isEdit ? 'Redigera elev' : 'Skapa en ny elev'}
@@ -411,9 +411,12 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col flex-1 min-h-0">
             {/* Two-column body */}
-            <div className="grid grid-cols-[380px_1fr] max-h-[75vh] overflow-hidden">
+            {/* overflow-hidden here (overriding DialogBody's own scroll) + grid-rows-[minmax(0,1fr)]
+                so the two columns keep scrolling independently, each clamped to the
+                body's available height, instead of merging into one shared scrollbar. */}
+            <DialogBody className="grid grid-cols-[380px_1fr] grid-rows-[minmax(0,1fr)] overflow-hidden">
 
               {/* ── Left column ──────────────────────────────────────────── */}
               <div className="border-r border-border p-5 space-y-5 overflow-y-auto">
@@ -842,10 +845,10 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
                   </div>
                 </div>
               </div>
-            </div>
+            </DialogBody>
 
             {/* ── Footer ───────────────────────────────────────────────────── */}
-            <div className="px-6 py-4 border-t border-border flex justify-end gap-3">
+            <div className="shrink-0 px-6 py-4 border-t border-border flex justify-end gap-3">
               <Button
                 type="button"
                 variant="outline"

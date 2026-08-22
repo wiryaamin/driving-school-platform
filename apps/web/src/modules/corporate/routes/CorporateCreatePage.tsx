@@ -3,7 +3,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle,
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input, Button, Textarea, toast,
 } from '@platform/ui';
@@ -134,14 +134,14 @@ export function CorporateCreateDialog({ open, onOpenChange, onSuccess }: Corpora
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[1000px] p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
-        <DialogHeader className="px-6 py-4 border-b border-border">
+      <DialogContent className="max-w-[1000px] max-h-[90dvh] flex flex-col p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
+        <DialogHeader className="shrink-0 px-6 py-4 border-b border-border">
           <DialogTitle className="text-base font-semibold">Nytt företag</DialogTitle>
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)}>
-            <div className="overflow-y-auto max-h-[75vh]">
+          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col flex-1 min-h-0">
+            <DialogBody>
 
               {/* ── Two-column: Företag | Kommentarer ───────────────────── */}
               <div className="grid grid-cols-2 gap-0">
@@ -408,10 +408,10 @@ export function CorporateCreateDialog({ open, onOpenChange, onSuccess }: Corpora
                   />
                 </div>
               </div>
-            </div>
+            </DialogBody>
 
             {/* ── Footer ──────────────────────────────────────────────────── */}
-            <div className="px-6 py-4 border-t border-border flex justify-end gap-3">
+            <div className="shrink-0 px-6 py-4 border-t border-border flex justify-end gap-3">
               <Button
                 type="button"
                 variant="outline"

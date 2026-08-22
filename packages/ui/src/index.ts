@@ -16,7 +16,7 @@ export {
 } from './components/ui/table.js';
 export {
   Dialog, DialogPortal, DialogOverlay, DialogClose, DialogTrigger,
-  DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
+  DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription,
 } from './components/ui/dialog.js';
 export {
   Select, SelectGroup, SelectValue, SelectTrigger, SelectContent,
@@ -41,7 +41,7 @@ export {
 } from './components/ui/dropdown-menu.js';
 export {
   Sheet, SheetPortal, SheetOverlay, SheetTrigger, SheetClose, SheetContent,
-  SheetHeader, SheetFooter, SheetTitle, SheetDescription,
+  SheetHeader, SheetBody, SheetFooter, SheetTitle, SheetDescription,
 } from './components/ui/sheet.js';
 export { Skeleton } from './components/ui/skeleton.js';
 export { Switch, type SwitchProps } from './components/ui/switch.js';

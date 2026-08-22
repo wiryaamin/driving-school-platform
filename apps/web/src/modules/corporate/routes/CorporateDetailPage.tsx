@@ -7,7 +7,7 @@ import { Building2, ChevronDown, ChevronUp, Upload, Trash2 } from 'lucide-react'
 import {
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input, Button, Textarea,
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription,
   Skeleton, toast,
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
@@ -701,15 +701,15 @@ function NyttAvtalDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
+      <DialogContent className="max-w-3xl max-h-[90dvh] flex flex-col p-0 gap-0 overflow-hidden" aria-describedby={undefined}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-border">
           <DialogTitle className="text-lg font-semibold">{isEdit ? 'Redigera avtal' : 'Nytt avtal'}</DialogTitle>
         </div>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)}>
-            <div className="px-6 py-5">
+          <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col flex-1 min-h-0">
+            <DialogBody className="px-6 py-5">
 
               {/* 2-column grid */}
               <div className="grid grid-cols-2 gap-x-8 gap-y-4">
@@ -823,10 +823,10 @@ function NyttAvtalDialog({
                   </FormItem>
                 )} />
               </div>
-            </div>
+            </DialogBody>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border bg-muted/5">
+            <div className="shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-border bg-muted/5">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
                 Avbryt
               </Button>
