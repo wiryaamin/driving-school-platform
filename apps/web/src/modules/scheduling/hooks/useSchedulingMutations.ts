@@ -87,6 +87,15 @@ export interface UpdateSlotInstructorInput {
   instructor_id: string;
 }
 
+// Backend (slots/index.ts UpdateSlotSchema) accepts lesson_type_id as an
+// optional (assignable) but not nullable field — a generic slot can be
+// assigned a specific lesson type, but not reverted back to "any" through
+// this route. That's an existing backend constraint, not a UI limitation.
+export interface UpdateSlotLessonTypeInput {
+  id:              string;
+  lesson_type_id:  string;
+}
+
 export interface UpdateSlotNotesInput {
   id:    string;
   notes: string | null;
@@ -220,6 +229,16 @@ async function apiUpdateSlotLocation(input: UpdateSlotLocationInput): Promise<Le
   return data.data;
 }
 
+async function apiUpdateSlotLessonType(input: UpdateSlotLessonTypeInput): Promise<LessonSlot> {
+  const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
+    method: 'PATCH',
+    body: { lesson_type_id: input.lesson_type_id },
+  });
+  if (error) throw error;
+  if (!data) throw new Error('Inget svar från servern');
+  return data.data;
+}
+
 async function apiUpdateSlotInstructor(input: UpdateSlotInstructorInput): Promise<LessonSlot> {
   const { data, error } = await supabase.functions.invoke<{ data: LessonSlot }>(`slots/${input.id}`, {
     method: 'PATCH',
@@ -341,6 +360,17 @@ export function useUpdateSlotNotes() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: apiUpdateSlotNotes,
+    onSuccess: (_data, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });
+    },
+  });
+}
+
+export function useUpdateSlotLessonType() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: apiUpdateSlotLessonType,
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: slotKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: slotKeys.detail(id) });

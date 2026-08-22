@@ -2,12 +2,13 @@ import { useState, useMemo, useEffect } from 'react';
 import {
   Clock, Users, UserX, CheckCircle, XCircle, CalendarCheck, ChevronDown, ChevronUp, Loader2, Bell,
   GraduationCap, ArrowLeftRight, ExternalLink, FileText, Search, UserCheck, Phone, Mail,
-  Ban, Trash2, Pencil, Copy, CreditCard, Languages, History, UserSearch, Car, MapPin, IdCard,
+  Ban, Trash2, Pencil, Copy, CreditCard, Languages, History, UserSearch, Car, MapPin, IdCard, BookOpen,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button, Badge, Separator, ScrollArea, Skeleton,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Input,
 } from '@platform/ui';
 import { toast } from '@platform/ui';
@@ -20,7 +21,8 @@ import { Permissions } from '@core/rbac/permissions.js';
 import { useBookingsForSlot } from '../hooks/useBookings.js';
 import { useWaitlistForSlot, useAddToWaitlist, usePromoteFromWaitlist } from '../hooks/useWaitlist.js';
 import {
-  useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotLocation, useUpdateSlotNotes, useUpdateSlotInstructor,
+  useUpdateBookingStatus, useUpdateSlotVehicle, useUpdateSlotLocation, useUpdateSlotLessonType,
+  useUpdateSlotNotes, useUpdateSlotInstructor,
   useUpdateSlotCapacity, useUpdateSlotStatus, useDeleteSlot, useUpdateSlotTiming,
 } from '../hooks/useSchedulingMutations.js';
 import { useVehicles } from '@modules/resources/index.js';
@@ -97,25 +99,6 @@ function StudentName({
     >
       {name}
       <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-    </button>
-  );
-}
-
-// ─── Instructor name — clickable link to instructor detail ───────────────────
-
-function InstructorName({ id, onNavigate }: { id: string; onNavigate?: (path: string) => void }) {
-  const { data: instructor, isLoading } = useInstructor(id);
-  if (isLoading) return <Skeleton className="h-4 w-28 inline-block" />;
-  if (!instructor) return <span className="font-mono text-xs text-muted-foreground">{id.slice(0, 8)}…</span>;
-  const name = `${instructor.first_name} ${instructor.last_name}`;
-  if (!onNavigate) return <span className="font-medium">{name}</span>;
-  return (
-    <button
-      type="button"
-      onClick={() => onNavigate(`/instructors/${id}`)}
-      className="font-medium text-primary hover:underline"
-    >
-      {name}
     </button>
   );
 }
@@ -399,62 +382,79 @@ function InstructorRow({
   slotStatus:   string;
   onNavigate?:  ((path: string) => void) | undefined;
 }) {
-  const [editing, setEditing] = useState(false);
-  const { data: instructorsData } = useInstructorList({ per_page: 100 });
+  const [reassigning, setReassigning] = useState(false);
+  const { data: instructorsData }     = useInstructorList({ per_page: 100 });
+  const { data: instructor, isLoading } = useInstructor(instructorId);
   const updateInstructor = useUpdateSlotInstructor();
 
   const instructors = (instructorsData?.data ?? []).filter(i => !i.deleted_at);
   const isTerminal  = TERMINAL_SLOT_STATUSES.has(slotStatus);
 
   function handleChange(newId: string) {
-    if (!newId) return;
+    if (!newId || newId === instructorId) { setReassigning(false); return; }
     updateInstructor.mutate(
       { id: slotId, instructor_id: newId },
       {
-        onSuccess: () => { toast({ title: 'Instruktör uppdaterad' }); setEditing(false); },
+        onSuccess: () => { toast({ title: 'Instruktör uppdaterad' }); setReassigning(false); },
         onError:   () => { toast({ title: 'Kunde inte uppdatera instruktör', variant: 'destructive' }); },
       },
     );
   }
 
-  if (editing) {
+  if (reassigning) {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-        <select
-          autoFocus
-          value={instructorId}
-          onChange={(e) => handleChange(e.target.value)}
-          onBlur={() => setEditing(false)}
-          disabled={updateInstructor.isPending}
-          className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-        >
-          {instructors.map(i => (
-            <option key={i.id} value={i.id}>
-              {i.first_name} {i.last_name}
-            </option>
-          ))}
-        </select>
-        {updateInstructor.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+      <div className="flex items-center gap-1.5">
+        <Select value={instructorId} onValueChange={handleChange} disabled={updateInstructor.isPending}>
+          <SelectTrigger className="h-8 text-sm flex-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {instructors.map(i => (
+              <SelectItem key={i.id} value={i.id}>{i.first_name} {i.last_name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {updateInstructor.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+        <Button size="sm" variant="ghost" className="h-8 px-2 text-xs shrink-0" disabled={updateInstructor.isPending} onClick={() => setReassigning(false)}>
+          Avbryt
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <GraduationCap className="w-3.5 h-3.5 shrink-0" />
-      <InstructorName id={instructorId} {...(onNavigate !== undefined ? { onNavigate } : {})} />
-      {!isTerminal && (
-        <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="ml-0.5 text-[10px] text-muted-foreground/50 hover:text-primary transition-colors"
-          >
-            Byt
-          </button>
-        </PermissionGate>
+    <div className="space-y-1">
+      {isLoading ? (
+        <Skeleton className="h-5 w-28" />
+      ) : (
+        <span className="text-base font-semibold text-foreground">
+          {instructor ? `${instructor.first_name} ${instructor.last_name}` : instructorId.slice(0, 8) + '…'}
+        </span>
       )}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1"
+          onClick={() => onNavigate?.(`/instructors/${instructorId}`)}
+        >
+          Visa lärare
+          <ExternalLink className="w-3 h-3" />
+        </Button>
+        {!isTerminal && (
+          <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs gap-1 text-muted-foreground"
+              onClick={() => setReassigning(true)}
+            >
+              <ArrowLeftRight className="w-3 h-3" />
+              Byt lärare
+            </Button>
+          </PermissionGate>
+        )}
+      </div>
     </div>
   );
 }
@@ -479,157 +479,133 @@ function DetailField({
 // ─── Vehicle — display + inline change ─────────────────────────────────────────
 
 function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string | null }) {
-  const [editing, setEditing] = useState(false);
   const { data: vehicles = [] } = useVehicles();
   const updateVehicle = useUpdateSlotVehicle();
 
-  const current = vehicles.find(v => v.id === vehicleId) ?? null;
   const available = vehicles.filter(v => v.operational_status === 'available' || v.id === vehicleId);
 
   function handleChange(newId: string) {
     updateVehicle.mutate(
       { id: slotId, vehicle_id: newId || null },
       {
-        onSuccess: () => { toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }); setEditing(false); },
-        onError:   () => { toast({ title: 'Kunde inte uppdatera fordon', variant: 'destructive' }); },
+        onSuccess: () => toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }),
+        onError:   () => toast({ title: 'Kunde inte uppdatera fordon', variant: 'destructive' }),
       },
     );
   }
 
   return (
     <DetailField icon={Car} label="Fordon">
-      {editing ? (
-        <div className="flex items-center gap-1.5">
-          <select
-            autoFocus
-            value={vehicleId ?? ''}
-            onChange={(e) => handleChange(e.target.value)}
-            onBlur={() => setEditing(false)}
-            disabled={updateVehicle.isPending}
-            className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-          >
-            <option value="">— Inget fordon —</option>
+      <div className="flex items-center gap-1.5">
+        <Select value={vehicleId ?? ''} onValueChange={handleChange} disabled={updateVehicle.isPending}>
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue placeholder="Inte tilldelat" />
+          </SelectTrigger>
+          <SelectContent>
             {available.map(v => (
-              <option key={v.id} value={v.id}>
-                {v.registration_number} · {v.make} {v.model} ({v.transmission === 'automatic' ? 'A' : 'M'})
-              </option>
+              <SelectItem key={v.id} value={v.id}>
+                {v.registration_number} · {v.make} {v.model} ({v.transmission === 'automatic' ? 'Automat' : 'Manuell'})
+              </SelectItem>
             ))}
-          </select>
-          {updateVehicle.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
-        </div>
-      ) : current ? (
-        <button type="button" onClick={() => setEditing(true)} className="text-left hover:text-primary transition-colors">
-          <span className="text-sm font-medium text-foreground">{current.registration_number} · {current.make} {current.model}</span>
-          <span className="block text-xs text-muted-foreground">
-            {current.transmission === 'automatic' ? 'Automat' : 'Manuell'}
-          </span>
-        </button>
-      ) : (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm text-muted-foreground">Inte tilldelat</span>
-          <button type="button" onClick={() => setEditing(true)} className="text-xs text-primary hover:underline shrink-0">
-            Tilldela fordon →
-          </button>
-        </div>
-      )}
+          </SelectContent>
+        </Select>
+        {updateVehicle.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+      </div>
     </DetailField>
   );
 }
 
-// ─── Lesson type — name, category, duration, price ────────────────────────────
+// ─── Lesson type — display + change (backend already accepts lesson_type_id
+// on PATCH /slots/:id — no un-assign, matching the API's own constraint) ──────
 
-function LessonTypeRow({ lessonTypeId }: { lessonTypeId: string | null }) {
+function LessonTypeRow({ slotId, lessonTypeId }: { slotId: string; lessonTypeId: string | null }) {
   const { data: lessonTypes, isLoading } = useLessonTypes();
+  const updateLessonType = useUpdateSlotLessonType();
 
-  if (lessonTypeId == null) {
+  function handleChange(newId: string) {
+    if (!newId || newId === lessonTypeId) return;
+    updateLessonType.mutate(
+      { id: slotId, lesson_type_id: newId },
+      {
+        onSuccess: () => toast({ title: 'Lektionstyp uppdaterad' }),
+        onError:   () => toast({ title: 'Kunde inte uppdatera lektionstyp', variant: 'destructive' }),
+      },
+    );
+  }
+
+  if (isLoading) {
     return (
-      <DetailField icon={Car} label="Lektion">
-        <span className="text-sm text-foreground">Valfri lektionstyp</span>
+      <DetailField icon={BookOpen} label="Lektion">
+        <Skeleton className="h-8 w-full" />
       </DetailField>
     );
   }
 
-  const lessonType = lessonTypes?.find(lt => lt.id === lessonTypeId);
-
-  if (!lessonType) {
-    if (isLoading) {
-      return (
-        <DetailField icon={Car} label="Lektion">
-          <Skeleton className="h-4 w-24" />
-        </DetailField>
-      );
-    }
-    return (
-      <DetailField icon={Car} label="Lektion">
-        <span className="text-sm text-foreground">Okänd lektionstyp</span>
-      </DetailField>
-    );
-  }
+  const current = lessonTypes?.find(lt => lt.id === lessonTypeId);
 
   return (
-    <DetailField icon={Car} label="Lektion">
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-sm font-medium text-foreground">{lessonType.name}</span>
-        <Badge variant="outline" className="text-[10px] font-normal py-0">
-          {CATEGORY_LABELS[lessonType.category] ?? lessonType.category}
-        </Badge>
+    <DetailField icon={BookOpen} label="Lektion">
+      <div className="flex items-center gap-1.5">
+        <Select value={lessonTypeId ?? ''} onValueChange={handleChange} disabled={updateLessonType.isPending}>
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue placeholder="Valfri lektionstyp" />
+          </SelectTrigger>
+          <SelectContent>
+            {(lessonTypes ?? []).map(lt => (
+              <SelectItem key={lt.id} value={lt.id}>{lt.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {updateLessonType.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
       </div>
-      {lessonType.pricing_sek != null && (
-        <span className="text-xs text-muted-foreground">{lessonType.pricing_sek.toLocaleString('sv-SE')} kr</span>
+      {current && (
+        <div className="flex items-center gap-1.5 flex-wrap mt-1">
+          <Badge variant="outline" className="text-[10px] font-normal py-0">
+            {CATEGORY_LABELS[current.category] ?? current.category}
+          </Badge>
+          {current.pricing_sek != null && (
+            <span className="text-xs text-muted-foreground">{current.pricing_sek.toLocaleString('sv-SE')} kr</span>
+          )}
+        </div>
       )}
     </DetailField>
   );
 }
 
-// ─── Branch / meeting location — display + inline change ─────────────────────
+// ─── Branch / meeting location — display + change ─────────────────────────────
 
 function BranchRow({ slotId, locationId }: { slotId: string; locationId: string | null }) {
-  const [editing, setEditing] = useState(false);
   const { data: locations = [] } = useLocations();
   const updateLocation = useUpdateSlotLocation();
-
-  const current = locations.find(l => l.id === locationId) ?? null;
 
   function handleChange(newId: string) {
     updateLocation.mutate(
       { id: slotId, location_id: newId || null },
       {
-        onSuccess: () => { toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }); setEditing(false); },
-        onError:   () => { toast({ title: 'Kunde inte uppdatera plats', variant: 'destructive' }); },
+        onSuccess: () => toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }),
+        onError:   () => toast({ title: 'Kunde inte uppdatera plats', variant: 'destructive' }),
       },
     );
   }
 
   return (
     <DetailField icon={MapPin} label="Plats">
-      {editing ? (
-        <div className="flex items-center gap-1.5">
-          <select
-            autoFocus
-            value={locationId ?? ''}
-            onChange={(e) => handleChange(e.target.value)}
-            onBlur={() => setEditing(false)}
-            disabled={updateLocation.isPending}
-            className="h-7 text-xs px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-          >
-            <option value="">— Ingen plats —</option>
-            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-          {updateLocation.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
-        </div>
-      ) : current ? (
-        <button type="button" onClick={() => setEditing(true)} className="text-left hover:text-primary transition-colors">
-          <span className="text-sm font-medium text-foreground">{current.name}</span>
-          <span className="block text-xs text-muted-foreground">{formatLocationAddress(current)}</span>
-        </button>
-      ) : (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm text-muted-foreground">Inte vald</span>
-          <button type="button" onClick={() => setEditing(true)} className="text-xs text-primary hover:underline shrink-0">
-            Välj plats →
-          </button>
-        </div>
-      )}
+      <div className="flex items-center gap-1.5">
+        <Select value={locationId ?? ''} onValueChange={handleChange} disabled={updateLocation.isPending}>
+          <SelectTrigger className="h-8 text-sm">
+            <SelectValue placeholder="Inte vald" />
+          </SelectTrigger>
+          <SelectContent>
+            {locations.map(l => (
+              <SelectItem key={l.id} value={l.id}>
+                {l.name}
+                <span className="block text-xs text-muted-foreground font-normal">{formatLocationAddress(l)}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {updateLocation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+      </div>
     </DetailField>
   );
 }
@@ -701,20 +677,21 @@ function DurationRow({ slot, onOpenFullEditor }: { slot: LessonSlot; onOpenFullE
   return (
     <DetailField icon={Clock} label="Längd">
       <div className="flex items-center gap-1.5">
-        <select
-          value={duration}
-          onChange={(e) => handleChange(Number(e.target.value))}
-          disabled={updateTiming.isPending}
-          className="h-7 text-sm px-1.5 border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-        >
-          {durationOptions.map(m => <option key={m} value={m}>{m} min</option>)}
-        </select>
-        {updateTiming.isPending && <Loader2 className="w-3 h-3 animate-spin" />}
+        <Select value={String(duration)} onValueChange={(v) => handleChange(Number(v))} disabled={updateTiming.isPending}>
+          <SelectTrigger className="h-8 text-sm w-28">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {durationOptions.map(m => <SelectItem key={m} value={String(m)}>{m} min</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {updateTiming.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
       </div>
       <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
-        <button type="button" onClick={onOpenFullEditor} className="text-xs text-primary hover:underline">
-          Ändra tid och längd →
-        </button>
+        <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 px-1.5 -ml-1.5 mt-0.5 text-muted-foreground" onClick={onOpenFullEditor}>
+          <Pencil className="w-3 h-3" />
+          Ändra tid och längd
+        </Button>
       </PermissionGate>
     </DetailField>
   );
@@ -817,13 +794,15 @@ function SessionNotesRow({
       <div className="flex-1 min-w-0">
         <p className="text-foreground whitespace-pre-line break-words leading-relaxed">{notes}</p>
         <PermissionGate permission={Permissions.SCHEDULING_UPDATE}>
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-1 h-6 px-1.5 text-[10px] gap-1 text-muted-foreground"
             onClick={() => onOpenChange(true)}
-            className="mt-1 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors"
           >
+            <Pencil className="w-2.5 h-2.5" />
             Redigera
-          </button>
+          </Button>
         </PermissionGate>
       </div>
     </div>
@@ -1323,7 +1302,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
               {/* ── Layer 2: People — elev prominent, receptionist manages their booking ── */}
               <div className={`grid gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20 ${bookings.length === 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 {bookings.length === 1 && (
-                  <div className="min-w-0">
+                  <div className="min-w-0 space-y-1">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">Elev</p>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-base font-semibold">
@@ -1331,11 +1310,19 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                           id={bookings[0]!.student_id}
                           student={studentMap[bookings[0]!.student_id]}
                           isLoading={studentsLoading}
-                          onNavigate={handleNavigate}
                         />
                       </span>
                       <BookingStatusBadge status={bookings[0]!.status} />
                     </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1"
+                      onClick={() => handleNavigate(`/students/${bookings[0]!.student_id}`)}
+                    >
+                      Visa elev
+                      <ExternalLink className="w-3 h-3" />
+                    </Button>
                   </div>
                 )}
                 <div className="min-w-0">
@@ -1353,7 +1340,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
               {/* ── Layer 3: Lesson / operational details ─────────── */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/10">
-                <LessonTypeRow lessonTypeId={slot.lesson_type_id} />
+                <LessonTypeRow slotId={slot.id} lessonTypeId={slot.lesson_type_id} />
                 <BranchRow slotId={slot.id} locationId={slot.location_id} />
                 <LicenceCategoriesRow instructorId={slot.instructor_id} />
                 <DurationRow slot={slot} onOpenFullEditor={openFullEditor} />
