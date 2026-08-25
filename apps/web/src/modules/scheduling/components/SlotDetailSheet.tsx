@@ -397,7 +397,7 @@ function InstructorRow({
       { id: slotId, instructor_id: newId },
       {
         onSuccess: (updated) => { toast({ title: 'Instruktör uppdaterad' }); setReassigning(false); onSlotUpdated(updated); },
-        onError:   () => { toast({ title: 'Kunde inte uppdatera instruktör', variant: 'destructive' }); },
+        onError:   (err) => { toast({ title: 'Kunde inte uppdatera instruktör', description: err instanceof Error ? err.message : 'Försök igen', variant: 'destructive' }); },
       },
     );
   }
@@ -492,7 +492,7 @@ function VehicleRow({
       { id: slotId, vehicle_id: newId || null },
       {
         onSuccess: (updated) => { toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }); onSlotUpdated(updated); },
-        onError:   () => toast({ title: 'Kunde inte uppdatera fordon', variant: 'destructive' }),
+        onError:   (err) => toast({ title: 'Kunde inte uppdatera fordon', description: err instanceof Error ? err.message : 'Försök igen', variant: 'destructive' }),
       },
     );
   }
@@ -533,7 +533,7 @@ function LessonTypeRow({
       { id: slotId, lesson_type_id: newId },
       {
         onSuccess: (updated) => { toast({ title: 'Lektionstyp uppdaterad' }); onSlotUpdated(updated); },
-        onError:   () => toast({ title: 'Kunde inte uppdatera lektionstyp', variant: 'destructive' }),
+        onError:   (err) => toast({ title: 'Kunde inte uppdatera lektionstyp', description: err instanceof Error ? err.message : 'Försök igen', variant: 'destructive' }),
       },
     );
   }
@@ -590,7 +590,7 @@ function BranchRow({
       { id: slotId, location_id: newId || null },
       {
         onSuccess: (updated) => { toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }); onSlotUpdated(updated); },
-        onError:   () => toast({ title: 'Kunde inte uppdatera plats', variant: 'destructive' }),
+        onError:   (err) => toast({ title: 'Kunde inte uppdatera plats', description: err instanceof Error ? err.message : 'Försök igen', variant: 'destructive' }),
       },
     );
   }
@@ -655,15 +655,17 @@ function DurationRow({
 
   function handleChange(newDuration: number) {
     if (newDuration === duration) return;
-    const dateStr   = slot.starts_at.slice(0, 10);
-    const startTime = slot.starts_at.slice(11, 16);
-    const [sh, sm]  = startTime.split(':').map(Number);
-    const totalEnd  = (Number(sh) * 60 + Number(sm)) + newDuration;
-    const eh = String(Math.floor(totalEnd / 60) % 24).padStart(2, '0');
-    const em = String(totalEnd % 60).padStart(2, '0');
+    // Real Date arithmetic, not string slicing + a manual %24 hour wrap —
+    // the previous version reused the same calendar day for the computed
+    // end time, so extending a late-evening slot's duration past midnight
+    // produced an ends_at *earlier* than starts_at (wrong day), which the
+    // backend correctly rejects — surfacing as an opaque "non-2xx" error
+    // with no indication of why. new Date(...) + milliseconds naturally
+    // carries the day forward.
+    const newEndsAt = new Date(new Date(slot.starts_at).getTime() + newDuration * 60_000).toISOString();
 
     updateTiming.mutate(
-      { id: slot.id, starts_at: `${dateStr}T${startTime}:00`, ends_at: `${dateStr}T${eh}:${em}:00` },
+      { id: slot.id, starts_at: slot.starts_at, ends_at: newEndsAt },
       {
         onSuccess: (updated) => { toast({ title: 'Längd uppdaterad' }); onSlotUpdated(updated); },
         onError:   (err) => toast({
@@ -765,7 +767,7 @@ function SessionNotesRow({
       { id: slotId, notes: draft.trim() || null },
       {
         onSuccess: (updated) => { toast({ title: 'Anteckning sparad' }); onOpenChange(false); onSlotUpdated(updated); },
-        onError:   () => { toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' }); },
+        onError:   (err) => { toast({ title: 'Kunde inte spara anteckning', description: err instanceof Error ? err.message : 'Försök igen', variant: 'destructive' }); },
       },
     );
   }

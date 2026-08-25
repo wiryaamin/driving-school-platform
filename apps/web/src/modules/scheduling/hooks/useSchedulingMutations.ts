@@ -194,7 +194,7 @@ async function apiUpdateSlotTiming(input: UpdateSlotTimingInput): Promise<Lesson
     method: 'PATCH',
     body: { starts_at: input.starts_at, ends_at: input.ends_at },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera tiden'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -204,7 +204,7 @@ async function apiUpdateSlotNotes(input: UpdateSlotNotesInput): Promise<LessonSl
     method: 'PATCH',
     body: { notes: input.notes },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte spara anteckning'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -214,7 +214,7 @@ async function apiUpdateSlotVehicle(input: UpdateSlotVehicleInput): Promise<Less
     method: 'PATCH',
     body: { vehicle_id: input.vehicle_id },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera fordon'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -224,7 +224,7 @@ async function apiUpdateSlotLocation(input: UpdateSlotLocationInput): Promise<Le
     method: 'PATCH',
     body: { location_id: input.location_id },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera plats'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -234,7 +234,7 @@ async function apiUpdateSlotLessonType(input: UpdateSlotLessonTypeInput): Promis
     method: 'PATCH',
     body: { lesson_type_id: input.lesson_type_id },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera lektionstyp'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
@@ -244,7 +244,7 @@ async function apiUpdateSlotInstructor(input: UpdateSlotInstructorInput): Promis
     method: 'PATCH',
     body: { instructor_id: input.instructor_id },
   });
-  if (error) throw error;
+  if (error) throw new Error(await extractFunctionErrorMessage(error, 'Kunde inte uppdatera instruktör'));
   if (!data) throw new Error('Inget svar från servern');
   return data.data;
 }
