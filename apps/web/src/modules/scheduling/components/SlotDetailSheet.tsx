@@ -375,12 +375,13 @@ const TERMINAL_SLOT_STATUSES = new Set(['completed', 'cancelled', 'blocked']);
 // ─── Instructor row — display + inline change ─────────────────────────────────
 
 function InstructorRow({
-  slotId, instructorId, slotStatus, onNavigate,
+  slotId, instructorId, slotStatus, onNavigate, onSlotUpdated,
 }: {
   slotId:       string;
   instructorId: string;
   slotStatus:   string;
   onNavigate?:  ((path: string) => void) | undefined;
+  onSlotUpdated: (slot: LessonSlot) => void;
 }) {
   const [reassigning, setReassigning] = useState(false);
   const { data: instructorsData }     = useInstructorList({ per_page: 100 });
@@ -395,7 +396,7 @@ function InstructorRow({
     updateInstructor.mutate(
       { id: slotId, instructor_id: newId },
       {
-        onSuccess: () => { toast({ title: 'Instruktör uppdaterad' }); setReassigning(false); },
+        onSuccess: (updated) => { toast({ title: 'Instruktör uppdaterad' }); setReassigning(false); onSlotUpdated(updated); },
         onError:   () => { toast({ title: 'Kunde inte uppdatera instruktör', variant: 'destructive' }); },
       },
     );
@@ -478,7 +479,9 @@ function DetailField({
 
 // ─── Vehicle — display + inline change ─────────────────────────────────────────
 
-function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string | null }) {
+function VehicleRow({
+  slotId, vehicleId, onSlotUpdated,
+}: { slotId: string; vehicleId: string | null; onSlotUpdated: (slot: LessonSlot) => void }) {
   const { data: vehicles = [] } = useVehicles();
   const updateVehicle = useUpdateSlotVehicle();
 
@@ -488,7 +491,7 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
     updateVehicle.mutate(
       { id: slotId, vehicle_id: newId || null },
       {
-        onSuccess: () => toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }),
+        onSuccess: (updated) => { toast({ title: newId ? 'Fordon tilldelat' : 'Fordon borttaget' }); onSlotUpdated(updated); },
         onError:   () => toast({ title: 'Kunde inte uppdatera fordon', variant: 'destructive' }),
       },
     );
@@ -518,7 +521,9 @@ function VehicleRow({ slotId, vehicleId }: { slotId: string; vehicleId: string |
 // ─── Lesson type — display + change (backend already accepts lesson_type_id
 // on PATCH /slots/:id — no un-assign, matching the API's own constraint) ──────
 
-function LessonTypeRow({ slotId, lessonTypeId }: { slotId: string; lessonTypeId: string | null }) {
+function LessonTypeRow({
+  slotId, lessonTypeId, onSlotUpdated,
+}: { slotId: string; lessonTypeId: string | null; onSlotUpdated: (slot: LessonSlot) => void }) {
   const { data: lessonTypes, isLoading } = useLessonTypes();
   const updateLessonType = useUpdateSlotLessonType();
 
@@ -527,7 +532,7 @@ function LessonTypeRow({ slotId, lessonTypeId }: { slotId: string; lessonTypeId:
     updateLessonType.mutate(
       { id: slotId, lesson_type_id: newId },
       {
-        onSuccess: () => toast({ title: 'Lektionstyp uppdaterad' }),
+        onSuccess: (updated) => { toast({ title: 'Lektionstyp uppdaterad' }); onSlotUpdated(updated); },
         onError:   () => toast({ title: 'Kunde inte uppdatera lektionstyp', variant: 'destructive' }),
       },
     );
@@ -574,7 +579,9 @@ function LessonTypeRow({ slotId, lessonTypeId }: { slotId: string; lessonTypeId:
 
 // ─── Branch / meeting location — display + change ─────────────────────────────
 
-function BranchRow({ slotId, locationId }: { slotId: string; locationId: string | null }) {
+function BranchRow({
+  slotId, locationId, onSlotUpdated,
+}: { slotId: string; locationId: string | null; onSlotUpdated: (slot: LessonSlot) => void }) {
   const { data: locations = [] } = useLocations();
   const updateLocation = useUpdateSlotLocation();
 
@@ -582,7 +589,7 @@ function BranchRow({ slotId, locationId }: { slotId: string; locationId: string 
     updateLocation.mutate(
       { id: slotId, location_id: newId || null },
       {
-        onSuccess: () => toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }),
+        onSuccess: (updated) => { toast({ title: newId ? 'Plats tilldelad' : 'Plats borttagen' }); onSlotUpdated(updated); },
         onError:   () => toast({ title: 'Kunde inte uppdatera plats', variant: 'destructive' }),
       },
     );
@@ -632,7 +639,9 @@ function LicenceCategoriesRow({ instructorId }: { instructorId: string }) {
 // the details grid: change just the length, same rule (>=40 min, 5-min
 // steps) enforced by update_slot_timing_with_booking_sync via useUpdateSlotTiming.
 
-function DurationRow({ slot, onOpenFullEditor }: { slot: LessonSlot; onOpenFullEditor: () => void }) {
+function DurationRow({
+  slot, onOpenFullEditor, onSlotUpdated,
+}: { slot: LessonSlot; onOpenFullEditor: () => void; onSlotUpdated: (slot: LessonSlot) => void }) {
   const updateTiming = useUpdateSlotTiming();
   const duration = slotDurationMinutes(slot);
   const isTerminal = TERMINAL_SLOT_STATUSES.has(slot.status);
@@ -656,7 +665,7 @@ function DurationRow({ slot, onOpenFullEditor }: { slot: LessonSlot; onOpenFullE
     updateTiming.mutate(
       { id: slot.id, starts_at: `${dateStr}T${startTime}:00`, ends_at: `${dateStr}T${eh}:${em}:00` },
       {
-        onSuccess: () => { toast({ title: 'Längd uppdaterad' }); },
+        onSuccess: (updated) => { toast({ title: 'Längd uppdaterad' }); onSlotUpdated(updated); },
         onError:   (err) => toast({
           title:       'Kunde inte uppdatera längd',
           description: err instanceof Error ? err.message : 'Försök igen',
@@ -733,8 +742,11 @@ function StudentOperationalInfo({ studentId, student }: { studentId: string; stu
 // ─── Session notes — add / edit instructor note on the slot ──────────────────
 
 function SessionNotesRow({
-  slotId, notes, open, onOpenChange,
-}: { slotId: string; notes: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+  slotId, notes, open, onOpenChange, onSlotUpdated,
+}: {
+  slotId: string; notes: string | null; open: boolean; onOpenChange: (open: boolean) => void;
+  onSlotUpdated: (slot: LessonSlot) => void;
+}) {
   const [draft, setDraft] = useState('');
   const updateNotes = useUpdateSlotNotes();
 
@@ -752,7 +764,7 @@ function SessionNotesRow({
     updateNotes.mutate(
       { id: slotId, notes: draft.trim() || null },
       {
-        onSuccess: () => { toast({ title: 'Anteckning sparad' }); onOpenChange(false); },
+        onSuccess: (updated) => { toast({ title: 'Anteckning sparad' }); onOpenChange(false); onSlotUpdated(updated); },
         onError:   () => { toast({ title: 'Kunde inte spara anteckning', variant: 'destructive' }); },
       },
     );
@@ -812,10 +824,11 @@ function SessionNotesRow({
 // ─── Edit slot — inline time + capacity editor ("Redigera pass") ─────────────
 
 function EditSlotPanel({
-  slot, onClose,
+  slot, onClose, onSlotUpdated,
 }: {
   slot:    LessonSlot;
   onClose: () => void;
+  onSlotUpdated: (slot: LessonSlot) => void;
 }) {
   const toLocalTime = (iso: string) => iso.slice(11, 16);
   const [startTime, setStartTime] = useState(() => toLocalTime(slot.starts_at));
@@ -833,7 +846,7 @@ function EditSlotPanel({
     const timeChanged = newStartsAt !== slot.starts_at.slice(0, 16) + ':00' || startTime !== toLocalTime(slot.starts_at) || endTime !== toLocalTime(slot.ends_at);
     const capacityChanged = capacity !== slot.max_bookings;
 
-    const tasks: Promise<unknown>[] = [];
+    const tasks: Promise<LessonSlot | undefined>[] = [];
     if (timeChanged) {
       tasks.push(new Promise((resolve, reject) => {
         updateTiming.mutate({ id: slot.id, starts_at: newStartsAt, ends_at: newEndsAt }, { onSuccess: resolve, onError: reject });
@@ -847,7 +860,15 @@ function EditSlotPanel({
     if (tasks.length === 0) { onClose(); return; }
 
     Promise.all(tasks)
-      .then(() => { toast({ title: 'Pass uppdaterat' }); onClose(); })
+      .then((results) => {
+        toast({ title: 'Pass uppdaterat' });
+        // Each response only reflects what its own endpoint changed — merge
+        // in order so both a timing and a capacity change (rare, but both
+        // can be edited in the same "Spara") both end up applied.
+        const merged = results.reduce<LessonSlot>((acc, r) => (r ? { ...acc, ...r } : acc), slot);
+        onSlotUpdated(merged);
+        onClose();
+      })
       .catch((err) => toast({
         title:       'Kunde inte uppdatera passet',
         description: err instanceof Error ? err.message : 'Försök igen',
@@ -1090,8 +1111,45 @@ interface SlotDetailSheetProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetProps) {
+export function SlotDetailSheet({ slot: slotProp, open, onOpenChange }: SlotDetailSheetProps) {
   const navigate = useNavigate();
+
+  // `slotProp` is a plain prop — a one-time snapshot the caller captured at
+  // click time (e.g. SchedulingCalendarPage's selectedSlot state), not a
+  // live query. Every field-level mutation below (vehicle/location/lesson
+  // type/duration/instructor/capacity/notes) already invalidates the
+  // *cache* on success — but nothing ever told THIS open sheet to re-render
+  // with fresher data, so a Select's own onValueChange could fire a real,
+  // successful PATCH and the trigger would still show the old value: the
+  // mutation worked, the UI just never reflected it. Track a local, live
+  // copy seeded from the prop and fed by each mutation's own response
+  // (every one of them already returns the full updated LessonSlot) via
+  // onSlotUpdated, and render from `slot` (defined below) instead of the
+  // raw prop everywhere a mutable field is shown.
+  const [liveSlot, setLiveSlot] = useState<LessonSlot | null>(slotProp);
+  useEffect(() => {
+    setLiveSlot(slotProp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally reset only when a *different* slot (by id) opens, not on every re-render with the same slot
+  }, [slotProp?.id]);
+  // A field can also change from elsewhere (slotProp.updated_at moves
+  // forward) while the same slot stays open — take the newer one without
+  // discarding an in-flight local update that hasn't round-tripped yet.
+  useEffect(() => {
+    if (slotProp && liveSlot && slotProp.id === liveSlot.id && slotProp.updated_at > liveSlot.updated_at) {
+      setLiveSlot(slotProp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only reacts to the prop moving forward, not to liveSlot's own updates
+  }, [slotProp]);
+
+  // Every reference to `slot` below this point (including in functions
+  // defined above this line — they close over it and only run after render
+  // completes) resolves to this live, mutation-fed value.
+  const slot = liveSlot ?? slotProp;
+
+  function handleSlotUpdated(updated: LessonSlot) {
+    setLiveSlot(updated);
+  }
+
   const [bookingDialogOpen,     setBookingDialogOpen]     = useState(false);
   const [matchDialogOpen,       setMatchDialogOpen]       = useState(false);
   const [cancelBookingId,       setCancelBookingId]       = useState<string | null>(null);
@@ -1160,7 +1218,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     updateStatus.mutate(
       { id: slot.id, status: 'blocked' },
       {
-        onSuccess: () => toast({ title: 'Tiden blockerad' }),
+        onSuccess: (updated) => { toast({ title: 'Tiden blockerad' }); handleSlotUpdated(updated); },
         onError:   (err) => toast({
           title:       'Kunde inte blockera tiden',
           description: err instanceof Error ? err.message : 'Försök igen',
@@ -1175,7 +1233,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
     updateStatus.mutate(
       { id: slot.id, status: 'open' },
       {
-        onSuccess: () => toast({ title: 'Tiden öppnad igen' }),
+        onSuccess: (updated) => { toast({ title: 'Tiden öppnad igen' }); handleSlotUpdated(updated); },
         onError:   (err) => toast({
           title:       'Kunde inte öppna tiden',
           description: err instanceof Error ? err.message : 'Försök igen',
@@ -1332,6 +1390,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                     instructorId={slot.instructor_id}
                     slotStatus={slot.status}
                     onNavigate={handleNavigate}
+                    onSlotUpdated={handleSlotUpdated}
                   />
                 </div>
               </div>
@@ -1340,11 +1399,11 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
 
               {/* ── Layer 3: Lesson / operational details ─────────── */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/10">
-                <LessonTypeRow slotId={slot.id} lessonTypeId={slot.lesson_type_id} />
-                <BranchRow slotId={slot.id} locationId={slot.location_id} />
+                <LessonTypeRow slotId={slot.id} lessonTypeId={slot.lesson_type_id} onSlotUpdated={handleSlotUpdated} />
+                <BranchRow slotId={slot.id} locationId={slot.location_id} onSlotUpdated={handleSlotUpdated} />
                 <LicenceCategoriesRow instructorId={slot.instructor_id} />
-                <DurationRow slot={slot} onOpenFullEditor={openFullEditor} />
-                <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} />
+                <DurationRow slot={slot} onOpenFullEditor={openFullEditor} onSlotUpdated={handleSlotUpdated} />
+                <VehicleRow slotId={slot.id} vehicleId={slot.vehicle_id} onSlotUpdated={handleSlotUpdated} />
               </div>
 
               <Separator />
@@ -1403,7 +1462,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                   <div className="space-y-3 pt-1 rounded-lg border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-900/40 dark:bg-violet-950/10">
                     {editSlotOpen && !TERMINAL_SLOT_STATUSES.has(slot.status) && (
                       <PermissionGate permission={Permissions.SCHEDULING_SLOT_UPDATE}>
-                        <EditSlotPanel slot={slot} onClose={() => setEditSlotOpen(false)} />
+                        <EditSlotPanel slot={slot} onClose={() => setEditSlotOpen(false)} onSlotUpdated={handleSlotUpdated} />
                       </PermissionGate>
                     )}
 
@@ -1462,6 +1521,7 @@ export function SlotDetailSheet({ slot, open, onOpenChange }: SlotDetailSheetPro
                       notes={slot.notes}
                       open={noteEditorOpen}
                       onOpenChange={setNoteEditorOpen}
+                      onSlotUpdated={handleSlotUpdated}
                     />
 
                     {notifierOpen && bookings.length === 1 && (
