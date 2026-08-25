@@ -114,7 +114,12 @@ const SelectItem = React.forwardRef<
     ref={ref}
     className={cn(
       'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none',
-      'focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      // data-[highlighted] is Radix's own interaction-state attribute — set
+      // for both pointer hover and keyboard navigation. focus: alone missed
+      // plain mouse hover (no visible highlight while moving through the
+      // list), since DOM focus doesn't reliably follow the pointer here.
+      'focus:bg-accent focus:text-accent-foreground data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground',
+      'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className
     )}
     {...props}

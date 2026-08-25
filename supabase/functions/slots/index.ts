@@ -239,10 +239,10 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
     }),
   ]);
   if (instrResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check instructor availability');
-  if (!instrResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
+  if (!instrResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Läraren är inte tillgänglig under den nya tiden — den krockar med en annan lektion.');
   if (hasVehicle) {
     if (vehResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check vehicle availability');
-    if (!vehResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
+    if (!vehResult.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Fordonet är inte tillgängligt under den nya tiden — det krockar med en annan lektion.');
   }
   if (closureResult.error) return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to check organization closure status');
   if (!closureResult.data) {
@@ -257,7 +257,7 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
 
   if (error) {
     logger.error('slots.create_failed', { correlation_id: ctx.correlationId, error: error.message });
-    if (error.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Slot overlaps with an existing active slot');
+    if (error.code === '23P01') return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Tiden krockar med ett annat befintligt pass.');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to create slot');
   }
 
@@ -345,8 +345,8 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
           })
         : Promise.resolve({ data: true, error: null }),
     ]);
-    if (instrChanged && !instrAvail.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Instructor is not available during this time window');
-    if (vehChanged   && !vehAvail.data)   return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Vehicle is not available during this time window');
+    if (instrChanged && !instrAvail.data) return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Läraren är inte tillgänglig under den nya tiden — den krockar med en annan lektion.');
+    if (vehChanged   && !vehAvail.data)   return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Fordonet är inte tillgängligt under den nya tiden — det krockar med en annan lektion.');
   }
 
   const updateBody: Record<string, unknown> = { ...dto, updated_by: ctx.actorId };
@@ -437,7 +437,7 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
 
   if (error) {
     if (error.code === 'PGRST116') return errorResp(ctx, 404, 'NOT_FOUND', `Slot '${id}' not found`);
-    if (error.code === '23P01')    return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Slot overlaps with an existing active slot');
+    if (error.code === '23P01')    return errorResp(ctx, 409, 'SLOT_UNAVAILABLE', 'Tiden krockar med ett annat befintligt pass.');
     return errorResp(ctx, 500, 'INTERNAL_ERROR', 'Failed to update slot');
   }
   return successResp(ctx, slot);
