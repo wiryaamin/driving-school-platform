@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Settings, Search } from 'lucide-react';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { cn } from '@/lib/utils.js';
+import { useUiStore } from '@core/store/ui.store.js';
 
 // ─── Scheduling workspace shell ────────────────────────────────────────────────
 //
@@ -45,6 +46,15 @@ export function SchedulingWorkspaceLayout() {
   const navigate  = useNavigate();
   const location  = useLocation();
   const [customerSearchValue, setCustomerSearchValue] = useState('');
+  const setPageTitle = useUiStore((s) => s.setPageTitle);
+
+  // Rendered by TopBar, to the left of the search pill — see
+  // app/layouts/WorkspaceTabsLayout.tsx for the same pattern used by every
+  // other tenant-dashboard workspace.
+  useEffect(() => {
+    setPageTitle('Schema');
+    return () => setPageTitle(null);
+  }, [setPageTitle]);
 
   return (
     <PermissionGate permission={Permissions.SCHEDULING_READ}>

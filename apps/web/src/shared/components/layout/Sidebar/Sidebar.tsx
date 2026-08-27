@@ -80,7 +80,7 @@ function matchesAnyPrefix(prefixes: string[], pathname: string): boolean {
 }
 
 export const NAVIGATION: NavItem[] = [
-  { key: 'elever',    labelSv: 'Elever',              icon: Users,     path: '/students',   permission: 'students:student:read' as Permission },
+  { key: 'elever',    labelSv: 'Kunder',               icon: Users,     path: '/students',   permission: 'students:student:read' as Permission },
   { key: 'schema',    labelSv: 'Schema',               icon: Calendar,  path: '/scheduling', permission: 'scheduling:booking:read' as Permission },
   {
     key: 'ekonomi', labelSv: 'Ekonomi', icon: PieChart, path: '/finance', permission: 'finance:invoice:read' as Permission,
