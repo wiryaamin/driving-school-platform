@@ -286,10 +286,10 @@ export function WatchlistPage() {
   const archivedCols = useMemo(() => buildArchivedColumns(restoreItem, deleteItem), [restoreItem, deleteItem]);
 
   return (
-    <div className="max-w-screen-2xl mx-auto">
+    <div className="flex flex-col h-full min-h-0">
 
       {/* Breadcrumb */}
-      <div className="flex items-center justify-between pb-3">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
         <nav className="flex items-center gap-1.5 text-sm">
           <span className="text-muted-foreground">Bevakningar</span>
           <span className="text-muted-foreground/50">/</span>
@@ -301,7 +301,7 @@ export function WatchlistPage() {
       </div>
 
       {/* Tab bar + action */}
-      <div className="flex items-end border-b border-border mb-5">
+      <div className="flex items-end border-b border-border px-4 shrink-0">
         {([
           { key: 'active',   label: 'Aktiva bevakningar',    count: activeItems.length   },
           { key: 'archived', label: 'Avklarade bevakningar', count: archivedItems.length },
@@ -343,29 +343,31 @@ export function WatchlistPage() {
       </div>
 
       {/* Content */}
-      {activeTab === 'active' && (
-        <div className="overflow-x-auto">
-          <DataTable
-            columns={activeCols}
-            data={activeItems}
-            isLoading={false}
-            emptyMessage="Inga bevakningar hittades."
-            defaultPageSize={25}
-          />
-        </div>
-      )}
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {activeTab === 'active' && (
+          <div className="overflow-x-auto">
+            <DataTable
+              columns={activeCols}
+              data={activeItems}
+              isLoading={false}
+              emptyMessage="Inga bevakningar hittades."
+              defaultPageSize={25}
+            />
+          </div>
+        )}
 
-      {activeTab === 'archived' && (
-        <div className="overflow-x-auto">
-          <DataTable
-            columns={archivedCols}
-            data={archivedItems}
-            isLoading={false}
-            emptyMessage="Inga bevakningar hittades."
-            defaultPageSize={25}
-          />
-        </div>
-      )}
+        {activeTab === 'archived' && (
+          <div className="overflow-x-auto">
+            <DataTable
+              columns={archivedCols}
+              data={archivedItems}
+              isLoading={false}
+              emptyMessage="Inga bevakningar hittades."
+              defaultPageSize={25}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Add dialog */}
       <AddDialog
