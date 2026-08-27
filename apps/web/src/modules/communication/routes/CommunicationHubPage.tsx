@@ -425,11 +425,9 @@ export function CommunicationHubPage() {
   }
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Kommunikation"
         description="Hantera kanaler, skicka meddelanden och följ leveranser"
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Kommunikation' }]}
       />
 
       <PageContent>

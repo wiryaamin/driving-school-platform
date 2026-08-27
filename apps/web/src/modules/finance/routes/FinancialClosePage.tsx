@@ -878,11 +878,9 @@ export function FinancialClosePage() {
   };
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Periodstängning"
         description="Mjuk- och hårdstängning av bokföringsperioder, räkenskapsårsbokslut"
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Ekonomi', href: '/finance' }, { label: 'Periodstängning' }]}
         actions={
           <div className="flex items-center gap-2">
             <PermissionGate permission={Permissions.FINANCE_PERIOD_MANAGE}>

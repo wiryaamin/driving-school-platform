@@ -297,11 +297,9 @@ export function PackageListPage() {
   }
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Paket & Kampanjer"
         description="Skapa och hantera kommersiella erbjudanden"
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Paket & Kampanjer' }]}
         actions={
           <PermissionGate permission={Permissions.FINANCE_PACKAGE_CREATE}>
             <Button size="sm" onClick={() => setCreating(true)}>

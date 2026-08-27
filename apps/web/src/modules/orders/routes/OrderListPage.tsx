@@ -67,9 +67,8 @@ export function OrderListPage() {
 
   return (
     <PermissionGate permission={Permissions.ORDERS_READ}>
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Ordrar"
         description={total > 0 ? `${total} ordrar` : isLoading ? 'Laddar…' : 'Inga ordrar'}
       />
       <PageContent>

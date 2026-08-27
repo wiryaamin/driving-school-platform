@@ -355,11 +355,9 @@ export function FinanceOverviewPage() {
 
   return (
     <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Ekonomiöversikt"
         description={`Ekonomi och bokföring — ${monthLabel}`}
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Ekonomi' }]}
       />
 
       <PageContent>

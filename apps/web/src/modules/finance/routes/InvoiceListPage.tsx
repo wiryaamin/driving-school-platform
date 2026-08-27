@@ -254,17 +254,11 @@ export function InvoiceListPage() {
 
   return (
     <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Fakturor"
         {...(total > 0
           ? { description: studentIdFilter ? `Filtrerat per elev · ${total} fakturor` : `${total} fakturor totalt` }
           : {})}
-        breadcrumbs={[
-          { label: 'Hem' },
-          { label: 'Ekonomi' },
-          { label: 'Fakturor' },
-        ]}
         actions={
           <div className="flex items-center gap-2">
             <Button

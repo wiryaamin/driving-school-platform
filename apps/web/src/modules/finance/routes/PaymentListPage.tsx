@@ -139,15 +139,9 @@ export function PaymentListPage() {
 
   return (
     <PermissionGate permission={Permissions.FINANCE_PAYMENT_READ}>
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Betalningar"
         {...(total > 0 ? { description: `${total} betalningar totalt` } : {})}
-        breadcrumbs={[
-          { label: 'Hem' },
-          { label: 'Ekonomi' },
-          { label: 'Betalningar' },
-        ]}
         actions={
           <Button
             variant="outline"

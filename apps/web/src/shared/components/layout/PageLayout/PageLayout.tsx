@@ -7,15 +7,23 @@ import { cn } from '@/lib/utils.js';
 interface PageLayoutProps {
   children: ReactNode;
   className?: string;
+  /** Fill the full workspace width instead of capping/centering at
+   * max-w-screen-2xl — matches the Scheduling workspace's own full-bleed
+   * pages, for content rendered inside a workspace tab (where a capped,
+   * centered width leaves a large dead margin on wide screens next to the
+   * workspace's edge-to-edge tab bar). Off by default so existing
+   * non-workspace consumers (Platform Admin, detail pages, etc.) keep
+   * their current centered layout. */
+  fullBleed?: boolean;
 }
 
 /**
  * PageLayout — standard content wrapper for all module pages.
  * Provides consistent vertical spacing and max-width.
  */
-export function PageLayout({ children, className }: PageLayoutProps) {
+export function PageLayout({ children, className, fullBleed }: PageLayoutProps) {
   return (
-    <div className={cn('max-w-screen-2xl mx-auto space-y-5', className)}>
+    <div className={cn(fullBleed ? 'w-full px-4 pt-4' : 'max-w-screen-2xl mx-auto', 'space-y-5', className)}>
       {children}
     </div>
   );
@@ -24,7 +32,10 @@ export function PageLayout({ children, className }: PageLayoutProps) {
 // ─── PageHeader ───────────────────────────────────────────────────────────────
 
 interface PageHeaderProps {
-  title: string;
+  /** Omit when the workspace tab bar above already labels this page (e.g.
+   * a "Personal" tab rendering a page that would otherwise also say
+   * "Personal") — avoids a redundant duplicate heading. */
+  title?: string | undefined;
   description?: string | undefined;
   actions?: ReactNode | undefined;
   breadcrumbs?: BreadcrumbItem[] | undefined;
@@ -65,7 +76,9 @@ export function PageHeader({ title, description, actions, breadcrumbs, className
             })}
           </nav>
         )}
-        <h1 className="text-xl font-semibold text-foreground tracking-tight">{title}</h1>
+        {title && (
+          <h1 className="text-xl font-semibold text-foreground tracking-tight">{title}</h1>
+        )}
         {description && (
           <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
         )}

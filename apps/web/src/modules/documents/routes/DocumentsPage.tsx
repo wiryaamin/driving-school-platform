@@ -385,9 +385,8 @@ export function DocumentsPage() {
   }
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Dokumentarkiv"
         description="Elevdokument och uppladdade filer"
         actions={
           <PermissionGate permission="documents:document:create">

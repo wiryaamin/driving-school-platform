@@ -22,7 +22,7 @@ export function LogsPage() {
   const [activeTab, setActiveTab] = useState<LogTab>('booking');
 
   return (
-    <div className="max-w-screen-2xl mx-auto pt-4">
+    <div className="px-4 pt-4">
 
       {/* Sub-tab bar — the outer System-workspace tab bar already labels this
           page "Loggar"; this row picks which of the six log types shows. */}

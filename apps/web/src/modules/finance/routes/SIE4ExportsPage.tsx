@@ -236,14 +236,9 @@ export function SIE4ExportsPage() {
   const { data: exports = [], isLoading, refetch, isFetching } = useSIE4List(50);
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="SIE4-exportfiler"
         description="Bokföringsfiler i SIE4-format för import till redovisningsprogram"
-        breadcrumbs={[
-          { label: 'Ekonomi', href: '/finance' },
-          { label: 'SIE4-exportfiler' },
-        ]}
         actions={
           <div className="flex items-center gap-2">
             <Button

@@ -388,7 +388,7 @@ export function RegulatoryPage() {
   const columns = useMemo(() => buildColumns(), []);
 
   return (
-    <div className="max-w-screen-2xl mx-auto">
+    <div className="px-4">
       <div className="flex items-center justify-end pt-4 pb-3">
         <PermissionGate permission={Permissions.REGULATORY_WORKFLOW_CREATE}>
           <Button size="sm" onClick={() => setCreateOpen(true)}>

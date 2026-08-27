@@ -264,9 +264,8 @@ export function StaffPage() {
   }
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Personal"
         description="Instruktörer och administratörer samlat på ett ställe."
         actions={
           <Button size="sm" onClick={() => setAddOpen(true)}>

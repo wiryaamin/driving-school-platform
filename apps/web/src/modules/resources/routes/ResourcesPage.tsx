@@ -2073,11 +2073,10 @@ export function ResourcesPage() {
   const [tab, setTab] = useState<ResTab>('fordon');
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
         title="Resurser"
         description="Registrera och hantera fordon, underhåll och undervisningsplatser"
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Resurser' }]}
       />
 
       <PageContent>

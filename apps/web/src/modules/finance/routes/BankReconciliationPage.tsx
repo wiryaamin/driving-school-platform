@@ -816,9 +816,8 @@ export function BankReconciliationPage() {
   }), [imports]);
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Bankavstämning"
         description="Importera bankutdrag, matcha betalningar och bekräfta perioder"
         actions={
           <PermissionGate permission={Permissions.FINANCE_RECONCILIATION_MANAGE}>

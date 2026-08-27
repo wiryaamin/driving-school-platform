@@ -21,9 +21,8 @@ export function NyheterPage() {
   const { data: announcements = [], isLoading } = useAnnouncements();
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Nyheter"
         description="Meddelanden och uppdateringar från Trafikcloud"
       />
       <PageContent>

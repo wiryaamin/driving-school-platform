@@ -4,7 +4,7 @@ import {
   Gift, BookOpen, Search, User, X, Plus, Minus,
   Banknote, CreditCard, Wallet, ShoppingBag, Info,
 } from 'lucide-react';
-import { PageLayout, PageHeader } from '@shared/components/layout/PageLayout/PageLayout.js';
+import { PageLayout } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { Button, Skeleton, toast } from '@platform/ui';
@@ -214,9 +214,7 @@ export function KassaPage() {
 
   return (
     <PermissionGate allOf={[Permissions.FINANCE_INVOICE_CREATE, Permissions.FINANCE_PAYMENT_CREATE]}>
-    <PageLayout>
-      <PageHeader title="Kassa" breadcrumbs={[{ label: 'Kassa' }]} />
-
+    <PageLayout fullBleed>
       <div className="grid grid-cols-1 lg:grid-cols-[288px_1fr] gap-4">
 
         {/* ── LEFT PANEL: Customer + Products ────────────────────────────────── */}

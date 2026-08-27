@@ -691,7 +691,7 @@ export function StudentListPage() {
     : `${currentStatusTab?.label ?? ''} kunder`;
 
   return (
-    <div className="max-w-screen-2xl mx-auto">
+    <div className="px-4 pt-4">
 
       {/* ── Breadcrumb ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between pb-3">

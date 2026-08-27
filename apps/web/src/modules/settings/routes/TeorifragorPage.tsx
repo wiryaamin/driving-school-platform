@@ -333,9 +333,8 @@ export function TeorifragorPage() {
   const [dialogTarget, setDialogTarget] = useState<QuizQuestion | 'new' | null>(null);
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Körkortsfrågor"
         description="Egna teorifrågor för elevernas övningsprov, utöver de generella frågorna"
         actions={
           <Button onClick={() => setDialogTarget('new')}>

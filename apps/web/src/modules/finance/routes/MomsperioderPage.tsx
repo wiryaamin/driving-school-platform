@@ -550,15 +550,9 @@ export function MomsperioderPage() {
     .reduce((s, p) => s + (p.net_vat_payable ?? 0), 0);
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Momsperioder"
         description="Hantera momsredovisning och momsperioder för Skatteverket"
-        breadcrumbs={[
-          { label: 'Hem' },
-          { label: 'Ekonomi', href: '/finance' },
-          { label: 'Momsperioder' },
-        ]}
         actions={
           <PermissionGate permission={Permissions.FINANCE_VAT_MANAGE}>
             <Button onClick={() => setCreating(true)}>

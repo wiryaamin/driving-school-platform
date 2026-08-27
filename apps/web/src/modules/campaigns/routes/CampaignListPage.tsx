@@ -332,11 +332,9 @@ export function CampaignListPage() {
   function handleFilterChange() { setPage(1); }
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Kampanjer"
         description="Skapa och hantera kommersiella kampanjer"
-        breadcrumbs={[{ label: 'Hem' }, { label: 'Kampanjer' }]}
         actions={
           <PermissionGate permission={Permissions.FINANCE_CAMPAIGN_CREATE}>
             <Button size="sm" onClick={() => setCreating(true)}>

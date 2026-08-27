@@ -739,15 +739,9 @@ export function JournalbokenPage() {
   const periodName     = selectedPeriod?.name ?? '–';
 
   return (
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Journalboken"
         description="Dubbelbokhållning – journalposter, råbalans och SIE4-export"
-        breadcrumbs={[
-          { label: 'Hem' },
-          { label: 'Ekonomi', href: '/finance' },
-          { label: 'Journalboken' },
-        ]}
       />
 
       <PageContent>
