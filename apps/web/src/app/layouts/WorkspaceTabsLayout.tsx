@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
 import { usePermissions } from '@core/rbac/hooks.js';
 import type { Permission } from '@core/rbac/permissions.js';
+import { useUiStore } from '@core/store/ui.store.js';
 
 // ─── Generic workspace tab bar ──────────────────────────────────────────────
 //
@@ -39,21 +41,24 @@ function isTabActive(tab: WorkspaceTab, pathname: string): boolean {
 }
 
 export function WorkspaceTabsLayout({ tabs, title }: WorkspaceTabsLayoutProps) {
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  const { can }   = usePermissions();
+  const navigate     = useNavigate();
+  const location      = useLocation();
+  const { can }       = usePermissions();
+  const setPageTitle  = useUiStore((s) => s.setPageTitle);
+
+  // Rendered by TopBar, to the left of the search pill, on the same row —
+  // not here, since this layout sits below TopBar in a separate stacking
+  // context. Cleared on unmount so navigating to a title-less page doesn't
+  // leave stale text behind.
+  useEffect(() => {
+    setPageTitle(title ?? null);
+    return () => setPageTitle(null);
+  }, [title, setPageTitle]);
 
   const visibleTabs = tabs.filter((tab) => tab.permission == null || can(tab.permission));
 
   return (
     <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
-
-      {/* Workspace title — its own row, top-left of the workspace */}
-      {title && (
-        <div className="px-4 pt-3 pb-1 shrink-0 bg-card">
-          <h1 className="text-lg font-semibold text-foreground">{title}</h1>
-        </div>
-      )}
 
       {/* Module navigation bar */}
       <div className="flex items-center border-b border-border bg-card shrink-0 px-2">

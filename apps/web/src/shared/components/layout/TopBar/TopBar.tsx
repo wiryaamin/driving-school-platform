@@ -215,7 +215,7 @@ function FavoritesMenu() {
 
 export function TopBar() {
   const { user, profile } = useSessionStore();
-  const { toggleMobileMenu, theme, toggleTheme } = useUiStore();
+  const { toggleMobileMenu, theme, toggleTheme, pageTitle } = useUiStore();
 
   function openCommandPalette() {
     document.dispatchEvent(
@@ -236,8 +236,13 @@ export function TopBar() {
         <Menu className="w-5 h-5" />
       </button>
 
-      {/* Left section: location picker + ⌘K search pill */}
+      {/* Left section: workspace title + location picker + ⌘K search pill */}
       <div className="flex-1 flex items-center gap-2 min-w-0">
+        {pageTitle && (
+          <h1 className="text-sm font-semibold text-foreground truncate shrink-0 max-w-[40%]">
+            {pageTitle}
+          </h1>
+        )}
         <LocationPicker />
         <button
           type="button"

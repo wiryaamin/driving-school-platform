@@ -10,6 +10,10 @@ interface UiState {
   activeModuleKey: string | null;
   isMobileMenuOpen: boolean;
   theme: Theme;
+  /** Current workspace's page title, rendered by TopBar to the left of the
+   * search pill — set by WorkspaceTabsLayout, cleared on unmount. Ephemeral,
+   * not persisted. */
+  pageTitle: string | null;
 }
 
 interface UiActions {
@@ -20,6 +24,7 @@ interface UiActions {
   closeMobileMenu: () => void;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  setPageTitle: (title: string | null) => void;
 }
 
 type UiStore = UiState & UiActions;
@@ -34,6 +39,7 @@ export const useUiStore = create<UiStore>()(
         activeModuleKey: null,
         isMobileMenuOpen: false,
         theme: 'light',
+        pageTitle: null,
 
         toggleSidebarCollapsed: () =>
           set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
@@ -51,6 +57,8 @@ export const useUiStore = create<UiStore>()(
 
         toggleTheme: () =>
           set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' })),
+
+        setPageTitle: (title) => set({ pageTitle: title }),
       }),
       {
         name: 'platform-ui',
