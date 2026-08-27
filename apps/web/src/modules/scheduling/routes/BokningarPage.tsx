@@ -783,7 +783,7 @@ export function BokningarPage() {
   }), [all]);
 
   return (
-    <div className="-m-4 md:-m-5">
+    <div>
 
       {/* ── Page header ───────────────────────────────────────────────────────── */}
       <div className="bg-background border-b border-border px-4 md:px-6 py-4">
