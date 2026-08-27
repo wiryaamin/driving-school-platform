@@ -2,7 +2,7 @@
 import { NavLink, useParams } from 'react-router-dom';
 import {
   ChartBar, Users, ShoppingCart, Gift,
-  BookOpen, Calendar, Truck, FileText, TrendingUp,
+  BookOpen, Calendar, Truck, FileText, TrendingUp, LineChart,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { GrundrapporterPage }     from './GrundrapporterPage.js';
@@ -44,6 +44,12 @@ const NAV_ITEMS = [
   { key: 'fakturaunderlag',    label: 'Fakturaunderlag',    path: '/reports/fakturaunderlag',     icon: FileText    },
   { key: 'intakter',           label: 'Intäktsanalys',      path: '/reports/intakter',            icon: TrendingUp  },
   { key: 'instruktor-roi',     label: 'Instruktörs-ROI',   path: '/reports/instruktor-roi',      icon: Users       },
+  // Insikter (/insights) lost its own sidebar slot when the tenant dashboard
+  // nav consolidated into main workspaces — kept reachable here since it's
+  // conceptually part of the Rapporter workspace. It's a separate top-level
+  // route (not nested under /reports/*), so navigating there leaves this nav
+  // behind, same as Klasslista/LärarApp elsewhere in the new IA.
+  { key: 'insights',           label: 'Insikter',           path: '/insights',                    icon: LineChart   },
 ];
 
 // ─── RapporterPage ────────────────────────────────────────────────────────────

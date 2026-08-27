@@ -33,6 +33,12 @@ const MODULE_NAV_TABS = [
   { label: 'Bevakningar',    path: '/scheduling/watchlist' },
   { label: 'Väntelista',     path: '/scheduling/waitlist'  },
   { label: 'Passöversikt',   path: '/scheduling/list'      },
+  // Klasslista lives at its own top-level route (/class-list, outside the
+  // /scheduling/* prefix) — it lost its dedicated sidebar slot when the
+  // tenant dashboard nav consolidated into main workspaces, so it's kept
+  // reachable here instead. Same "tab navigates to a route outside this
+  // workspace's own layout" pattern already used for Kassa/Ny kund above.
+  { label: 'Klasslista',     path: '/class-list'           },
 ] as const;
 
 export function SchedulingWorkspaceLayout() {

@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Users, GraduationCap, ChartBar, LineChart,
+  Users, ChartBar,
   Calendar,
-  Receipt, CreditCard, Wallet,
-  Settings, UserCheck, Smartphone,
-  Send, Boxes, Building2,
-  Package, Tag, ShoppingCart,
-  BookOpen, Percent, Lock, FileDown, Landmark, Rocket, PieChart, FileText,
-  ChevronDown, ShieldCheck, Megaphone, HelpCircle, ScrollText,
+  Settings,
+  UserCheck,
+  BookOpen, Rocket, PieChart,
+  Megaphone,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -31,25 +28,21 @@ interface NavItem {
   permission?: Permission | null;
   badge?:      number;
   comingSoon?: boolean;
-}
-
-interface NavSection {
-  key:         string;
-  labelSv:     string;
-  items:       NavItem[];
-  /** Whole section collapses behind its own toggle (default collapsed, auto-expands when active). */
-  collapsible?: boolean;
+  /** Custom active-path check for a workspace whose pages share a URL prefix
+   * with a sibling workspace (Ekonomi/Bokföring both live under /finance/*)
+   * — overrides the default single-path prefix check when present. */
+  matchFn?:    (pathname: string) => boolean;
 }
 
 // ─── Navigation Configuration ─────────────────────────────────────────────────
-// Approved IA (Tenant Workspace Sidebar Finalization): 5 sections + 3 anchors
-// (Översikt/Kom igång pinned top, Inställningar pinned bottom). Items moved to
-// contextual sub-navigation (Kursöversikt, Statistik, Passläggning, Slotmallar,
-// Bevakningar, Uppgifter, Trafikövningsplatser, Fortnox, Dataimport,
-// Bokningsflöde, Utbildningsplaner) remain accessible from within their parent
-// modules or, for Dataimport, from the Kom igång onboarding checklist. Loggar
-// (SYSTEM section, below) was added to top-level nav once it grew a
-// tenant-wide Ändringslogg tab alongside its scheduling-specific ones.
+// Tenant Dashboard Workspace Navigation (2026-08-27): the sidebar answers
+// "which main workspace am I in?" — one item per workspace. "What do I want
+// to do in this workspace?" is answered by that workspace's own horizontal
+// tab bar (WorkspaceTabsLayout / SchedulingWorkspaceLayout), not by exposing
+// every sub-function here. Sub-functions that don't have a natural tab home
+// (Kursöversikt, Statistik, Passläggning, Slotmallar, Uppgifter,
+// Trafikövningsplatser, Fortnox, Dataimport, Bokningsflöde,
+// Utbildningsplaner) remain accessible from within their parent workspace.
 
 const OVERVIEW_ITEM: NavItem = {
   key:        'dashboard',
@@ -80,150 +73,35 @@ const SETTINGS_ITEM: NavItem = {
   permission: null,
 };
 
-export const NAVIGATION: NavSection[] = [
+const BOKFORING_PREFIXES = ['/finance/ledger', '/finance/vat', '/finance/reconciliation', '/finance/close', '/finance/sie4'];
+
+function matchesAnyPrefix(prefixes: string[], pathname: string): boolean {
+  return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+export const NAVIGATION: NavItem[] = [
+  { key: 'elever',    labelSv: 'Elever',              icon: Users,     path: '/students',   permission: 'students:student:read' as Permission },
+  { key: 'schema',    labelSv: 'Schema',               icon: Calendar,  path: '/scheduling', permission: 'scheduling:booking:read' as Permission },
   {
-    key:     'kundhantering',
-    labelSv: 'KUNDHANTERING',
-    items: [
-      { key: 'customers',      labelSv: 'Kunder',          icon: Users,          path: '/students',      permission: 'students:student:read' as Permission },
-      { key: 'foretagskunder', labelSv: 'Företagskunder',  icon: Building2,      path: '/corporate',     permission: null },
-      { key: 'communication',  labelSv: 'Kommunikation',   icon: Send,           path: '/communication', permission: null },
-      { key: 'documents',      labelSv: 'Dokumentarkiv',   icon: FileText,       path: '/documents',     permission: 'documents:document:read' as Permission },
-    ],
+    key: 'ekonomi', labelSv: 'Ekonomi', icon: PieChart, path: '/finance', permission: 'finance:invoice:read' as Permission,
+    matchFn: (pathname) =>
+      !matchesAnyPrefix(BOKFORING_PREFIXES, pathname) &&
+      matchesAnyPrefix(['/finance', '/orders', '/packages', '/campaigns'], pathname),
   },
   {
-    key:     'planering',
-    labelSv: 'PLANERING',
-    items: [
-      { key: 'scheduling',  labelSv: 'Bokningsschema', icon: Calendar,      path: '/scheduling',          permission: 'scheduling:booking:read' as Permission },
-      { key: 'classlist',   labelSv: 'Klasslista',     icon: GraduationCap, path: '/class-list',          permission: 'students:progress:read' as Permission },
-    ],
+    key: 'bokforing', labelSv: 'Bokföring', icon: BookOpen, path: '/finance/ledger', permission: 'finance:ledger:read' as Permission,
+    matchFn: (pathname) => matchesAnyPrefix(BOKFORING_PREFIXES, pathname),
+  },
+  { key: 'personal_resurser', labelSv: 'Personal & Resurser', icon: UserCheck, path: '/staff', permission: 'instructors:instructor:read' as Permission },
+  {
+    key: 'rapporter', labelSv: 'Rapporter', icon: ChartBar, path: '/reports', permission: null,
+    matchFn: (pathname) => matchesAnyPrefix(['/reports', '/insights'], pathname),
   },
   {
-    key:     'ekonomi',
-    labelSv: 'EKONOMI',
-    items: [
-      { key: 'finance-overview', labelSv: 'Ekonomiöversikt', icon: PieChart,     path: '/finance',          permission: 'finance:invoice:read'  as Permission },
-      { key: 'orders',           labelSv: 'Ordrar',          icon: ShoppingCart, path: '/orders',           permission: 'orders:order:read'     as Permission },
-      { key: 'packages',         labelSv: 'Paket',           icon: Package,      path: '/packages',         permission: 'finance:package:read'  as Permission },
-      { key: 'campaigns',        labelSv: 'Kampanjer',       icon: Tag,          path: '/campaigns',        permission: 'finance:campaign:read' as Permission },
-      { key: 'invoices',         labelSv: 'Fakturor',        icon: Receipt,      path: '/finance/invoices', permission: 'finance:invoice:read'  as Permission },
-      { key: 'payments',         labelSv: 'Betalningar',     icon: CreditCard,   path: '/finance/payments', permission: 'finance:payment:read'  as Permission },
-      { key: 'cash',             labelSv: 'Kassa',           icon: Wallet,       path: '/finance/cash',     permission: 'finance:payment:create' as Permission },
-    ],
-  },
-  {
-    key:         'bokforing',
-    labelSv:     'BOKFÖRING',
-    collapsible: true,
-    items: [
-      { key: 'ledger',         labelSv: 'Journalboken',     icon: BookOpen, path: '/finance/ledger',         permission: 'finance:ledger:read'         as Permission },
-      { key: 'vat-periods',    labelSv: 'Momsperioder',     icon: Percent,  path: '/finance/vat',            permission: 'finance:vat:read'            as Permission },
-      { key: 'reconciliation', labelSv: 'Bankavstämning',   icon: Landmark, path: '/finance/reconciliation', permission: 'finance:reconciliation:read' as Permission },
-      { key: 'period-close',   labelSv: 'Periodstängning',  icon: Lock,     path: '/finance/close',          permission: 'finance:close:read'          as Permission },
-      { key: 'sie4',           labelSv: 'SIE4-exportfiler', icon: FileDown, path: '/finance/sie4',           permission: 'finance:sie_export:read'     as Permission },
-    ],
-  },
-  {
-    key:         'personal_resurser',
-    labelSv:     'PERSONAL & RESURSER',
-    collapsible: true,
-    items: [
-      { key: 'staff',           labelSv: 'Personal',         icon: UserCheck,  path: '/staff',          permission: 'instructors:instructor:read' as Permission },
-      { key: 'instructor-app',  labelSv: 'LärarApp',         icon: Smartphone, path: '/instructor-app', permission: null },
-      { key: 'resources',       labelSv: 'Fordon & Platser', icon: Boxes,      path: '/resources',      permission: null },
-      { key: 'regulatory',      labelSv: 'Myndighetsärenden', icon: ShieldCheck, path: '/regulatory',    permission: 'regulatory:workflow:read' as Permission },
-    ],
-  },
-  {
-    key:         'rapporter',
-    labelSv:     'RAPPORTER',
-    collapsible: true,
-    items: [
-      { key: 'reports',  labelSv: 'Rapporter', icon: ChartBar,  path: '/reports',  permission: null },
-      { key: 'insights', labelSv: 'Insikter',  icon: LineChart, path: '/insights', permission: null },
-    ],
-  },
-  {
-    key:     'system',
-    labelSv: 'SYSTEM',
-    items: [
-      { key: 'nyheter', labelSv: 'Nyheter', icon: Megaphone, path: '/nyheter', permission: null },
-      { key: 'teorifragor', labelSv: 'Körkortsfrågor', icon: HelpCircle, path: '/teorifragor', permission: null },
-      { key: 'loggar', labelSv: 'Loggar', icon: ScrollText, path: '/logs', permission: null },
-    ],
+    key: 'system', labelSv: 'System', icon: Megaphone, path: '/nyheter', permission: null,
+    matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/teorifragor', '/logs'], pathname),
   },
 ];
-
-// ─── Collapse-state helpers ───────────────────────────────────────────────────
-
-function groupHasActiveItem(items: NavItem[], pathname: string): boolean {
-  return items.some((item) => item.path != null && (pathname === item.path || pathname.startsWith(`${item.path}/`)));
-}
-
-/** Collapsible sections start open only if the current route already belongs to them. */
-function computeInitialOpenGroups(pathname: string): Record<string, boolean> {
-  const open: Record<string, boolean> = {};
-  for (const section of NAVIGATION) {
-    if (section.collapsible && groupHasActiveItem(section.items, pathname)) open[section.key] = true;
-  }
-  return open;
-}
-
-// ─── Collapsible group header + body ──────────────────────────────────────────
-// Shared by every collapsible top-level section (Bokföring, Personal & Resurser,
-// Rapporter) — same toggle/animation behavior and visual weight for all three.
-
-function CollapsibleGroupHeader({
-  label,
-  open,
-  onToggle,
-  controlsId,
-}: {
-  label:      string;
-  open:       boolean;
-  onToggle:   () => void;
-  controlsId: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      aria-controls={controlsId}
-      className="w-full flex items-center gap-1.5 select-none transition-colors px-2 pt-3 pb-1 text-[13px] font-bold uppercase tracking-widest text-sidebar-foreground/65 hover:text-sidebar-foreground/90"
-    >
-      <ChevronDown
-        className={cn('w-3.5 h-3.5 shrink-0 transition-transform duration-200', open ? 'rotate-0' : '-rotate-90')}
-        strokeWidth={2}
-      />
-      <span className="truncate">{label}</span>
-    </button>
-  );
-}
-
-function CollapsibleGroupBody({
-  id,
-  open,
-  children,
-}: {
-  id:       string;
-  open:     boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      id={id}
-      className={cn('grid transition-[grid-template-rows] duration-200 ease-out', open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}
-    >
-      <div className="overflow-hidden">
-        <div className="space-y-0.5 pb-1">
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Shared Nav Content ───────────────────────────────────────────────────────
 
@@ -234,47 +112,21 @@ interface SidebarNavContentProps {
 export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   const { can } = usePermissions();
   const { organization } = useSession();
-  const location = useLocation();
   const showSetup = organization != null && organization.go_live_at == null;
 
   // P2-2 (Final Gap Analysis): reuses the existing communications queue-health
   // endpoint — the same summary CommunicationHubPage already renders on open —
-  // as an ambient nudge on the nav item itself, so a staff member doesn't have
-  // to already know to go check for a delivery failure. Not a second
-  // notification system, just this count surfaced one level higher up.
+  // as an ambient nudge, so a staff member doesn't have to already know to go
+  // check for a delivery failure. Not a second notification system, just this
+  // count surfaced one level higher up. Shown on the Elever workspace item
+  // now that Kommunikation is a tab inside it rather than its own nav item.
   const { data: queueHealth } = useQueueHealth();
   const commBadge = queueHealth?.total_retryable ?? 0;
 
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(
-    () => computeInitialOpenGroups(location.pathname),
-  );
-
-  // Auto-expand any collapsed section the moment its own route becomes active
-  // (e.g. navigating in via the command palette or a direct link) — never
-  // auto-collapses on the way out, so a section the user opened stays open.
-  useEffect(() => {
-    setOpenGroups((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const section of NAVIGATION) {
-        if (section.collapsible && groupHasActiveItem(section.items, location.pathname) && next[section.key] !== true) {
-          next[section.key] = true;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [location.pathname]);
-
-  function toggleGroup(key: string) {
-    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
-
-  // Scroll affordance for the operational-sections pane below — with most/all
-  // permissions granted its content (Kundhantering/Planering/Ekonomi/System
-  // items plus headers) can run taller than the pane itself, and the pane
-  // scrolls internally rather than the page, so there's otherwise no cue
-  // that SYSTEM (containing Loggar) sits below the fold. Tracked as real
+  // Scroll affordance for the operational-sections pane below — on small
+  // viewports the workspace list can run taller than the pane itself, and
+  // the pane scrolls internally rather than the page, so there's otherwise
+  // no cue that the last item (System) sits below the fold. Tracked as real
   // scroll position rather than CSS alone: a single multi-layer
   // background-image gradient keyed to var(--sidebar-background) proved
   // unreliable (invalid hsl(var()) usage silently drops the whole
@@ -324,16 +176,14 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
 
       <div className="mx-3 h-px bg-sidebar-border shrink-0" />
 
-      {/* Scrollable operational sections. With most/all permissions granted,
-          section content (Kundhantering 4 + Planering 2 + Ekonomi 7 +
-          System 3 items, plus headers) runs taller than common laptop
-          viewport heights, and this is a nested scroll region (not page
-          scroll) with an OS-hidden scrollbar on macOS by default — so the
-          last section (SYSTEM, containing Loggar) can sit below the fold
-          with no visual cue that there is more to scroll to. The two
-          shadow divs below are pointer-events-none overlays, pinned to the
-          pane's edges (not inside the scrolling content), toggled by real
-          scrollTop/scrollHeight state rather than CSS alone. */}
+      {/* Scrollable workspace list. On small viewports the list can run
+          taller than the pane itself, and this is a nested scroll region
+          (not page scroll) with an OS-hidden scrollbar on macOS by default
+          — so the last item (System) can sit below the fold with no visual
+          cue that there is more to scroll to. The two shadow divs below are
+          pointer-events-none overlays, pinned to the pane's edges (not
+          inside the scrolling content), toggled by real scrollTop/
+          scrollHeight state rather than CSS alone. */}
       <div className="relative flex-1 min-h-0">
         <div
           aria-hidden="true"
@@ -346,49 +196,15 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
         <div
           ref={navScrollRef}
           onScroll={updateNavScrollState}
-          className="h-full overflow-y-auto px-3 py-1 scrollbar-none"
+          className="h-full overflow-y-auto px-3 py-1 scrollbar-none space-y-0.5"
         >
-        {NAVIGATION.map((section) => {
-          const visibleItems = visibleOf(section.items);
-          if (visibleItems.length === 0) return null;
-
-          if (section.collapsible) {
-            const open   = openGroups[section.key] === true;
-            const bodyId = `sidebar-group-${section.key}`;
-            return (
-              <div key={section.key} className="mb-1">
-                <CollapsibleGroupHeader
-                  label={section.labelSv}
-                  open={open}
-                  onToggle={() => toggleGroup(section.key)}
-                  controlsId={bodyId}
-                />
-                <CollapsibleGroupBody id={bodyId} open={open}>
-                  {visibleItems.map((item) => (
-                    <SidebarItem key={item.key} item={item} onNavClick={onNavClick} />
-                  ))}
-                </CollapsibleGroupBody>
-              </div>
-            );
-          }
-
-          return (
-            <div key={section.key} className="mb-1">
-              <p className="px-2 pt-3 pb-1 text-[13px] font-bold uppercase tracking-widest select-none text-sidebar-foreground/65">
-                {section.labelSv}
-              </p>
-              <div className="space-y-0.5">
-                {visibleItems.map((item) => (
-                  <SidebarItem
-                    key={item.key}
-                    item={item.key === 'communication' && commBadge > 0 ? { ...item, badge: commBadge } : item}
-                    onNavClick={onNavClick}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })}
+        {visibleOf(NAVIGATION).map((item) => (
+          <SidebarItem
+            key={item.key}
+            item={item.key === 'elever' && commBadge > 0 ? { ...item, badge: commBadge } : item}
+            onNavClick={onNavClick}
+          />
+        ))}
         </div>
         <div
           aria-hidden="true"
@@ -462,9 +278,11 @@ function SidebarItem({
   onNavClick?: (() => void) | undefined;
 }) {
   const location = useLocation();
-  const isActive = item.path
-    ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
-    : false;
+  const isActive = item.matchFn
+    ? item.matchFn(location.pathname)
+    : item.path
+      ? location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+      : false;
   const Icon = item.icon;
 
   if (item.comingSoon) {

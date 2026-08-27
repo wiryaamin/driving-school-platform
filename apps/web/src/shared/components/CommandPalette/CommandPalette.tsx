@@ -18,17 +18,15 @@ function useDebounce<T>(value: T, delay: number): T {
 
 // ─── Flat navigation items ────────────────────────────────────────────────────
 
-const NAV_ITEMS = NAVIGATION.flatMap((section) =>
-  section.items
-    .filter((item) => item.path && !item.comingSoon)
-    .map((item) => ({
-      key:   item.key,
-      label: item.labelSv,
-      path:  item.path!,
-      icon:  item.icon,
-      group: section.labelSv,
-    })),
-);
+const NAV_ITEMS = NAVIGATION
+  .filter((item) => item.path && !item.comingSoon)
+  .map((item) => ({
+    key:   item.key,
+    label: item.labelSv,
+    path:  item.path!,
+    icon:  item.icon,
+    group: 'Arbetsytor',
+  }));
 
 // ─── CommandPalette ───────────────────────────────────────────────────────────
 

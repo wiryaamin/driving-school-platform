@@ -2,6 +2,10 @@ import { lazy, Suspense } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { Navigate } from 'react-router-dom';
 import { AppShellLayout } from '@app/layouts/AppShell.js';
+import { ElevWorkspaceLayout } from '@app/layouts/ElevWorkspaceLayout.js';
+import { EkonomiWorkspaceLayout } from '@app/layouts/EkonomiWorkspaceLayout.js';
+import { PersonalResurserWorkspaceLayout } from '@app/layouts/PersonalResurserWorkspaceLayout.js';
+import { SystemWorkspaceLayout } from '@app/layouts/SystemWorkspaceLayout.js';
 import { AuthLayout } from '@app/layouts/AuthLayout.js';
 import { ProtectedRoute } from '@shared/components/guards/ProtectedRoute.js';
 import { PlatformAdminRoute } from '@shared/components/guards/PlatformAdminRoute.js';
@@ -888,21 +892,140 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      // ── Elever workspace ─────────────────────────────────────────────────
+      // Elever/Företagselever/Kommunikation/Dokumentarkiv are four
+      // pre-existing, independent top-level route trees (no shared URL
+      // prefix) — grouped here under one pathless layout route purely for
+      // the shared tab bar. No path changed, so every existing deep link
+      // keeps working exactly as before.
       {
-        path: 'students/inactive',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <InaktivaElevPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'students/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <StudentsPage />
-          </Suspense>
-        ),
+        element: <ElevWorkspaceLayout />,
+        children: [
+          {
+            path: 'students/inactive',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <InaktivaElevPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'students/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <StudentsPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'corporate/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <CorporatePage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'kommunikation',
+            element: <Navigate to="/communication" replace />,
+          },
+          {
+            path: 'communication',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <CommunicationHubPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/compose',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ComposeMessagePage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/log',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <DeliveryLogPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/settings',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ChannelSettingsPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/templates',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <TemplateManagementPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/activity',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ActivityCenterPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/rules',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <NotificationRulesPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/queue',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <QueueMonitorPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/analytics',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <CommAnalyticsPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/notification-log',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <NotificationLogPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'communication/preferences',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <NotificationPreferencesPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'documents',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <DocumentsPage />
+              </Suspense>
+            ),
+          },
+        ],
       },
       {
         path: 'scheduling/*',
@@ -920,37 +1043,51 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      // ── Ekonomi / Bokföring workspace ────────────────────────────────────
       {
-        path: 'finance/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <FinancePage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'packages/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <PackagePage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'campaigns/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <CampaignPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'corporate/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <CorporatePage />
-          </Suspense>
-        ),
+        element: <EkonomiWorkspaceLayout />,
+        children: [
+          {
+            path: 'finance/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <FinancePage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'packages/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <PackagePage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'campaigns/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <CampaignPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'orders',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <OrderListPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'orders/:id',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <OrderDetailPage />
+              </Suspense>
+            ),
+          },
+        ],
       },
       {
         path: 'leads',
@@ -973,30 +1110,6 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <CurriculumTemplatePage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'logs',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <LogsPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'resources',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <ResourcesPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'regulatory',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <RegulatoryPage />
           </Suspense>
         ),
       },
@@ -1041,99 +1154,6 @@ export const routes: RouteObject[] = [
         ),
       },
       {
-        path: 'kommunikation',
-        element: <Navigate to="/communication" replace />,
-      },
-      {
-        path: 'communication',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <CommunicationHubPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/compose',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <ComposeMessagePage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/log',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <DeliveryLogPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/settings',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <ChannelSettingsPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/templates',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <TemplateManagementPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/activity',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <ActivityCenterPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/rules',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <NotificationRulesPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/queue',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <QueueMonitorPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/analytics',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <CommAnalyticsPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/notification-log',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <NotificationLogPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'communication/preferences',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <NotificationPreferencesPage />
-          </Suspense>
-        ),
-      },
-
-      {
         path: 'settings/data-migration',
         element: (
           <Suspense fallback={<LoadingScreen />}>
@@ -1146,24 +1166,6 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <MigrationDetailPage />
-          </Suspense>
-        ),
-      },
-
-      // ── Order management workspace ───────────────────────────────────────
-      {
-        path: 'orders',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <OrderListPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'orders/:id',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <OrderDetailPage />
           </Suspense>
         ),
       },
@@ -1186,44 +1188,66 @@ export const routes: RouteObject[] = [
         ),
       },
 
-      // ── Documents ─────────────────────────────────────────────────────────
+      // ── System workspace ─────────────────────────────────────────────────
       {
-        path: 'documents',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <DocumentsPage />
-          </Suspense>
-        ),
+        element: <SystemWorkspaceLayout />,
+        children: [
+          {
+            path: 'nyheter',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <NyheterPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'teorifragor',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <TeorifragorPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'logs',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <LogsPage />
+              </Suspense>
+            ),
+          },
+        ],
       },
 
-      // ── Nyheter (Announcements) ────────────────────────────────────────────
+      // ── Personal & Resurser workspace ────────────────────────────────────
       {
-        path: 'nyheter',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <NyheterPage />
-          </Suspense>
-        ),
-      },
-
-      // ── Körkortsfrågor (Theory quiz question bank) ─────────────────────────
-      {
-        path: 'teorifragor',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <TeorifragorPage />
-          </Suspense>
-        ),
-      },
-
-      // ── Staff management ───────────────────────────────────────────────────
-      {
-        path: 'staff',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <StaffPage />
-          </Suspense>
-        ),
+        element: <PersonalResurserWorkspaceLayout />,
+        children: [
+          {
+            path: 'staff',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <StaffPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'resources',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ResourcesPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'regulatory',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <RegulatoryPage />
+              </Suspense>
+            ),
+          },
+        ],
       },
 
       // ── Guardians list ─────────────────────────────────────────────────────
