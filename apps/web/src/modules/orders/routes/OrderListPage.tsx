@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Search, ShoppingCart, ChevronLeft, ChevronRight } from 'lucide-react';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
+import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import {
   useOrderList,
   orderStatusLabel,
@@ -66,16 +67,12 @@ export function OrderListPage() {
 
   return (
     <PermissionGate permission={Permissions.ORDERS_READ}>
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Orders</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {total > 0 ? `${total} orders` : isLoading ? 'Laddar…' : 'Inga orders'}
-          </p>
-        </div>
-      </div>
+    <PageLayout>
+      <PageHeader
+        title="Ordrar"
+        description={total > 0 ? `${total} ordrar` : isLoading ? 'Laddar…' : 'Inga ordrar'}
+      />
+      <PageContent>
 
       {/* Search + Filter */}
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -223,7 +220,8 @@ export function OrderListPage() {
           )}
         </>
       )}
-    </div>
+      </PageContent>
+    </PageLayout>
     </PermissionGate>
   );
 }

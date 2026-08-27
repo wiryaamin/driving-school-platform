@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ExternalLink, Plus, RefreshCw, ShieldCheck, Upload, Loader2 } from 'lucide-react';
+import { ExternalLink, Plus, RefreshCw, Upload, Loader2 } from 'lucide-react';
 import type { ColumnDef } from '@platform/ui';
 import {
   Button, Input, DataTable, Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -389,14 +389,7 @@ export function RegulatoryPage() {
 
   return (
     <div className="max-w-screen-2xl mx-auto">
-      <div className="flex items-center justify-between pb-3">
-        <nav className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Hem</span>
-          <span className="text-muted-foreground/50">/</span>
-          <span className="font-medium text-foreground flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4" /> Myndighetsärenden
-          </span>
-        </nav>
+      <div className="flex items-center justify-end pt-4 pb-3">
         <PermissionGate permission={Permissions.REGULATORY_WORKFLOW_CREATE}>
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="w-3.5 h-3.5 mr-1.5" /> Nytt ärende

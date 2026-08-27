@@ -20,21 +20,12 @@ const TABS: { key: LogTab; label: string }[] = [
 
 export function LogsPage() {
   const [activeTab, setActiveTab] = useState<LogTab>('booking');
-  const current = TABS.find((t) => t.key === activeTab);
 
   return (
-    <div className="max-w-screen-2xl mx-auto">
+    <div className="max-w-screen-2xl mx-auto pt-4">
 
-      {/* Breadcrumb */}
-      <div className="pb-3">
-        <nav className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Loggar</span>
-          <span className="text-muted-foreground/50">/</span>
-          <span className="font-medium text-foreground">{current?.label ?? ''}</span>
-        </nav>
-      </div>
-
-      {/* Sub-tab bar */}
+      {/* Sub-tab bar — the outer System-workspace tab bar already labels this
+          page "Loggar"; this row picks which of the six log types shows. */}
       <div className="flex items-end border-b border-border mb-5 overflow-x-auto">
         {TABS.map((tab) => (
           <button
