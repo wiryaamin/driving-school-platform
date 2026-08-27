@@ -173,19 +173,7 @@ export function StudentDashboardPage() {
   ];
 
   return (
-    <div className="max-w-screen-2xl mx-auto space-y-6">
-
-      {/* ── Breadcrumb ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between pb-3 border-b border-border">
-        <nav className="flex items-center gap-1.5 text-sm" aria-label="Brödsmulor">
-          <span className="text-muted-foreground">Hem</span>
-          <span className="text-muted-foreground/50">/</span>
-          <span className="font-medium text-foreground">Kunder & Elever</span>
-        </nav>
-        <button type="button" className="text-xs text-primary hover:underline focus:outline-none">
-          Ge feedback
-        </button>
-      </div>
+    <div className="w-full px-4 pt-4 space-y-6">
 
       {/* ── Header + actions ────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4">

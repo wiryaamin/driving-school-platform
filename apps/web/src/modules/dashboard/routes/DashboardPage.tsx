@@ -4,7 +4,7 @@ import {
   Clock, UserPlus, CalendarPlus, UserCheck, RefreshCcw, ChevronRight, Search, CalendarCheck,
   MessageSquare, CalendarDays, LayoutGrid, ListFilter, Bell, SlidersHorizontal, ClipboardList,
 } from 'lucide-react';
-import { useNavigate, Link, NavLink } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useSession } from '@shared/hooks/useSession.js';
 import { formatTime, humanizeIdentifier, formatChannelLabel } from '@platform/utils';
 import { usePermissions } from '@core/rbac/hooks.js';
@@ -24,15 +24,6 @@ import type { Notification } from '@shared/hooks/useNotificationBell.js';
 import type { LessonSlot, Instructor } from '@platform/types';
 import { useLeadsList, deriveLeadCounts } from '@modules/leads/index.js';
 import { useEnrollmentList } from '@modules/enrollments/index.js';
-
-// ─── In-page navigation tabs ──────────────────────────────────────────────────
-
-const DASHBOARD_NAV_TABS = [
-  { label: 'Kunder',         path: '/students'        },
-  { label: 'Företagskunder', path: '/corporate'       },
-  { label: 'Mitt schema',    path: '/scheduling/mine' },
-  { label: 'Bokningsschema', path: '/scheduling'      },
-] as const;
 
 // ─── Greeting ─────────────────────────────────────────────────────────────────
 
@@ -295,66 +286,7 @@ export function DashboardPage() {
   const todayLabel = new Date().toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
-    <div className="max-w-screen-2xl mx-auto">
-
-      {/* ── In-page navigation header ──────────────────────────────────────── */}
-      <div className="-mx-4 md:-mx-5 -mt-4 md:-mt-5 mb-5 bg-card border-b border-border">
-        <div className="px-4 md:px-6 flex items-center gap-0.5 h-12 overflow-x-auto">
-
-          {/* Brand mark + page title */}
-          <div className="flex items-center gap-2 mr-4 shrink-0">
-            <div className="w-7 h-7 rounded-lg bg-primary/10 grid grid-cols-2 gap-px p-1.5">
-              <div className="rounded-[1px] bg-primary/70" />
-              <div className="rounded-[1px] bg-primary/70" />
-              <div className="rounded-[1px] bg-primary/70" />
-              <div className="rounded-[1px] bg-primary/70" />
-            </div>
-            <span className="text-sm font-bold text-foreground whitespace-nowrap">Översikt</span>
-          </div>
-
-          {/* Nav tabs */}
-          {DASHBOARD_NAV_TABS.map((tab) => (
-            <NavLink
-              key={tab.path}
-              to={tab.path}
-              className={({ isActive }) => cn(
-                'px-3 h-12 flex items-center text-sm font-medium border-b-2 whitespace-nowrap transition-colors shrink-0',
-                isActive
-                  ? 'text-primary border-primary'
-                  : 'text-muted-foreground border-transparent hover:text-foreground hover:border-border',
-              )}
-            >
-              {tab.label}
-            </NavLink>
-          ))}
-
-          <div className="flex-1" />
-
-          {/* Right: search + new customer */}
-          <div className="flex items-center gap-2 pl-4 shrink-0">
-            <button
-              onClick={() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))}
-              className="hidden sm:flex items-center gap-2 h-8 px-3 rounded-lg border border-border bg-muted/40 text-xs text-muted-foreground hover:bg-muted/60 transition-colors"
-            >
-              <Search className="w-3.5 h-3.5 shrink-0" />
-              <span>Sök kund...</span>
-              <kbd className="ml-1 text-[10px] font-mono bg-background border border-border px-1.5 py-0.5 rounded text-muted-foreground/60">
-                Ctrl+K
-              </kbd>
-            </button>
-
-            <PermissionGate permission="students:student:create">
-              <button
-                onClick={() => navigate('/students')}
-                className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shrink-0"
-              >
-                <UserPlus className="w-3.5 h-3.5 shrink-0" />
-                Ny kund
-              </button>
-            </PermissionGate>
-          </div>
-        </div>
-      </div>
+    <div className="w-full px-4 pt-4">
 
       <div className="space-y-5">
 
