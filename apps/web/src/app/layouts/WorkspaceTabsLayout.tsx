@@ -48,13 +48,15 @@ export function WorkspaceTabsLayout({ tabs, title }: WorkspaceTabsLayoutProps) {
   return (
     <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
 
+      {/* Workspace title — its own row, top-left of the workspace */}
+      {title && (
+        <div className="px-4 pt-3 pb-1 shrink-0 bg-card">
+          <h1 className="text-lg font-semibold text-foreground">{title}</h1>
+        </div>
+      )}
+
       {/* Module navigation bar */}
       <div className="flex items-center border-b border-border bg-card shrink-0 px-2">
-        {title && (
-          <span className="pr-3 mr-1 border-r border-border text-sm font-semibold text-foreground shrink-0">
-            {title}
-          </span>
-        )}
         <div className="flex items-center flex-1 min-w-0 overflow-x-auto scrollbar-none">
           {visibleTabs.map((tab) => (
             <button

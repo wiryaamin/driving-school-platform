@@ -8,6 +8,8 @@ const TABS: WorkspaceTab[] = [
   { label: 'Dokumentarkiv',   path: '/documents',     permission: 'documents:document:read' as Permission },
 ];
 
+// Displayed page title is "Kunder" — the tab itself stays "Elever" per the
+// approved workspace tab naming, this only changes the workspace heading.
 export function ElevWorkspaceLayout() {
-  return <WorkspaceTabsLayout tabs={TABS} title="Elever" />;
+  return <WorkspaceTabsLayout tabs={TABS} title="Kunder" />;
 }
