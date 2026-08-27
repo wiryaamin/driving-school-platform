@@ -1,3 +1,4 @@
+import { Users } from 'lucide-react';
 import type { Permission } from '@core/rbac/permissions.js';
 import { WorkspaceTabsLayout, type WorkspaceTab } from './WorkspaceTabsLayout.js';
 
@@ -11,5 +12,5 @@ const TABS: WorkspaceTab[] = [
 // Displayed page title is "Kunder" — the tab itself stays "Elever" per the
 // approved workspace tab naming, this only changes the workspace heading.
 export function ElevWorkspaceLayout() {
-  return <WorkspaceTabsLayout tabs={TABS} title="Kunder" />;
+  return <WorkspaceTabsLayout tabs={TABS} title="Kunder" titleIcon={Users} />;
 }

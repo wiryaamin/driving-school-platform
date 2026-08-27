@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom';
+import { PieChart, BookOpen } from 'lucide-react';
 import type { Permission } from '@core/rbac/permissions.js';
 import { WorkspaceTabsLayout, type WorkspaceTab } from './WorkspaceTabsLayout.js';
 
@@ -41,6 +42,6 @@ export function EkonomiWorkspaceLayout() {
   );
 
   return isBokforing
-    ? <WorkspaceTabsLayout tabs={BOKFORING_TABS} title="Bokföring" />
-    : <WorkspaceTabsLayout tabs={EKONOMI_TABS} title="Ekonomi" />;
+    ? <WorkspaceTabsLayout tabs={BOKFORING_TABS} title="Bokföring" titleIcon={BookOpen} />
+    : <WorkspaceTabsLayout tabs={EKONOMI_TABS} title="Ekonomi" titleIcon={PieChart} />;
 }

@@ -1,3 +1,4 @@
+import { Megaphone } from 'lucide-react';
 import { WorkspaceTabsLayout, type WorkspaceTab } from './WorkspaceTabsLayout.js';
 
 const TABS: WorkspaceTab[] = [
@@ -7,5 +8,5 @@ const TABS: WorkspaceTab[] = [
 ];
 
 export function SystemWorkspaceLayout() {
-  return <WorkspaceTabsLayout tabs={TABS} title="System" />;
+  return <WorkspaceTabsLayout tabs={TABS} title="System" titleIcon={Megaphone} />;
 }

@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
+import type { LucideIcon } from 'lucide-react';
 
 type Theme = 'light' | 'dark';
+
+export interface PageTitle {
+  text: string;
+  icon?: LucideIcon | undefined;
+}
 
 // ─── State Shape ──────────────────────────────────────────────────────────────
 
@@ -10,10 +16,10 @@ interface UiState {
   activeModuleKey: string | null;
   isMobileMenuOpen: boolean;
   theme: Theme;
-  /** Current workspace's page title, rendered by TopBar to the left of the
-   * search pill — set by WorkspaceTabsLayout, cleared on unmount. Ephemeral,
-   * not persisted. */
-  pageTitle: string | null;
+  /** Current workspace's page title (+ optional icon), rendered by TopBar to
+   * the left of the search pill — set by WorkspaceTabsLayout, cleared on
+   * unmount. Ephemeral, not persisted. */
+  pageTitle: PageTitle | null;
 }
 
 interface UiActions {
@@ -24,7 +30,7 @@ interface UiActions {
   closeMobileMenu: () => void;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
-  setPageTitle: (title: string | null) => void;
+  setPageTitle: (title: PageTitle | null) => void;
 }
 
 type UiStore = UiState & UiActions;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Settings, Search } from 'lucide-react';
+import { Settings, Search, Calendar } from 'lucide-react';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { cn } from '@/lib/utils.js';
@@ -52,7 +52,7 @@ export function SchedulingWorkspaceLayout() {
   // app/layouts/WorkspaceTabsLayout.tsx for the same pattern used by every
   // other tenant-dashboard workspace.
   useEffect(() => {
-    setPageTitle('Schema');
+    setPageTitle({ text: 'Schema', icon: Calendar });
     return () => setPageTitle(null);
   }, [setPageTitle]);
 

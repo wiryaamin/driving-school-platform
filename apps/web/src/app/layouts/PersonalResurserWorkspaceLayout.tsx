@@ -1,3 +1,4 @@
+import { UserCheck } from 'lucide-react';
 import type { Permission } from '@core/rbac/permissions.js';
 import { WorkspaceTabsLayout, type WorkspaceTab } from './WorkspaceTabsLayout.js';
 
@@ -13,5 +14,5 @@ const TABS: WorkspaceTab[] = [
 ];
 
 export function PersonalResurserWorkspaceLayout() {
-  return <WorkspaceTabsLayout tabs={TABS} title="Personal & Resurser" />;
+  return <WorkspaceTabsLayout tabs={TABS} title="Personal & Resurser" titleIcon={UserCheck} />;
 }

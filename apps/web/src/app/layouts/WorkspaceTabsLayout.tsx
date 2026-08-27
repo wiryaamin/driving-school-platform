@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { usePermissions } from '@core/rbac/hooks.js';
 import type { Permission } from '@core/rbac/permissions.js';
@@ -30,8 +31,11 @@ export interface WorkspaceTab {
 }
 
 interface WorkspaceTabsLayoutProps {
-  tabs:  WorkspaceTab[];
-  title?: string | undefined;
+  tabs:      WorkspaceTab[];
+  title?:    string | undefined;
+  /** Icon shown next to the title in the TopBar — pass the same icon used
+   * for this workspace's sidebar item for visual consistency. */
+  titleIcon?: LucideIcon | undefined;
 }
 
 function isTabActive(tab: WorkspaceTab, pathname: string): boolean {
@@ -40,7 +44,7 @@ function isTabActive(tab: WorkspaceTab, pathname: string): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
-export function WorkspaceTabsLayout({ tabs, title }: WorkspaceTabsLayoutProps) {
+export function WorkspaceTabsLayout({ tabs, title, titleIcon }: WorkspaceTabsLayoutProps) {
   const navigate     = useNavigate();
   const location      = useLocation();
   const { can }       = usePermissions();
@@ -51,9 +55,9 @@ export function WorkspaceTabsLayout({ tabs, title }: WorkspaceTabsLayoutProps) {
   // context. Cleared on unmount so navigating to a title-less page doesn't
   // leave stale text behind.
   useEffect(() => {
-    setPageTitle(title ?? null);
+    setPageTitle(title ? { text: title, icon: titleIcon } : null);
     return () => setPageTitle(null);
-  }, [title, setPageTitle]);
+  }, [title, titleIcon, setPageTitle]);
 
   const visibleTabs = tabs.filter((tab) => tab.permission == null || can(tab.permission));
 

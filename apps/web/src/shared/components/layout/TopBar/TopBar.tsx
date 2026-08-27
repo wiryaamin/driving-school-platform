@@ -239,8 +239,9 @@ export function TopBar() {
       {/* Left section: workspace title + location picker + ⌘K search pill */}
       <div className="flex-1 flex items-center gap-2 min-w-0">
         {pageTitle && (
-          <h1 className="text-sm font-semibold text-foreground truncate shrink-0 max-w-[40%]">
-            {pageTitle}
+          <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground truncate shrink-0 max-w-[40%]">
+            {pageTitle.icon && <pageTitle.icon className="w-4 h-4 shrink-0 text-muted-foreground" />}
+            <span className="truncate">{pageTitle.text}</span>
           </h1>
         )}
         <LocationPicker />
