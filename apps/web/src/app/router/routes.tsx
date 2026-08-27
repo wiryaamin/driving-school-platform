@@ -170,7 +170,6 @@ const InstructorsPage = lazy(() => import('@modules/instructors/index.js').then(
 const FinancePage = lazy(() => import('@modules/finance/index.js').then(m => ({ default: m.FinancePage })));
 const CorporatePage = lazy(() => import('@modules/corporate/index.js').then(m => ({ default: m.CorporatePage })));
 const LogsPage = lazy(() => import('@modules/logs/index.js').then(m => ({ default: m.LogsPage })));
-const WatchlistPage  = lazy(() => import('@modules/watchlist/index.js').then(m => ({ default: m.WatchlistPage })));
 const ClassListPage  = lazy(() => import('@modules/classlist/index.js').then(m => ({ default: m.ClassListPage })));
 const InsightsPage   = lazy(() => import('@modules/insights/index.js').then(m => ({ default: m.InsightsPage })));
 const TasksPage      = lazy(() => import('@modules/tasks/index.js').then(m => ({ default: m.TasksPage })));
@@ -998,14 +997,6 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <RegulatoryPage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'watchlist',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <WatchlistPage />
           </Suspense>
         ),
       },

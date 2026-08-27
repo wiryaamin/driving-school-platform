@@ -5,6 +5,7 @@ import { MySchedulePage } from './MySchedulePage.js';
 import { BookingListPage } from './BookingListPage.js';
 import { BokningarPage } from './BokningarPage.js';
 import { WaitlistPage } from './WaitlistPage.js';
+import { WatchlistPage } from '@modules/watchlist/index.js';
 import { TrafikPlatsPage } from './TrafikPlatsPage.js';
 import { SchedulingGenerationPage } from './SchedulingGenerationPage.js';
 import { SlotTemplatesPage } from './SlotTemplatesPage.js';
@@ -25,6 +26,7 @@ export function SchedulingPage() {
         <Route path="list" element={<BookingListPage />} />
         <Route path="bokningar" element={<BokningarPage />} />
         <Route path="waitlist" element={<WaitlistPage />} />
+        <Route path="watchlist" element={<WatchlistPage />} />
       </Route>
       <Route path="planner" element={<TrafikPlatsPage />} />
       <Route path="generation" element={<SchedulingGenerationPage />} />

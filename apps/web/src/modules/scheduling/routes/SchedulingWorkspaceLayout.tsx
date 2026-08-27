@@ -16,13 +16,11 @@ import { cn } from '@/lib/utils.js';
 // while each route keeps its own real, bookmarkable URL — this is a layout
 // change only, not a routing/URL change (see SchedulingPage.tsx).
 //
-// Bevakningar (/watchlist) is NOT nested under /scheduling/* — it's a
-// separate, independently-owned route tree. Wrapping it in this shell would
-// mean either duplicating that page under a new nested route or relocating
-// its real route, both explicitly out of scope here. Its tab button
-// intentionally still navigates away from this workspace — an honest
-// reflection of which routes actually belong to the Scheduling domain
-// today. Kunder's tab and Loggar's tab were both removed entirely (not
+// Bevakningar now lives at /scheduling/watchlist (moved from the old
+// standalone /watchlist route) so it renders inside this shell like every
+// other tab instead of navigating away to a standalone page.
+//
+// Kunder's tab and Loggar's tab were both removed entirely (not
 // just left navigating away) for the same reason: each duplicated a
 // canonical entry already in the main Tenant Workspace sidebar (/students,
 // /logs) without adding anything scheduling-specific; those canonical
@@ -32,7 +30,7 @@ const MODULE_NAV_TABS = [
   { label: 'Mitt schema',    path: '/scheduling/mine'      },
   { label: 'Bokningsschema', path: '/scheduling'           },
   { label: 'Bokningslista',  path: '/scheduling/bokningar' },
-  { label: 'Bevakningar',    path: '/watchlist'            },
+  { label: 'Bevakningar',    path: '/scheduling/watchlist' },
   { label: 'Väntelista',     path: '/scheduling/waitlist'  },
   { label: 'Passöversikt',   path: '/scheduling/list'      },
 ] as const;
