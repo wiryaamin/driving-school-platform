@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -8,9 +8,11 @@ import {
   Button, toast,
 } from '@platform/ui';
 import { AlertTriangle } from 'lucide-react';
+import { EMPTY_ANSWERS, type Answers } from '@modules/trial-onboarding/index.js';
 import { useCreateOrg } from '../hooks/usePlatformOrgMutations.js';
 import { useAdminEmailAvailability, useOrgNumberAvailability } from '../hooks/useAdminEmailAvailability.js';
 import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
+import { BusinessSetupSection } from './BusinessSetupSection.js';
 
 type FormValues = ProvisioningFormValues;
 
@@ -55,6 +57,17 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
   const orgNumberCheck = useOrgNumberAvailability(orgNumber, open);
   const orgNumberBlocked = orgNumberCheck === 'taken';
 
+  // Canonical business setup (Tenant Registration Unification, 2026-08-28)
+  // — optional, off by default so the fast "just create the shell org"
+  // path stays exactly as quick as before. legal_name/org_number and
+  // contact_first_name/contact_last_name are deliberately NOT collected in
+  // BusinessSetupSection — they're merged in from this dialog's own form
+  // values at submit time, since CreateOrgDialog already asks for them and
+  // asking twice would be exactly the duplicate data entry this exists to
+  // remove.
+  const [includeBusinessSetup, setIncludeBusinessSetup] = useState(false);
+  const [businessSetup, setBusinessSetup] = useState<Answers>(EMPTY_ANSWERS);
+
   // Reset trial_days when switching away from trial
   useEffect(() => {
     if (!isTrial) form.setValue('trial_days', 30);
@@ -63,7 +76,11 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
   // Reused across multiple opens without unmounting — clear any previously
   // typed values each time the dialog (re-)opens.
   useEffect(() => {
-    if (open) form.reset(EMPTY_DEFAULTS);
+    if (open) {
+      form.reset(EMPTY_DEFAULTS);
+      setIncludeBusinessSetup(false);
+      setBusinessSetup(EMPTY_ANSWERS);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -78,10 +95,25 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
         admin_first_name:  values.admin_first_name,
         admin_last_name:   values.admin_last_name,
         admin_email:       values.admin_email,
+        business_setup: includeBusinessSetup
+          ? {
+              ...businessSetup,
+              legal_name: values.legal_name,
+              org_number: values.org_number || '',
+              contact_first_name: values.admin_first_name,
+              contact_last_name: values.admin_last_name,
+            }
+          : null,
       },
       {
-        onSuccess: () => {
-          toast({ title: 'Organisation skapad', description: `${values.name} — inbjudan skickas till ${values.admin_email}` });
+        onSuccess: (result) => {
+          const setup = result.business_setup;
+          const setupNote = setup
+            ? setup.ok
+              ? ` — verksamhet konfigurerad (${setup.priced_lesson_types ?? 0} prissatta lektionstyper, ${setup.vehicles_created ?? 0} fordon, ${setup.instructors_created ?? 0} instruktörer)`
+              : ` — verksamhetskonfiguration misslyckades (${setup.error ?? 'okänt fel'}), organisationen skapades ändå`
+            : '';
+          toast({ title: 'Organisation skapad', description: `${values.name} — inbjudan skickas till ${values.admin_email}${setupNote}` });
           onClose();
         },
         onError: (err) => {
@@ -102,7 +134,7 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={open => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Ny organisation</DialogTitle>
         </DialogHeader>
@@ -265,6 +297,34 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
               <p className="text-xs text-muted-foreground mt-2">
                 Ett konto skapas med denna e-postadress som ägare (org_owner) av organisationen.
               </p>
+            </div>
+
+            {/* Canonical business setup — same fields/provisioning engine as
+                self-service trial signup (Tenant Registration Unification).
+                Off by default so a bare shell org can still be created just
+                as fast as before. */}
+            <div className="pt-2 border-t border-border">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeBusinessSetup}
+                  onChange={(e) => setIncludeBusinessSetup(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-border"
+                />
+                <span>
+                  <span className="text-sm font-medium text-foreground block">Konfigurera verksamhet nu</span>
+                  <span className="text-xs text-muted-foreground">
+                    Fyll i filialer, behörigheter, priser, fordon, instruktörer, kommunikation och ekonomi direkt —
+                    tenanten blir fullt initierad utan att behöva slutföra Kom igång själv.
+                  </span>
+                </span>
+              </label>
+
+              {includeBusinessSetup && (
+                <div className="mt-3">
+                  <BusinessSetupSection value={businessSetup} onChange={setBusinessSetup} />
+                </div>
+              )}
             </div>
 
             <DialogFooter className="pt-2">

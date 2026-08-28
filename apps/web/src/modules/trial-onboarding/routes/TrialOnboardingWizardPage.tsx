@@ -1,15 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Loader2, CheckCircle2, ArrowRight, ArrowLeft } from 'lucide-react';
+import { Loader2, CheckCircle2, ArrowRight, ArrowLeft, AlertTriangle } from 'lucide-react';
 import { Button, Input, Toaster, toast } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
-import { LICENCE_CATEGORY_OPTIONS } from '@modules/tenant-onboarding/hooks/useTenantOnboarding.js';
+import {
+  LICENCE_CATEGORY_OPTIONS, TEACHING_LANGUAGE_OPTIONS, PAYMENT_METHOD_OPTIONS,
+  EMPTY_ANSWERS, normalizeAnswers, resizeArray,
+  newVehicleEntry, newInstructorEntry, newStaffEntry, newBranchEntry,
+  EMAIL_RE, POSTAL_RE, ORG_NUMBER_RE,
+  type Answers, type VehicleEntry, type InstructorEntry, type StaffEntry, type BranchEntry,
+} from '../lib/businessSetupAnswers.js';
+import {
+  Field, Pill, VehicleEntryCard, InstructorEntryCard, StaffEntryCard, BranchEntryCard,
+} from '../components/BusinessSetupFieldKit.js';
 import {
   getTrialSession, saveTrialAnswers, completeTrial, TrialSignupError,
   type CompleteTrialResult,
 } from '../lib/trialSignupApi.js';
 
-// ─── Answers shape — mirrors CompleteAnswers in trial-signup/index.ts ─────────
+// ─── Answers shape — mirrors CompleteAnswers in ──────────────────────────────
+// supabase/functions/_shared/business-setup-provisioning.ts
 //
 // Every array below (vehicles/instructor_entries/admin_entries/
 // receptionist_entries/branch_entries) collects the SAME fields the normal
@@ -17,220 +27,23 @@ import {
 // InstructorForm, invite-user's "Bjud in", LocationsSettingsPage — so
 // handleComplete can create the real platform object directly, not a
 // simplified aggregate substitute (2026-08-08, onboarding consistency fix).
+//
+// Types/factories/field-kit components extracted to shared modules
+// (2026-08-28, Tenant Registration Unification) so Platform Admin's
+// BusinessSetupSection collects the identical canonical model — see
+// lib/businessSetupAnswers.ts and components/BusinessSetupFieldKit.tsx.
 
-interface VehicleEntry {
-  registration_number: string; make: string; model: string; model_year: number;
-  transmission: 'manual' | 'automatic' | 'both'; fuel_type: string; seats: number;
-  registration_expires_at: string; insurance_expires_at: string; color: string;
-}
-interface InstructorEntry { first_name: string; last_name: string; email: string; phone: string }
-interface StaffEntry { first_name: string; last_name: string; email: string }
-interface BranchEntry { name: string; address_line1: string; postal_code: string; city: string; phone: string; email: string }
-
-interface Answers {
-  contact_first_name: string; contact_last_name: string;
-  legal_name: string; org_number: string; vat_number: string;
-  country: string; default_language: string; timezone: string;
-  address_line1: string; postal_code: string; city: string;
-  branches: number; branch_entries: BranchEntry[];
-  licence_categories: string[]; standard_lesson_duration_minutes: number;
-  lesson_type_durations: Record<string, number>;
-  standard_lesson_price_sek: number;
-  teaching_languages: string[];
-  vehicle_count: number; vehicle_transmission: string; vehicles: VehicleEntry[];
-  administrators: number; admin_entries: StaffEntry[];
-  receptionists: number; receptionist_entries: StaffEntry[];
-  instructors: number; instructor_entries: InstructorEntry[];
-  working_hours_start: string; working_hours_end: string; weekend_schedule: string;
-  channels: { email: boolean; sms: boolean; whatsapp: boolean; invoice_notifications: boolean };
-  vat_period: string; payment_methods: string[];
-}
-
-const CURRENT_YEAR = new Date().getFullYear();
-function nextYearIso(): string {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() + 1);
-  return d.toISOString().slice(0, 10);
-}
-function newVehicleEntry(defaultTransmission: string): VehicleEntry {
-  return {
-    registration_number: '', make: '', model: '', model_year: CURRENT_YEAR,
-    transmission: defaultTransmission === 'automatic' || defaultTransmission === 'both' ? defaultTransmission : 'manual',
-    fuel_type: 'gasoline', seats: 5,
-    registration_expires_at: nextYearIso(), insurance_expires_at: nextYearIso(),
-    color: '',
-  };
-}
-function newInstructorEntry(): InstructorEntry { return { first_name: '', last_name: '', email: '', phone: '' }; }
-function newStaffEntry(): StaffEntry { return { first_name: '', last_name: '', email: '' }; }
-function newBranchEntry(): BranchEntry { return { name: '', address_line1: '', postal_code: '', city: '', phone: '', email: '' }; }
-
-function resizeArray<T>(arr: T[], count: number, factory: () => T): T[] {
-  if (count === arr.length) return arr;
-  if (count < arr.length) return arr.slice(0, count);
-  return [...arr, ...Array.from({ length: count - arr.length }, factory)];
-}
-
-function normalizeAnswers(raw: Partial<Answers>): Answers {
-  const merged: Answers = { ...EMPTY_ANSWERS, ...raw };
-  merged.vehicles = resizeArray(Array.isArray(raw.vehicles) ? raw.vehicles : [], merged.vehicle_count, () => newVehicleEntry(merged.vehicle_transmission));
-  merged.instructor_entries = resizeArray(Array.isArray(raw.instructor_entries) ? raw.instructor_entries : [], merged.instructors, newInstructorEntry);
-  merged.admin_entries = resizeArray(Array.isArray(raw.admin_entries) ? raw.admin_entries : [], Math.max(0, merged.administrators - 1), newStaffEntry);
-  merged.receptionist_entries = resizeArray(Array.isArray(raw.receptionist_entries) ? raw.receptionist_entries : [], merged.receptionists, newStaffEntry);
-  merged.branch_entries = resizeArray(Array.isArray(raw.branch_entries) ? raw.branch_entries : [], Math.max(0, merged.branches - 1), newBranchEntry);
-  // Sessions saved before per-type duration existed (or a category picked up
-  // since the last save) fall back to the global default here — never a
-  // missing/undefined duration for a selected category.
-  const durations: Record<string, number> = { ...merged.lesson_type_durations };
-  for (const cat of merged.licence_categories) {
-    if (!durations[cat]) durations[cat] = merged.standard_lesson_duration_minutes;
-  }
-  merged.lesson_type_durations = durations;
-  return merged;
-}
-
-const EMPTY_ANSWERS: Answers = {
-  contact_first_name: '', contact_last_name: '',
-  legal_name: '', org_number: '', vat_number: '',
-  country: 'SE', default_language: 'sv', timezone: 'Europe/Stockholm',
-  address_line1: '', postal_code: '', city: '',
-  branches: 1, branch_entries: [],
-  licence_categories: [], standard_lesson_duration_minutes: 40,
-  lesson_type_durations: {},
-  standard_lesson_price_sek: 0,
-  teaching_languages: ['sv'],
-  vehicle_count: 1, vehicle_transmission: 'manual', vehicles: [newVehicleEntry('manual')],
-  administrators: 1, admin_entries: [],
-  receptionists: 0, receptionist_entries: [],
-  instructors: 1, instructor_entries: [newInstructorEntry()],
-  working_hours_start: '08:00', working_hours_end: '17:00', weekend_schedule: 'closed',
-  channels: { email: true, sms: false, whatsapp: false, invoice_notifications: true },
-  vat_period: 'quarterly', payment_methods: ['invoice'],
-};
-
-const TEACHING_LANGUAGE_OPTIONS = [
-  { value: 'sv', label: 'Svenska' }, { value: 'en', label: 'Engelska' },
-  { value: 'ar', label: 'Arabiska' }, { value: 'ku', label: 'Kurdiska' }, { value: 'other', label: 'Annat' },
-];
-const PAYMENT_METHOD_OPTIONS = [
-  { value: 'invoice', label: 'Faktura' }, { value: 'card', label: 'Kort' }, { value: 'swish', label: 'Swish' },
-];
-const FUEL_TYPE_OPTIONS = [
-  { value: 'gasoline', label: 'Bensin' }, { value: 'diesel', label: 'Diesel' }, { value: 'electric', label: 'El' },
-  { value: 'hybrid', label: 'Hybrid' }, { value: 'plugin_hybrid', label: 'Plug-in hybrid' },
-  { value: 'ethanol', label: 'Etanol' }, { value: 'gas', label: 'Gas' },
-];
 const TOTAL_STEPS = 10;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const POSTAL_RE = /^\d{3}\s?\d{2}$/;
-const selectCls = 'h-9 w-full rounded-md border border-border bg-background px-2.5 text-sm text-foreground';
 
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+// Surfaces the consequence of leaving a Go-Live-Requirement empty (Tenant
+// Registration Audit, P2) — the wizard itself never blocks on these, since
+// 0 vehicles/instructors/channels are all legitimate answers, but a tenant
+// should know they'll see the corresponding Kom igång step still open.
+function WarningNote({ children }: { children: React.ReactNode }) {
   return (
-    <button
-      type="button" onClick={onClick}
-      className={cn(
-        'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors',
-        active ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:border-primary/40',
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Field({ label, error, children }: { label: string; error?: string | undefined; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <label className="text-sm font-medium text-foreground">{label}</label>
-      {children}
-      {error && <p className="text-xs text-destructive font-medium">{error}</p>}
-    </div>
-  );
-}
-
-function VehicleEntryCard({ index, entry, onChange }: { index: number; entry: VehicleEntry; onChange: (patch: Partial<VehicleEntry>) => void }) {
-  return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
-      <p className="text-xs font-semibold text-muted-foreground">Fordon {index + 1}</p>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Registreringsnummer *">
-          <Input value={entry.registration_number} onChange={(e) => onChange({ registration_number: e.target.value.toUpperCase() })} placeholder="ABC123" maxLength={10} className="uppercase" />
-        </Field>
-        <Field label="Årsmodell *">
-          <Input type="number" min={1990} max={CURRENT_YEAR + 1} value={entry.model_year} onChange={(e) => onChange({ model_year: Number(e.target.value) || CURRENT_YEAR })} />
-        </Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Märke *"><Input value={entry.make} onChange={(e) => onChange({ make: e.target.value })} placeholder="Volvo" /></Field>
-        <Field label="Modell *"><Input value={entry.model} onChange={(e) => onChange({ model: e.target.value })} placeholder="V60" /></Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Växellåda">
-          <div className="flex gap-2">
-            <Pill active={entry.transmission === 'manual'} onClick={() => onChange({ transmission: 'manual' })}>Manuell</Pill>
-            <Pill active={entry.transmission === 'automatic'} onClick={() => onChange({ transmission: 'automatic' })}>Automat</Pill>
-            <Pill active={entry.transmission === 'both'} onClick={() => onChange({ transmission: 'both' })}>Båda</Pill>
-          </div>
-        </Field>
-        <Field label="Bränsle">
-          <select className={selectCls} value={entry.fuel_type} onChange={(e) => onChange({ fuel_type: e.target.value })}>
-            {FUEL_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </Field>
-      </div>
-      <Field label="Antal säten *">
-        <Input type="number" min={2} max={9} value={entry.seats} onChange={(e) => onChange({ seats: Number(e.target.value) || 5 })} className="max-w-[120px]" />
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Registrering giltig t.o.m. *"><Input type="date" value={entry.registration_expires_at} onChange={(e) => onChange({ registration_expires_at: e.target.value })} /></Field>
-        <Field label="Försäkring giltig t.o.m. *"><Input type="date" value={entry.insurance_expires_at} onChange={(e) => onChange({ insurance_expires_at: e.target.value })} /></Field>
-      </div>
-    </div>
-  );
-}
-
-function InstructorEntryCard({ index, entry, onChange }: { index: number; entry: InstructorEntry; onChange: (patch: Partial<InstructorEntry>) => void }) {
-  return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
-      <p className="text-xs font-semibold text-muted-foreground">Instruktör {index + 1}</p>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Förnamn *"><Input value={entry.first_name} onChange={(e) => onChange({ first_name: e.target.value })} /></Field>
-        <Field label="Efternamn *"><Input value={entry.last_name} onChange={(e) => onChange({ last_name: e.target.value })} /></Field>
-      </div>
-      <Field label="E-post *"><Input type="email" value={entry.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="namn@trafikskola.se" /></Field>
-      <Field label="Telefon"><Input value={entry.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="Valfritt" /></Field>
-    </div>
-  );
-}
-
-function StaffEntryCard({ label, index, entry, onChange }: { label: string; index: number; entry: StaffEntry; onChange: (patch: Partial<StaffEntry>) => void }) {
-  return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
-      <p className="text-xs font-semibold text-muted-foreground">{label} {index + 1}</p>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Förnamn *"><Input value={entry.first_name} onChange={(e) => onChange({ first_name: e.target.value })} /></Field>
-        <Field label="Efternamn *"><Input value={entry.last_name} onChange={(e) => onChange({ last_name: e.target.value })} /></Field>
-      </div>
-      <Field label="E-post *"><Input type="email" value={entry.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="namn@trafikskola.se" /></Field>
-    </div>
-  );
-}
-
-function BranchEntryCard({ index, entry, onChange }: { index: number; entry: BranchEntry; onChange: (patch: Partial<BranchEntry>) => void }) {
-  return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
-      <p className="text-xs font-semibold text-muted-foreground">Filial {index + 2}</p>
-      <Field label="Namn *"><Input value={entry.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="T.ex. Filial Solna" /></Field>
-      <Field label="Gatuadress *"><Input value={entry.address_line1} onChange={(e) => onChange({ address_line1: e.target.value })} /></Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Postnummer *"><Input value={entry.postal_code} onChange={(e) => onChange({ postal_code: e.target.value })} placeholder="111 22" /></Field>
-        <Field label="Ort *"><Input value={entry.city} onChange={(e) => onChange({ city: e.target.value })} /></Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Telefon"><Input value={entry.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="Valfritt" /></Field>
-        <Field label="E-post"><Input type="email" value={entry.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="Valfritt" /></Field>
-      </div>
+    <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
+      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+      <p className="text-xs text-amber-800 dark:text-amber-400">{children}</p>
     </div>
   );
 }
@@ -379,6 +192,9 @@ export function TrialOnboardingWizardPage() {
       if (!answers.contact_first_name.trim()) errors.contact_first_name = 'Ange ditt förnamn.';
       if (!answers.contact_last_name.trim())  errors.contact_last_name  = 'Ange ditt efternamn.';
       if (!answers.legal_name.trim())         errors.legal_name         = 'Ange organisationens juridiska namn.';
+      if (answers.org_number.trim() && !ORG_NUMBER_RE.test(answers.org_number.trim())) {
+        errors.org_number = 'Ange organisationsnummer i formatet XXXXXX-XXXX.';
+      }
       if (!answers.address_line1.trim())      errors.address_line1      = 'Ange gatuadress.';
       if (!answers.postal_code.trim())        errors.postal_code        = 'Ange postnummer.';
       else if (!POSTAL_RE.test(answers.postal_code.trim())) errors.postal_code = 'Ange postnummer i formatet 111 22.';
@@ -504,7 +320,9 @@ export function TrialOnboardingWizardPage() {
                 <Input value={answers.legal_name} onChange={(e) => set('legal_name', e.target.value)} className={cn(fieldErrors.legal_name && 'border-destructive focus-visible:ring-destructive')} />
               </Field>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Organisationsnummer"><Input value={answers.org_number} onChange={(e) => set('org_number', e.target.value)} placeholder="T.ex. 556677-8899" /></Field>
+                <Field label="Organisationsnummer" error={fieldErrors.org_number}>
+                  <Input value={answers.org_number} onChange={(e) => set('org_number', e.target.value)} placeholder="T.ex. 556677-8899" className={cn(fieldErrors.org_number && 'border-destructive focus-visible:ring-destructive')} />
+                </Field>
                 <Field label="Momsregistreringsnummer"><Input value={answers.vat_number} onChange={(e) => set('vat_number', e.target.value)} placeholder="T.ex. SE556677889901" /></Field>
               </div>
               <Field label="Gatuadress (huvudanläggning) *" error={fieldErrors.address_line1}>
@@ -518,6 +336,9 @@ export function TrialOnboardingWizardPage() {
                   <Input value={answers.city} onChange={(e) => set('city', e.target.value)} className={cn(fieldErrors.city && 'border-destructive focus-visible:ring-destructive')} />
                 </Field>
               </div>
+              <Field label="Kontakt-/supporttelefon">
+                <Input value={answers.contact_phone} onChange={(e) => set('contact_phone', e.target.value)} placeholder="Valfritt, t.ex. 08-123 456 78" />
+              </Field>
             </>
           )}
 
@@ -622,6 +443,9 @@ export function TrialOnboardingWizardPage() {
                   ))}
                 </div>
               )}
+              {answers.vehicle_count === 0 && (
+                <WarningNote>0 fordon valt — ni kan boka lektioner först när minst ett fordon är registrerat, antingen här eller senare under Resurser → Fordon.</WarningNote>
+              )}
               <p className="text-xs text-muted-foreground">Fordonen registreras automatiskt med uppgifterna ovan — precis som om ni lagt till dem manuellt under Resurser → Fordon.</p>
             </>
           )}
@@ -635,6 +459,9 @@ export function TrialOnboardingWizardPage() {
                 <Field label="Instruktörer"><Input type="number" min={0} value={answers.instructors} onChange={(e) => setInstructorCount(Number(e.target.value) || 0)} /></Field>
               </div>
               <p className="text-xs text-muted-foreground">Du själv blir automatiskt administratör och ägare. Fyll i uppgifter för övrig personal nedan — de bjuds in automatiskt med riktiga inloggningsuppgifter, precis som under Inställningar → Användare.</p>
+              {answers.instructors === 0 && (
+                <WarningNote>0 instruktörer valt — schemaläggning och bokningsbara pass kan inte genereras förrän minst en instruktör finns, antingen här eller senare under Personal & Resurser.</WarningNote>
+              )}
 
               {answers.admin_entries.length > 0 && (
                 <div className="space-y-3">
@@ -690,6 +517,9 @@ export function TrialOnboardingWizardPage() {
                 <Pill active={answers.channels.whatsapp} onClick={() => set('channels', { ...answers.channels, whatsapp: !answers.channels.whatsapp })}>WhatsApp</Pill>
                 <Pill active={answers.channels.invoice_notifications} onClick={() => set('channels', { ...answers.channels, invoice_notifications: !answers.channels.invoice_notifications })}>Fakturaaviseringar</Pill>
               </div>
+              {!answers.channels.email && !answers.channels.sms && !answers.channels.whatsapp && (
+                <WarningNote>Ingen kanal vald — elever kan då inte nås automatiskt (bokningsbekräftelser, påminnelser). Ni kan aktivera en kanal senare under Kommunikation → Kanalinställningar.</WarningNote>
+              )}
               <p className="text-xs text-muted-foreground">E-post, SMS och WhatsApp fungerar direkt med Trafikclouds pilot-/testkonfiguration. Ni kan koppla er egen avsändare för varje kanal under Kommunikation → Kanalinställningar när ni är redo för skarp drift.</p>
             </>
           )}
@@ -697,6 +527,7 @@ export function TrialOnboardingWizardPage() {
           {step === 8 && (
             <>
               <h2 className="text-sm font-semibold text-foreground">Ekonomi</h2>
+              <p className="text-xs text-muted-foreground">Moms sätts till 25% (standard för körlektioner). Ändra i Inställningar → Företagsuppgifter om annat gäller er verksamhet.</p>
               <Field label="Momsperiod">
                 <div className="flex gap-2">
                   <Pill active={answers.vat_period === 'monthly'} onClick={() => set('vat_period', 'monthly')}>Månadsvis</Pill>

@@ -54,4 +54,23 @@ export interface ProvisioningResult {
   membership_id:        string;
   provisioning_run_id:  string;
   demo_request_updated: boolean;
+  // Present only when the request included business_setup (Tenant
+  // Registration Unification, 2026-08-28) — summarizes what the canonical
+  // provisioning engine created for this tenant, same shape self-service
+  // trial signups report.
+  business_setup?: {
+    ok: boolean;
+    stage?: string;
+    error?: string;
+    validation_warnings?: string[];
+    lesson_types_created?: number;
+    package_templates_created?: number;
+    branch_created?: number;
+    priced_lesson_types?: number;
+    vehicles_created?: number;
+    instructors_created?: number;
+    staff_invited?: number;
+    additional_branches_created?: number;
+    slots_generated?: number;
+  } | null;
 }

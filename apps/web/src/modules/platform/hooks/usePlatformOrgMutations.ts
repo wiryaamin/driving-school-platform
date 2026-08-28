@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import { useSessionStore } from '@core/store/session.store.js';
+import type { Answers as BusinessSetupAnswers } from '@modules/trial-onboarding/index.js';
 import type { PlatformOrganization } from './usePlatformOrganizations.js';
 import { extractFunctionErrorMessage, type ProvisioningResult } from '../lib/provisioningSchema.js';
 
@@ -15,6 +16,11 @@ export interface CreateOrgInput {
   admin_first_name:  string;
   admin_last_name:   string;
   admin_email:       string;
+  // Canonical business/setup information (Tenant Registration Unification,
+  // 2026-08-28) — optional, collected by BusinessSetupSection when the
+  // Platform Admin chooses to fully initialize the tenant at creation time
+  // instead of leaving it to Kom igång.
+  business_setup?:   BusinessSetupAnswers | null;
 }
 
 export interface UpdateOrgInput {
@@ -95,6 +101,7 @@ export function useCreateOrg() {
             admin_first_name:  input.admin_first_name.trim(),
             admin_last_name:   input.admin_last_name.trim(),
             admin_email:       input.admin_email.trim(),
+            business_setup:    input.business_setup ?? null,
           },
         },
       );

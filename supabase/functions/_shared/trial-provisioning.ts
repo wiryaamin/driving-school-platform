@@ -24,10 +24,10 @@
  */
 
 import { dispatchMessage } from './comm-providers.ts';
-import { runFullPipeline, gatherKnownBusinessFacts } from './tenant-onboarding-pipeline.ts';
-import type { RawBusinessDiscoveryAnswers } from './provisioning-extraction.ts';
-import { createInstructorRecord, seedInstructorAvailabilityRules } from './instructor-provisioning.ts';
-import { inviteNewStaffMember } from './staff-invite.ts';
+import {
+  provisionBusinessConfiguration, provisionBusinessResources,
+  type CompleteAnswers as SharedCompleteAnswers,
+} from './business-setup-provisioning.ts';
 import { logTrialEvent, type TrialEventType } from './trial-onboarding-lifecycle.ts';
 import { logger } from './logger.ts';
 
@@ -37,24 +37,6 @@ type DbClient = any;
 function getAppOrigin(): string {
   const configured = Deno.env.get('APP_URL');
   return configured && configured.length > 0 ? configured : 'http://localhost:5173';
-}
-
-// Current VAT period boundaries for a given frequency, computed from "today"
-// — Skatteverket periods always align to calendar months/quarters/years, so
-// there is no real ambiguity to ask the tenant about beyond which frequency
-// they report on (already collected in the interview).
-function computeVatPeriod(frequency: string, today: Date): { start: string; end: string } {
-  const y = today.getUTCFullYear();
-  const m = today.getUTCMonth();
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  if (frequency === 'yearly') {
-    return { start: iso(new Date(Date.UTC(y, 0, 1))), end: iso(new Date(Date.UTC(y, 11, 31))) };
-  }
-  if (frequency === 'quarterly') {
-    const qStartMonth = Math.floor(m / 3) * 3;
-    return { start: iso(new Date(Date.UTC(y, qStartMonth, 1))), end: iso(new Date(Date.UTC(y, qStartMonth + 3, 0))) };
-  }
-  return { start: iso(new Date(Date.UTC(y, m, 1))), end: iso(new Date(Date.UTC(y, m + 1, 0))) };
 }
 
 async function generateUniqueSlug(db: DbClient, name: string): Promise<string> {
@@ -73,14 +55,6 @@ async function generateUniqueSlug(db: DbClient, name: string): Promise<string> {
     if ((count ?? 0) === 0) return candidate;
   }
   return `${base}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-export function buildBusinessHours(start: string | undefined, end: string | undefined, weekend: string | undefined) {
-  const open = start || '08:00';
-  const close = end || '17:00';
-  const weekday = { open, close, closed: false };
-  const weekendDay = { open, close, closed: weekend !== 'open' };
-  return { mon: weekday, tue: weekday, wed: weekday, thu: weekday, fri: weekday, sat: weekendDay, sun: weekendDay };
 }
 
 export function passwordCreationEmailHtml(schoolName: string, actionLink: string): string {
@@ -185,42 +159,15 @@ export function welcomeConfigEmailHtml(schoolName: string, items: WelcomeConfigI
 }
 
 // ─── Answer shape ─────────────────────────────────────────────────────────────
-
-export interface VehicleAnswer {
-  registration_number: string; make: string; model: string; model_year: number;
-  transmission: 'manual' | 'automatic' | 'both'; fuel_type: string; seats: number;
-  registration_expires_at: string; insurance_expires_at: string; color?: string;
-}
-export interface InstructorAnswer {
-  first_name: string; last_name: string; email: string; phone?: string;
-}
-export interface StaffAnswer {
-  first_name: string; last_name: string; email: string;
-}
-export interface BranchAnswer {
-  name: string; address_line1: string; postal_code: string; city: string; phone?: string; email?: string;
-}
-
-export interface CompleteAnswers {
-  contact_first_name?: string; contact_last_name?: string;
-  legal_name?: string; org_number?: string; vat_number?: string;
-  country?: string; default_language?: string; timezone?: string;
-  address_line1?: string; postal_code?: string; city?: string;
-  branches?: number; licence_categories?: string[]; standard_lesson_duration_minutes?: number;
-  lesson_type_durations?: Record<string, number>;
-  standard_lesson_price_sek?: number;
-  teaching_languages?: string[];
-  vehicle_count?: number; vehicle_transmission?: string;
-  administrators?: number; receptionists?: number; instructors?: number;
-  working_hours_start?: string; working_hours_end?: string; weekend_schedule?: string;
-  channels?: { email?: boolean; sms?: boolean; whatsapp?: boolean; invoice_notifications?: boolean };
-  vat_period?: string; payment_methods?: string[];
-  vehicles?: VehicleAnswer[];
-  instructor_entries?: InstructorAnswer[];
-  admin_entries?: StaffAnswer[];
-  receptionist_entries?: StaffAnswer[];
-  branch_entries?: BranchAnswer[];
-}
+//
+// Now the canonical shape defined in business-setup-provisioning.ts (Tenant
+// Registration Unification, 2026-08-28) — re-exported here so trial-signup/
+// index.ts's existing `import type { CompleteAnswers } from
+// '../_shared/trial-provisioning.ts'` keeps working unchanged.
+export type {
+  VehicleAnswer, InstructorAnswer, StaffAnswer, BranchAnswer,
+} from './business-setup-provisioning.ts';
+export type CompleteAnswers = SharedCompleteAnswers;
 
 export interface TrialProvisioningSession {
   id: string;
@@ -358,150 +305,28 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
   const orgId = org.id as string;
   await db.from('tenant_trial_sessions').update({ organization_id: orgId }).eq('id', session.id);
 
-  // ── Step B: real communication channel activation ────────────────────────
-  // Email/SMS/WhatsApp all genuinely enabled via the platform pilot sandbox
-  // — see docs history for the live verification each one had before being
-  // wired (Resend proven send, 46elks account-info check, Meta phone-number
-  // metadata check).
-  if (answers.channels) {
-    if (answers.channels.email) {
-      await db.from('channel_configs').upsert(
-        { organization_id: orgId, channel: 'email', enabled: true, provider: 'resend', metadata: { trial_interview_preference: true, platform_pilot_configuration: true } },
-        { onConflict: 'organization_id,channel' },
-      );
-    }
-    if (answers.channels.sms) {
-      await db.from('channel_configs').upsert(
-        { organization_id: orgId, channel: 'sms', enabled: true, provider: '46elks', metadata: { trial_interview_preference: true, platform_pilot_configuration: true, platform_account_note: 'bounded pilot credit' } },
-        { onConflict: 'organization_id,channel' },
-      );
-    }
-    if (answers.channels.whatsapp) {
-      await db.from('channel_configs').upsert(
-        { organization_id: orgId, channel: 'whatsapp', enabled: true, provider: 'meta', metadata: { trial_interview_preference: true, platform_pilot_configuration: true, platform_account_note: 'Meta test number — delivery limited to pre-approved recipients' } },
-        { onConflict: 'organization_id,channel' },
-      );
-    }
+  // ── Steps B/B2/C/C2/C2b/C3: canonical business configuration ──────────────
+  // Channels, payment/person-lookup pilot defaults, Business Discovery
+  // pipeline, pricing, per-category durations, VAT period — the exact same
+  // shared function Platform Admin's handleProvision also calls (Tenant
+  // Registration Unification, 2026-08-28). Email/SMS/WhatsApp all genuinely
+  // enabled via the platform pilot sandbox — see docs history for the live
+  // verification each one had before being wired (Resend proven send,
+  // 46elks account-info check, Meta phone-number metadata check).
+  const configOutcome = await provisionBusinessConfiguration(db, orgId, answers, { correlationId });
+  if (!configOutcome.ok) {
+    const f = configOutcome.failure!;
+    return failWithRollback(orgId, null, f.code, f.message, f.status);
   }
-
-  // ── Step B2: pilot-default payment (Nets + Stripe) and person-lookup ─────
-  // (Roaring) credentials — ciphertext copied verbatim from a known-good
-  // source organization, never decrypted in transit.
-  const PAYMENT_SANDBOX_SOURCE_ORG_ID = 'b5972cf7-1517-41b6-9dd2-8ebe3d8d9eb6';
-  const ROARING_SANDBOX_SOURCE_ORG_ID = 'd4279c49-c619-4c66-8c4b-db5e5c80af99';
-
-  if (Array.isArray(answers.payment_methods) && answers.payment_methods.includes('card')) {
-    const { data: paymentSource } = await db
-      .from('organizations').select('settings').eq('id', PAYMENT_SANDBOX_SOURCE_ORG_ID).maybeSingle();
-    const sourceSettings = (paymentSource?.settings ?? {}) as Record<string, unknown>;
-
-    const paymentUpdate: Record<string, unknown> = {};
-    if (typeof sourceSettings['nets_secret_key'] === 'string' && typeof sourceSettings['nets_checkout_key'] === 'string') {
-      paymentUpdate['nets_secret_key'] = sourceSettings['nets_secret_key'];
-      paymentUpdate['nets_secret_key_masked'] = sourceSettings['nets_secret_key_masked'];
-      paymentUpdate['nets_checkout_key'] = sourceSettings['nets_checkout_key'];
-      paymentUpdate['nets_checkout_key_masked'] = sourceSettings['nets_checkout_key_masked'];
-      paymentUpdate['nets_pilot_configuration'] = true;
-    }
-    if (typeof sourceSettings['stripe_secret_key'] === 'string') {
-      paymentUpdate['stripe_secret_key'] = sourceSettings['stripe_secret_key'];
-      paymentUpdate['stripe_secret_key_masked'] = sourceSettings['stripe_secret_key_masked'];
-      if (typeof sourceSettings['stripe_publishable_key'] === 'string') {
-        paymentUpdate['stripe_publishable_key'] = sourceSettings['stripe_publishable_key'];
-      }
-      paymentUpdate['stripe_pilot_configuration'] = true;
-    }
-
-    if (Object.keys(paymentUpdate).length > 0) {
-      const { data: orgRow } = await db.from('organizations').select('settings').eq('id', orgId).maybeSingle();
-      const current = (orgRow?.settings ?? {}) as Record<string, unknown>;
-      const { error: paymentErr } = await db.from('organizations').update({ settings: { ...current, ...paymentUpdate } }).eq('id', orgId);
-      if (paymentErr) {
-        logger.warn('trial-provisioning.payment_pilot_default_failed', { correlation_id: correlationId, error: paymentErr.message });
-      }
-    }
-  }
-
-  {
-    const { data: roaringSource } = await db
-      .from('person_lookup_provider_configs')
-      .select('credentials_encrypted, base_url, active_provider')
-      .eq('organization_id', ROARING_SANDBOX_SOURCE_ORG_ID)
-      .eq('is_active', true)
-      .maybeSingle();
-    if (roaringSource?.credentials_encrypted) {
-      const { error: roaringErr } = await db.from('person_lookup_provider_configs').upsert(
-        { organization_id: orgId, active_provider: roaringSource.active_provider ?? 'roaring', credentials_encrypted: roaringSource.credentials_encrypted, base_url: roaringSource.base_url, is_active: true },
-        { onConflict: 'organization_id' },
-      );
-      if (roaringErr) {
-        logger.warn('trial-provisioning.roaring_pilot_default_failed', { correlation_id: correlationId, error: roaringErr.message });
-      }
-    }
-  }
-
-  // ── Step C: run the exact same, already-proven configuration engine ──────
-  const known = await gatherKnownBusinessFacts(db, orgId);
-  const raw: RawBusinessDiscoveryAnswers = {
-    branches: answers.branches ?? 1,
-    instructors: answers.instructor_entries?.length ?? answers.instructors,
-    vehicles: answers.vehicles?.length ?? answers.vehicle_count,
-    licence_categories: answers.licence_categories,
-    standard_lesson_duration_minutes: answers.standard_lesson_duration_minutes ?? 45,
-  };
-  const pipelineResult = await runFullPipeline(db, orgId, raw, known, new Date().toISOString());
-  if (!pipelineResult.ok) {
-    return failWithRollback(orgId, null, 'CONFIGURATION_FAILED', pipelineResult.message, pipelineResult.kind === 'validation' ? 422 : 500);
-  }
-
-  // ── Step C2: apply real pricing ───────────────────────────────────────────
-  const priceSek = Number(answers.standard_lesson_price_sek);
-  let pricedLessonTypes = 0;
-  if (Number.isFinite(priceSek) && priceSek > 0) {
-    const { data: pricedRows, error: priceErr } = await db
-      .from('lesson_types').update({ pricing_sek: priceSek }).eq('organization_id', orgId).is('pricing_sek', null).select('id');
-    if (priceErr) {
-      logger.warn('trial-provisioning.pricing_apply_failed', { correlation_id: correlationId, error: priceErr.message });
-    } else {
-      pricedLessonTypes = pricedRows?.length ?? 0;
-    }
-  }
-
-  // ── Step C2b: apply per-licence-category lesson durations ────────────────
-  // provisionLessonTypes() (provisioning-engine.ts) creates every lesson
-  // type at one uniform default_duration_minutes — correct for the
-  // authenticated Business Discovery flow that executor also serves, which
-  // has no per-category duration answer to apply. The trial wizard does
-  // collect one, so it's applied here the same way Step C2 applies pricing:
-  // a targeted update after creation, not a change to the shared executor.
-  // code derivation (`driving_${cat.toLowerCase()}`) must match
-  // provisionLessonTypes()'s own exactly, or nothing will match.
-  if (answers.lesson_type_durations && typeof answers.lesson_type_durations === 'object') {
-    for (const [cat, minutes] of Object.entries(answers.lesson_type_durations)) {
-      const duration = Number(minutes);
-      if (!Number.isFinite(duration) || duration <= 0) continue;
-      const { error: durationErr } = await db.from('lesson_types')
-        .update({ default_duration_minutes: duration })
-        .eq('organization_id', orgId).eq('code', `driving_${cat.toLowerCase()}`);
-      if (durationErr) {
-        logger.warn('trial-provisioning.duration_apply_failed', { correlation_id: correlationId, category: cat, error: durationErr.message });
-      }
-    }
-  }
-
-  // ── Step C3: real VAT period ──────────────────────────────────────────────
-  const vatFrequency = ['monthly', 'quarterly', 'yearly'].includes(answers.vat_period ?? '') ? answers.vat_period as string : 'monthly';
-  const vatPeriodRange = computeVatPeriod(vatFrequency, new Date());
-  const { error: vatErr } = await db.rpc('create_vat_period', { p_org_id: orgId, p_period_start: vatPeriodRange.start, p_period_end: vatPeriodRange.end, p_frequency: vatFrequency });
-  if (vatErr && !vatErr.message?.includes('VAT_PERIOD_DUPLICATE')) {
-    logger.warn('trial-provisioning.vat_period_failed', { correlation_id: correlationId, error: vatErr.message });
-  }
+  const pricedLessonTypes = configOutcome.pricedLessonTypes;
 
   // ── Validation Engine ──────────────────────────────────────────────────────
-  const validationErrors: string[] = [];
-  if (pricedLessonTypes === 0) validationErrors.push('Inget pris angavs för lektionstyperna.');
+  // legal_name/driving_school_name is trial-specific (Platform Admin already
+  // requires an org name before an org can exist at all), so it stays here
+  // rather than in the shared function; the other two gaps are read straight
+  // off the shared outcome.
+  const validationErrors: string[] = [...configOutcome.validationWarnings];
   if (!answers.legal_name && !session.driving_school_name) validationErrors.push('Organisationens namn saknas.');
-  if (!Array.isArray(answers.licence_categories) || answers.licence_categories.length === 0) validationErrors.push('Ingen behörighet vald.');
   if (validationErrors.length > 0) {
     return failWithRollback(orgId, null, 'VALIDATION_FAILED', validationErrors.join(' '), 422);
   }
@@ -603,159 +428,17 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
   await db.from('tenant_trial_sessions').update({ status: 'active', completed_at: new Date().toISOString(), admin_user_id: userId }).eq('id', session.id);
   await evt('provisioning_completed', { organization_id: orgId, admin_user_id: userId });
 
-  // ── Step E1: real vehicles ─────────────────────────────────────────────────
-  let vehiclesCreated = 0;
-  if (Array.isArray(answers.vehicles) && answers.vehicles.length > 0) {
-    const vehicleRows = answers.vehicles
-      .filter((v) => v.registration_number?.trim() && v.make?.trim() && v.model?.trim())
-      .map((v) => ({
-        organization_id: orgId, registration_number: v.registration_number.trim().toUpperCase(),
-        make: v.make.trim(), model: v.model.trim(), model_year: v.model_year, color: v.color?.trim() || null,
-        transmission: v.transmission, has_dual_controls: true, fuel_type: v.fuel_type, seats: v.seats,
-        teaching_categories: answers.licence_categories?.length ? answers.licence_categories : ['B'],
-        ownership_type: 'owned', operational_status: 'available',
-        registration_expires_at: v.registration_expires_at, insurance_expires_at: v.insurance_expires_at,
-      }));
-    if (vehicleRows.length > 0) {
-      const { data: insertedVehicles, error: vehicleErr } = await db.from('vehicles').insert(vehicleRows).select('id');
-      if (vehicleErr) {
-        logger.warn('trial-provisioning.vehicles_failed', { correlation_id: correlationId, error: vehicleErr.message });
-      } else {
-        vehiclesCreated = insertedVehicles?.length ?? 0;
-      }
-    }
-  }
-
-  // ── Step E2: real instructors + auto-seeded working hours ────────────────
-  let instructorsCreated = 0;
-  const createdInstructorIds: string[] = [];
-  if (Array.isArray(answers.instructor_entries) && answers.instructor_entries.length > 0) {
-    const weekdays = [1, 2, 3, 4, 5, ...(answers.weekend_schedule === 'open' ? [0, 6] : [])];
-    for (const entry of answers.instructor_entries) {
-      if (!entry.first_name?.trim() || !entry.last_name?.trim() || !entry.email?.trim()) continue;
-      const result = await createInstructorRecord(db, orgId, {
-        first_name: entry.first_name.trim(), last_name: entry.last_name.trim(), email: entry.email.trim().toLowerCase(),
-        phone: entry.phone?.trim() || undefined, teaching_categories: answers.licence_categories, languages_spoken: answers.teaching_languages,
-      }, userId);
-      if (!result.ok) {
-        logger.warn('trial-provisioning.instructor_create_failed', { correlation_id: correlationId, code: result.code, error: result.message });
-        continue;
-      }
-      instructorsCreated += 1;
-      const instructorId = result.instructor['id'] as string;
-      createdInstructorIds.push(instructorId);
-      if (answers.working_hours_start && answers.working_hours_end) {
-        const seedResult = await seedInstructorAvailabilityRules(db, orgId, instructorId, { weekdays, startTime: answers.working_hours_start, endTime: answers.working_hours_end });
-        if (!seedResult.ok) {
-          logger.warn('trial-provisioning.instructor_availability_seed_failed', { correlation_id: correlationId, error: seedResult.error });
-        }
-      }
-    }
-  }
-
-  // ── Step E3: additional administrators/receptionists ─────────────────────
-  let staffInvited = 0;
-  async function inviteEntries(entries: StaffAnswer[] | undefined, role: 'org_admin' | 'receptionist'): Promise<void> {
-    if (!Array.isArray(entries) || entries.length === 0) return;
-    const { data: roleRow } = await db.from('roles').select('id').eq('name', role).eq('is_system_role', true).maybeSingle();
-    const roleId = roleRow?.id as string | undefined;
-    if (!roleId) {
-      logger.error('trial-provisioning.staff_role_missing', { correlation_id: correlationId, role });
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.first_name?.trim() || !entry.last_name?.trim() || !entry.email?.trim()) continue;
-      const result = await inviteNewStaffMember(db, orgId, roleId, {
-        email: entry.email.trim().toLowerCase(), first_name: entry.first_name.trim(), last_name: entry.last_name.trim(), role,
-      }, { actorId: userId, actorEmail: session.email, correlationId, appOrigin: origin });
-      if (!result.ok) {
-        logger.warn('trial-provisioning.staff_invite_failed', { correlation_id: correlationId, role, code: result.code, error: result.message });
-        continue;
-      }
-      staffInvited += 1;
-    }
-  }
-  await inviteEntries(answers.admin_entries, 'org_admin');
-  await inviteEntries(answers.receptionist_entries, 'receptionist');
-
-  // ── Step E4: real branches ─────────────────────────────────────────────────
-  let primaryBranchFallbackCreated = 0;
-  let branchesCreated = 0;
-  const businessHours = buildBusinessHours(answers.working_hours_start, answers.working_hours_end, answers.weekend_schedule);
-
-  // Onboarding consistency fix (2026-08-08): the working-hours answer was
-  // already used for instructor availability rules, but for the common
-  // single-branch case the branch itself — created by the shared
-  // provisionBranch() executor inside Step C's pipeline, same one the
-  // authenticated Business Discovery flow uses — never received
-  // settings.business_hours (that executor deliberately writes only
-  // name/address/contact, not hours). LocationsSettingsPage.tsx's real
-  // "Öppettider" field is exactly this same settings.business_hours key,
-  // so leaving it unset here would be a question the tenant answered that
-  // never reached the dashboard. Patched here rather than inside
-  // provisionBranch itself, matching the existing branches!==1 fallback's
-  // own pattern of a separate, targeted write instead of touching the
-  // shared executor both flows depend on.
-  if (answers.branches === 1) {
-    const { data: primaryLocation } = await db
-      .from('organization_locations').select('id, settings')
-      .eq('organization_id', orgId).eq('is_primary', true).is('deleted_at', null).maybeSingle();
-    if (primaryLocation && !(primaryLocation.settings as Record<string, unknown> | null)?.['business_hours']) {
-      const currentSettings = (primaryLocation.settings ?? {}) as Record<string, unknown>;
-      const { error: hoursErr } = await db.from('organization_locations')
-        .update({ settings: { ...currentSettings, business_hours: businessHours } }).eq('id', primaryLocation.id);
-      if (hoursErr) {
-        logger.warn('trial-provisioning.primary_branch_hours_failed', { correlation_id: correlationId, error: hoursErr.message });
-      }
-    }
-  }
-
-  if (answers.branches !== 1 && answers.address_line1 && answers.postal_code && answers.city) {
-    const { count: existingLocations } = await db
-      .from('organization_locations').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).eq('status', 'active').is('deleted_at', null);
-    if ((existingLocations ?? 0) === 0) {
-      const { error: primaryBranchErr } = await db.from('organization_locations').insert({
-        organization_id: orgId, name: answers.legal_name ?? session.driving_school_name,
-        address_line1: answers.address_line1, postal_code: answers.postal_code, city: answers.city,
-        country: 'SE', is_primary: true, status: 'active', settings: { business_hours: businessHours },
-      });
-      if (primaryBranchErr) {
-        logger.warn('trial-provisioning.primary_branch_failed', { correlation_id: correlationId, error: primaryBranchErr.message });
-      } else {
-        primaryBranchFallbackCreated = 1;
-      }
-    }
-  }
-  if (Array.isArray(answers.branch_entries) && answers.branch_entries.length > 0) {
-    const branchRows = answers.branch_entries
-      .filter((b) => b.name?.trim() && b.address_line1?.trim() && b.postal_code?.trim() && b.city?.trim())
-      .map((b) => ({
-        organization_id: orgId, name: b.name.trim(), address_line1: b.address_line1.trim(), postal_code: b.postal_code.trim(), city: b.city.trim(),
-        country: 'SE', phone: b.phone?.trim() || null, email: b.email?.trim() || null, is_primary: false, status: 'active', settings: { business_hours: businessHours },
-      }));
-    if (branchRows.length > 0) {
-      const { data: insertedBranches, error: branchErr } = await db.from('organization_locations').insert(branchRows).select('id');
-      if (branchErr) {
-        logger.warn('trial-provisioning.branch_entries_failed', { correlation_id: correlationId, error: branchErr.message });
-      } else {
-        branchesCreated += insertedBranches?.length ?? 0;
-      }
-    }
-  }
-
-  // ── Step E5: materialize real, bookable lesson_slots ──────────────────────
-  let slotsGenerated = 0;
-  if (createdInstructorIds.length > 0) {
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const rangeEndIso = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const { data: genResult, error: genErr } = await db.rpc('generate_slots_for_organization', { p_organization_id: orgId, p_lesson_type_id: null, p_start_date: todayIso, p_end_date: rangeEndIso });
-    if (genErr) {
-      logger.warn('trial-provisioning.slot_generation_failed', { correlation_id: correlationId, error: genErr.message });
-    } else {
-      const row = (Array.isArray(genResult) ? genResult[0] : genResult) as { slots_created?: number } | undefined;
-      slotsGenerated = row?.slots_created ?? 0;
-    }
-  }
+  // ── Steps E1-E5: canonical business resources ─────────────────────────────
+  // Vehicles, instructors (+ availability), additional staff invites,
+  // branches, bookable slots — the same shared function Platform Admin's
+  // handleProvision calls once its own administrator account exists.
+  const resourcesOutcome = await provisionBusinessResources(db, orgId, answers, {
+    userId, correlationId, actorEmail: session.email, appOrigin: origin,
+  });
+  const {
+    vehiclesCreated, instructorsCreated, staffInvited,
+    additionalBranchesCreated: branchesCreated, primaryBranchFallbackCreated, slotsGenerated,
+  } = resourcesOutcome;
 
   // Email #3 — real "create your password" email.
   if (actionLink) {
@@ -788,7 +471,8 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
 
   logger.info('trial-provisioning.completed', {
     correlation_id: correlationId, organization_id: orgId, user_id: userId,
-    executed: pipelineResult.provisioning.executed, priced_lesson_types: pricedLessonTypes,
+    lesson_types_created: configOutcome.lessonTypesCreated, package_templates_created: configOutcome.packageTemplatesCreated,
+    priced_lesson_types: pricedLessonTypes,
     vehicles_created: vehiclesCreated, instructors_created: instructorsCreated,
     staff_invited: staffInvited, branches_created: branchesCreated, slots_generated: slotsGenerated,
   });
@@ -796,9 +480,9 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
   return {
     ok: true,
     organizationId: orgId, actionLink,
-    lessonTypesCreated: pipelineResult.provisioning.executed.lesson_types?.created ?? 0,
-    packageTemplatesCreated: pipelineResult.provisioning.executed.package_templates?.created ?? 0,
-    branchCreated: (pipelineResult.provisioning.executed.branch?.created ?? 0) + primaryBranchFallbackCreated,
+    lessonTypesCreated: configOutcome.lessonTypesCreated,
+    packageTemplatesCreated: configOutcome.packageTemplatesCreated,
+    branchCreated: configOutcome.branchCreated + primaryBranchFallbackCreated,
     pricedLessonTypes, vehiclesCreated, instructorsCreated, staffInvited,
     additionalBranchesCreated: branchesCreated, slotsGenerated,
   };

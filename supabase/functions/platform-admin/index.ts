@@ -68,6 +68,10 @@ import { recordIdentityEvent } from '../_shared/identity-events.ts';
 import { dispatchMessage }    from '../_shared/comm-providers.ts';
 import { verifyEmailHtml, questionnaireEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
 import { provisionTrialOrganization } from '../_shared/trial-provisioning.ts';
+import {
+  provisionBusinessConfiguration, provisionBusinessResources,
+  type CompleteAnswers as BusinessSetupAnswers,
+} from '../_shared/business-setup-provisioning.ts';
 import { logger }             from '../_shared/logger.ts';
 import type { EdgeRequestContext } from '../_shared/context.ts';
 
@@ -1408,6 +1412,14 @@ interface ProvisionInput {
   adminFirstName:   string;
   adminLastName:    string;
   adminEmail:       string;
+  // Canonical business/setup information (Tenant Registration Unification,
+  // 2026-08-28) — optional so existing callers (bare CreateOrgDialog
+  // submissions, ConvertToCustomerDialog) keep working unchanged. When
+  // present, handleProvision runs it through the exact same
+  // provisionBusinessConfiguration/provisionBusinessResources functions
+  // trial-signup uses, so a Platform-Admin-created tenant can reach the
+  // same initialization level as a self-service one.
+  businessSetup:    BusinessSetupAnswers | null;
 }
 
 function validateProvisionBody(body: unknown): { ok: true; value: ProvisionInput } | { ok: false; message: string } {
@@ -1442,6 +1454,20 @@ function validateProvisionBody(body: unknown): { ok: true; value: ProvisionInput
     return { ok: false, message: 'org_number must match format XXXXXX-XXXX' };
   }
 
+  // Deep field-level validation (per-vehicle/instructor/branch entry
+  // completeness, licence category presence, etc.) is deliberately not
+  // duplicated here — provisionBusinessConfiguration/provisionBusinessResources
+  // already tolerate partial/malformed sub-fields the same way the trial
+  // wizard's own submission does (filtering incomplete entries, defaulting
+  // missing counts), so a loose "is this an object" check is sufficient at
+  // this boundary. Business-rule validation stays owned by the shared
+  // provisioning functions, not duplicated at two request-parsing layers.
+  const businessSetupRaw = b.business_setup;
+  const businessSetup: BusinessSetupAnswers | null =
+    typeof businessSetupRaw === 'object' && businessSetupRaw !== null && !Array.isArray(businessSetupRaw)
+      ? businessSetupRaw as BusinessSetupAnswers
+      : null;
+
   return {
     ok: true,
     value: {
@@ -1451,6 +1477,7 @@ function validateProvisionBody(body: unknown): { ok: true; value: ProvisionInput
       subscriptionTier: tier as ProvisionTier,
       trialDays,
       adminFirstName, adminLastName, adminEmail,
+      businessSetup,
     },
   };
 }
@@ -1727,6 +1754,50 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
     correlation_id: ctx.correlationId, org_id: orgId, user_id: userId, membership_id: membershipId,
   });
 
+  // ── Step 6b: canonical business setup (optional) ─────────────────────────
+  // Runs the exact same shared provisioning trial-signup uses (Tenant
+  // Registration Unification, 2026-08-28), so a Platform-Admin-created
+  // tenant can reach the same initialization level as a self-service one —
+  // branch, priced lesson types, package templates, VAT period,
+  // communication channels, vehicles, instructors (+ availability),
+  // additional staff, extra branches, and bookable slots. Deliberately
+  // non-fatal: a gap here (e.g. no price set) never rolls back the
+  // organization/admin/membership already created above — those stay
+  // Platform Admin's own authority, unaffected by an optional supplementary
+  // payload. Any shortfall is surfaced in the response and worker_run_log
+  // metadata instead, leaving the remaining gaps visible via Kom igång,
+  // exactly like any organization provisioned without business_setup at all.
+  let businessSetupSummary: Record<string, unknown> | null = null;
+  if (input.businessSetup) {
+    const configOutcome = await provisionBusinessConfiguration(db, orgId, input.businessSetup, { correlationId: ctx.correlationId });
+    if (!configOutcome.ok) {
+      logger.warn('platform-admin.provision.business_setup_configuration_failed', {
+        correlation_id: ctx.correlationId, org_id: orgId, error: configOutcome.failure?.message,
+      });
+      businessSetupSummary = { ok: false, stage: 'configuration', error: configOutcome.failure?.message ?? 'unknown error' };
+    } else {
+      const resourcesOutcome = await provisionBusinessResources(db, orgId, input.businessSetup, {
+        userId, correlationId: ctx.correlationId, actorEmail: ctx.actorEmail,
+      });
+      businessSetupSummary = {
+        ok: true,
+        validation_warnings: configOutcome.validationWarnings,
+        lesson_types_created: configOutcome.lessonTypesCreated,
+        package_templates_created: configOutcome.packageTemplatesCreated,
+        branch_created: configOutcome.branchCreated + resourcesOutcome.primaryBranchFallbackCreated,
+        priced_lesson_types: configOutcome.pricedLessonTypes,
+        vehicles_created: resourcesOutcome.vehiclesCreated,
+        instructors_created: resourcesOutcome.instructorsCreated,
+        staff_invited: resourcesOutcome.staffInvited,
+        additional_branches_created: resourcesOutcome.additionalBranchesCreated,
+        slots_generated: resourcesOutcome.slotsGenerated,
+      };
+      logger.info('platform-admin.provision.business_setup_completed', {
+        correlation_id: ctx.correlationId, org_id: orgId, ...businessSetupSummary,
+      });
+    }
+  }
+
   await recordIdentityEvent({
     eventType: 'invite.created', provider: 'password', userId, organizationId: orgId,
     actorEmail: ctx.actorEmail, correlationId: ctx.correlationId,
@@ -1802,6 +1873,7 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
       membership_id:       membershipId,
       admin_email:          input.adminEmail,
       correlation_id:       ctx.correlationId,
+      business_setup:       businessSetupSummary,
     },
   }).eq('id', runId);
 
@@ -1822,6 +1894,7 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
     membership_id:        membershipId,
     provisioning_run_id:  runId,
     demo_request_updated: demoRequestUpdated,
+    business_setup:       businessSetupSummary,
   });
 }
 
