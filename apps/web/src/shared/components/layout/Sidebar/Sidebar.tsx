@@ -7,7 +7,7 @@ import {
   Settings,
   UserCheck,
   BookOpen, Rocket, PieChart,
-  Megaphone,
+  Megaphone, GraduationCap,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -93,9 +93,10 @@ export const NAVIGATION: NavItem[] = [
     matchFn: (pathname) => matchesAnyPrefix(BOKFORING_PREFIXES, pathname),
   },
   { key: 'personal_resurser', labelSv: 'Personal & Resurser', icon: UserCheck, path: '/staff', permission: 'instructors:instructor:read' as Permission },
+  { key: 'teori', labelSv: 'Teori', icon: GraduationCap, path: '/teorifragor', permission: null },
   {
     key: 'system', labelSv: 'System', icon: Megaphone, path: '/nyheter', permission: null,
-    matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/teorifragor', '/logs', '/reports', '/insights'], pathname),
+    matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/logs', '/reports', '/insights'], pathname),
   },
 ];
 

@@ -6,6 +6,7 @@ import { ElevWorkspaceLayout } from '@app/layouts/ElevWorkspaceLayout.js';
 import { EkonomiWorkspaceLayout } from '@app/layouts/EkonomiWorkspaceLayout.js';
 import { PersonalResurserWorkspaceLayout } from '@app/layouts/PersonalResurserWorkspaceLayout.js';
 import { SystemWorkspaceLayout } from '@app/layouts/SystemWorkspaceLayout.js';
+import { TeoriWorkspaceLayout } from '@app/layouts/TeoriWorkspaceLayout.js';
 import { SchedulingWorkspaceLayout } from '@modules/scheduling/routes/SchedulingWorkspaceLayout.js';
 import { AuthLayout } from '@app/layouts/AuthLayout.js';
 import { ProtectedRoute } from '@shared/components/guards/ProtectedRoute.js';
@@ -1248,6 +1249,28 @@ export const routes: RouteObject[] = [
         ),
       },
 
+      // ── Teori workspace ──────────────────────────────────────────────────
+      // Trafikfrågor/Körkortsfrågor moved here from System — same route
+      // (/teorifragor), same component, same permissions. Theory lessons
+      // (Schema), theory packages (Ekonomi), and permit-stage progress
+      // (Elever) are deliberately NOT duplicated here — they remain owned
+      // by their existing workspaces; Trafikfrågor is the only function
+      // that is genuinely theory-domain-owned and not shared with another
+      // page.
+      {
+        element: <TeoriWorkspaceLayout />,
+        children: [
+          {
+            path: 'teorifragor',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <TeorifragorPage />
+              </Suspense>
+            ),
+          },
+        ],
+      },
+
       // ── System workspace ─────────────────────────────────────────────────
       {
         element: <SystemWorkspaceLayout />,
@@ -1257,14 +1280,6 @@ export const routes: RouteObject[] = [
             element: (
               <Suspense fallback={<LoadingScreen />}>
                 <NyheterPage />
-              </Suspense>
-            ),
-          },
-          {
-            path: 'teorifragor',
-            element: (
-              <Suspense fallback={<LoadingScreen />}>
-                <TeorifragorPage />
               </Suspense>
             ),
           },
