@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
 import { useSessionStore } from '@core/store/session.store.js';
+import type { Answers as BusinessSetupAnswers } from '@modules/trial-onboarding/index.js';
 import type { DemoRequestStatus, DemoRequestRejectionReason } from './useDemoRequests.js';
 import { extractFunctionErrorMessage, type ProvisioningResult } from '../lib/provisioningSchema.js';
 
@@ -85,6 +86,12 @@ export function useUpdateDemoRequestNotes() {
 // provisioning pipeline. Passing demo_request_id lets the Edge Function update
 // this request's own status/converted_organization_id/converted_at as part of
 // the same call, instead of a separate client-side update after the fact.
+//
+// businessSetup is mandatory here too (Corrective Pass, 2026-08-28) — a demo
+// request converting to a real, live trafikskola is exactly the "normal
+// tenant creation" this unification covers, not an internal/admin-only
+// exception. ConvertToCustomerDialog validates it the same way
+// CreateOrgDialog does before calling this mutation.
 
 export interface ConvertDemoRequestInput {
   demoRequestId:   string;
@@ -96,6 +103,7 @@ export interface ConvertDemoRequestInput {
   adminFirstName:   string;
   adminLastName:    string;
   adminEmail:       string;
+  businessSetup:    BusinessSetupAnswers;
 }
 
 export function useConvertDemoRequestToCustomer() {
@@ -117,6 +125,7 @@ export function useConvertDemoRequestToCustomer() {
             admin_first_name:  input.adminFirstName,
             admin_last_name:   input.adminLastName,
             admin_email:       input.adminEmail,
+            business_setup:    input.businessSetup,
           },
         },
       );

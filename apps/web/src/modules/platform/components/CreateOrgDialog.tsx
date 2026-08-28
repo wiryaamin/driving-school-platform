@@ -8,7 +8,7 @@ import {
   Button, toast,
 } from '@platform/ui';
 import { AlertTriangle } from 'lucide-react';
-import { EMPTY_ANSWERS, type Answers } from '@modules/trial-onboarding/index.js';
+import { EMPTY_ANSWERS, validateRequiredBusinessSetupFields, type Answers } from '@modules/trial-onboarding/index.js';
 import { useCreateOrg } from '../hooks/usePlatformOrgMutations.js';
 import { useAdminEmailAvailability, useOrgNumberAvailability } from '../hooks/useAdminEmailAvailability.js';
 import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
@@ -57,16 +57,17 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
   const orgNumberCheck = useOrgNumberAvailability(orgNumber, open);
   const orgNumberBlocked = orgNumberCheck === 'taken';
 
-  // Canonical business setup (Tenant Registration Unification, 2026-08-28)
-  // — optional, off by default so the fast "just create the shell org"
-  // path stays exactly as quick as before. legal_name/org_number and
+  // Canonical business setup (Tenant Registration Unification, 2026-08-28;
+  // made mandatory in the Corrective Pass — a normal trafikskola creation
+  // must not be able to skip it, or this dialog would just be the old thin
+  // path with an optional extra form bolted on). legal_name/org_number and
   // contact_first_name/contact_last_name are deliberately NOT collected in
   // BusinessSetupSection — they're merged in from this dialog's own form
   // values at submit time, since CreateOrgDialog already asks for them and
   // asking twice would be exactly the duplicate data entry this exists to
   // remove.
-  const [includeBusinessSetup, setIncludeBusinessSetup] = useState(false);
   const [businessSetup, setBusinessSetup] = useState<Answers>(EMPTY_ANSWERS);
+  const [businessSetupErrors, setBusinessSetupErrors] = useState<Partial<Record<keyof Answers, string>>>({});
 
   // Reset trial_days when switching away from trial
   useEffect(() => {
@@ -78,13 +79,21 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
   useEffect(() => {
     if (open) {
       form.reset(EMPTY_DEFAULTS);
-      setIncludeBusinessSetup(false);
       setBusinessSetup(EMPTY_ANSWERS);
+      setBusinessSetupErrors({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   function onSubmit(values: FormValues) {
+    const setupErrors = validateRequiredBusinessSetupFields(businessSetup);
+    if (Object.keys(setupErrors).length > 0) {
+      setBusinessSetupErrors(setupErrors);
+      toast({ title: 'Fyll i verksamhetsuppgifterna markerade i rött', description: 'Adress, behörighet och pris krävs för att skapa en trafikskola.', variant: 'destructive' });
+      return;
+    }
+    setBusinessSetupErrors({});
+
     createOrg.mutate(
       {
         name:              values.name,
@@ -95,15 +104,13 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
         admin_first_name:  values.admin_first_name,
         admin_last_name:   values.admin_last_name,
         admin_email:       values.admin_email,
-        business_setup: includeBusinessSetup
-          ? {
-              ...businessSetup,
-              legal_name: values.legal_name,
-              org_number: values.org_number || '',
-              contact_first_name: values.admin_first_name,
-              contact_last_name: values.admin_last_name,
-            }
-          : null,
+        business_setup: {
+          ...businessSetup,
+          legal_name: values.legal_name,
+          org_number: values.org_number || '',
+          contact_first_name: values.admin_first_name,
+          contact_last_name: values.admin_last_name,
+        },
       },
       {
         onSuccess: (result) => {
@@ -301,30 +308,15 @@ export function CreateOrgDialog({ open, onClose }: CreateOrgDialogProps) {
 
             {/* Canonical business setup — same fields/provisioning engine as
                 self-service trial signup (Tenant Registration Unification).
-                Off by default so a bare shell org can still be created just
-                as fast as before. */}
+                Mandatory, not a toggle: a normal trafikskola cannot be
+                created without it — that would just reintroduce the old
+                thin path this unification removed. */}
             <div className="pt-2 border-t border-border">
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={includeBusinessSetup}
-                  onChange={(e) => setIncludeBusinessSetup(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-border"
-                />
-                <span>
-                  <span className="text-sm font-medium text-foreground block">Konfigurera verksamhet nu</span>
-                  <span className="text-xs text-muted-foreground">
-                    Fyll i filialer, behörigheter, priser, fordon, instruktörer, kommunikation och ekonomi direkt —
-                    tenanten blir fullt initierad utan att behöva slutföra Kom igång själv.
-                  </span>
-                </span>
-              </label>
-
-              {includeBusinessSetup && (
-                <div className="mt-3">
-                  <BusinessSetupSection value={businessSetup} onChange={setBusinessSetup} />
-                </div>
-              )}
+              <p className="text-sm font-medium text-foreground">Verksamhetsuppgifter</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Krävs för att skapa en trafikskola — tenanten blir fullt initierad utan att behöva slutföra Kom igång själv.
+              </p>
+              <BusinessSetupSection value={businessSetup} onChange={(next) => { setBusinessSetup(next); setBusinessSetupErrors({}); }} errors={businessSetupErrors} />
             </div>
 
             <DialogFooter className="pt-2">

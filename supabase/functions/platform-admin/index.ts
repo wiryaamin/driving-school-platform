@@ -1413,12 +1413,17 @@ interface ProvisionInput {
   adminLastName:    string;
   adminEmail:       string;
   // Canonical business/setup information (Tenant Registration Unification,
-  // 2026-08-28) — optional so existing callers (bare CreateOrgDialog
-  // submissions, ConvertToCustomerDialog) keep working unchanged. When
-  // present, handleProvision runs it through the exact same
+  // 2026-08-28). Both normal UI entry points — CreateOrgDialog and
+  // ConvertToCustomerDialog — now validate this as REQUIRED before
+  // submitting (see their own client-side validateRequiredBusinessSetupFields
+  // checks) and always send it; the field stays optional at this API
+  // boundary only so a genuine future internal/admin-only exception could
+  // still omit it without a schema change — no such caller exists in the
+  // repository today (Corrective Pass audit, 2026-08-28). When present,
+  // handleProvision runs it through the exact same
   // provisionBusinessConfiguration/provisionBusinessResources functions
-  // trial-signup uses, so a Platform-Admin-created tenant can reach the
-  // same initialization level as a self-service one.
+  // trial-signup uses, so a Platform-Admin-created tenant reaches the same
+  // initialization level as a self-service one.
   businessSetup:    BusinessSetupAnswers | null;
 }
 

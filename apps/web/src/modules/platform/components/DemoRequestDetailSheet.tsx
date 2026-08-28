@@ -21,6 +21,8 @@ import {
   useRejectDemoRequest, useDeleteDemoRequest,
 } from '../hooks/useDemoRequestMutations.js';
 import { provisioningSchema, type ProvisioningFormValues } from '../lib/provisioningSchema.js';
+import { EMPTY_ANSWERS, validateRequiredBusinessSetupFields, type Answers as BusinessSetupAnswers } from '@modules/trial-onboarding/index.js';
+import { BusinessSetupSection } from './BusinessSetupSection.js';
 
 // ─── Display maps ─────────────────────────────────────────────────────────────
 
@@ -175,6 +177,13 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
     },
   });
 
+  // Canonical business setup (Corrective Pass, 2026-08-28) — mandatory here
+  // too: converting a demo request into a real trafikskola is a normal
+  // tenant-creation action, not an internal/admin-only exception, so it
+  // must go through the same required setup as CreateOrgDialog.
+  const [businessSetup, setBusinessSetup] = useState<BusinessSetupAnswers>(EMPTY_ANSWERS);
+  const [businessSetupErrors, setBusinessSetupErrors] = useState<Partial<Record<keyof BusinessSetupAnswers, string>>>({});
+
   // Reused across different demo requests without unmounting — react-hook-
   // form's defaultValues are only read once at mount, so the form must be
   // explicitly resynced to `request` each time the dialog (re-)opens.
@@ -194,6 +203,8 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
         admin_last_name:   guessedLastName,
         admin_email:       request.email,
       });
+      setBusinessSetup(EMPTY_ANSWERS);
+      setBusinessSetupErrors({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, request]);
@@ -209,6 +220,14 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
 
   function onSubmit(values: ProvisioningFormValues) {
     if (!request) return;
+    const setupErrors = validateRequiredBusinessSetupFields(businessSetup);
+    if (Object.keys(setupErrors).length > 0) {
+      setBusinessSetupErrors(setupErrors);
+      toast({ title: 'Fyll i verksamhetsuppgifterna markerade i rött', description: 'Adress, behörighet och pris krävs för att skapa en trafikskola.', variant: 'destructive' });
+      return;
+    }
+    setBusinessSetupErrors({});
+
     convert.mutate(
       {
         demoRequestId:    request.id,
@@ -220,6 +239,13 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
         adminFirstName:   values.admin_first_name,
         adminLastName:    values.admin_last_name,
         adminEmail:       values.admin_email,
+        businessSetup: {
+          ...businessSetup,
+          legal_name: values.legal_name,
+          org_number: values.org_number || '',
+          contact_first_name: values.admin_first_name,
+          contact_last_name: values.admin_last_name,
+        },
       },
       {
         onSuccess: (result) => {
@@ -364,6 +390,16 @@ function ConvertToCustomerDialog({ open, request, onClose }: { open: boolean; re
                   )}
                 </FormItem>
               )} />
+            </div>
+
+            {/* Canonical business setup — mandatory, same as CreateOrgDialog
+                (Tenant Registration Unification, Corrective Pass). */}
+            <div className="pt-2 border-t border-border">
+              <p className="text-sm font-medium text-foreground">Verksamhetsuppgifter</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Krävs för att skapa en trafikskola — tenanten blir fullt initierad utan att behöva slutföra Kom igång själv.
+              </p>
+              <BusinessSetupSection value={businessSetup} onChange={(next) => { setBusinessSetup(next); setBusinessSetupErrors({}); }} errors={businessSetupErrors} />
             </div>
 
             <DialogFooter className="pt-2">

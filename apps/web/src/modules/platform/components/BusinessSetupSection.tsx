@@ -51,9 +51,13 @@ function Section({
 export interface BusinessSetupSectionProps {
   value:    Answers;
   onChange: (next: Answers) => void;
+  /** Field-level errors from validateRequiredBusinessSetupFields() — business
+   * setup is mandatory for a normal tenant creation, so the caller validates
+   * on submit and this section surfaces exactly what's still missing. */
+  errors?:  Partial<Record<keyof Answers, string>>;
 }
 
-export function BusinessSetupSection({ value: answers, onChange }: BusinessSetupSectionProps) {
+export function BusinessSetupSection({ value: answers, onChange, errors = {} }: BusinessSetupSectionProps) {
   function set<K extends keyof Answers>(key: K, v: Answers[K]) {
     onChange({ ...answers, [key]: v });
   }
@@ -90,11 +94,17 @@ export function BusinessSetupSection({ value: answers, onChange }: BusinessSetup
 
   return (
     <div className="space-y-2">
-      <Section title="Adress & kontakt" description="Huvudanläggningens adress och kontakttelefon">
-        <Field label="Gatuadress *"><Input value={answers.address_line1} onChange={(e) => set('address_line1', e.target.value)} /></Field>
+      <Section title="Adress & kontakt" description="Huvudanläggningens adress och kontakttelefon — krävs" defaultOpen>
+        <Field label="Gatuadress *" error={errors.address_line1}>
+          <Input value={answers.address_line1} onChange={(e) => set('address_line1', e.target.value)} className={errors.address_line1 ? 'border-destructive' : undefined} />
+        </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Postnummer *"><Input value={answers.postal_code} onChange={(e) => set('postal_code', e.target.value)} placeholder="111 22" /></Field>
-          <Field label="Ort *"><Input value={answers.city} onChange={(e) => set('city', e.target.value)} /></Field>
+          <Field label="Postnummer *" error={errors.postal_code}>
+            <Input value={answers.postal_code} onChange={(e) => set('postal_code', e.target.value)} placeholder="111 22" className={errors.postal_code ? 'border-destructive' : undefined} />
+          </Field>
+          <Field label="Ort *" error={errors.city}>
+            <Input value={answers.city} onChange={(e) => set('city', e.target.value)} className={errors.city ? 'border-destructive' : undefined} />
+          </Field>
         </div>
         <Field label="Kontakt-/supporttelefon"><Input value={answers.contact_phone} onChange={(e) => set('contact_phone', e.target.value)} placeholder="Valfritt" /></Field>
         <Field label="Momsregistreringsnummer"><Input value={answers.vat_number} onChange={(e) => set('vat_number', e.target.value)} placeholder="T.ex. SE556677889901" /></Field>
@@ -115,19 +125,19 @@ export function BusinessSetupSection({ value: answers, onChange }: BusinessSetup
         )}
       </Section>
 
-      <Section title="Behörigheter & priser" description="Vilka behörigheter, och pris per lektion">
+      <Section title="Behörigheter & priser" description="Vilka behörigheter, och pris per lektion — krävs" defaultOpen>
         <div className="flex flex-wrap gap-2">
           {LICENCE_CATEGORY_OPTIONS.map((cat) => (
             <Pill key={cat} active={answers.licence_categories.includes(cat)} onClick={() => toggleInArray('licence_categories', cat)}>{cat}</Pill>
           ))}
         </div>
+        {errors.licence_categories && <p className="text-xs text-destructive font-medium">{errors.licence_categories}</p>}
         <div className="grid grid-cols-2 gap-3">
           <Field label="Standardlängd (minuter)"><Input type="number" min={40} max={240} step={5} value={answers.standard_lesson_duration_minutes} onChange={(e) => set('standard_lesson_duration_minutes', Math.max(40, Number(e.target.value) || 40))} /></Field>
-          <Field label="Pris per lektion (kr)"><Input type="number" min={0} step={50} value={answers.standard_lesson_price_sek || ''} onChange={(e) => set('standard_lesson_price_sek', Math.max(0, Number(e.target.value) || 0))} placeholder="T.ex. 595" /></Field>
+          <Field label="Pris per lektion (kr) *" error={errors.standard_lesson_price_sek}>
+            <Input type="number" min={0} step={50} value={answers.standard_lesson_price_sek || ''} onChange={(e) => set('standard_lesson_price_sek', Math.max(0, Number(e.target.value) || 0))} placeholder="T.ex. 595" className={errors.standard_lesson_price_sek ? 'border-destructive' : undefined} />
+          </Field>
         </div>
-        {answers.standard_lesson_price_sek <= 0 && (
-          <p className="text-xs text-amber-700 dark:text-amber-400">Inget pris angivet — lektionstyperna skapas men blir inte bokningsbara förrän ett pris satts.</p>
-        )}
       </Section>
 
       <Section title="Undervisningsspråk">

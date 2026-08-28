@@ -123,3 +123,25 @@ export const POSTAL_RE = /^\d{3}\s?\d{2}$/;
 // Platform Admin's provisioningSchema.ts; the self-service wizard had no
 // equivalent check (Tenant Registration Audit, P1 finding).
 export const ORG_NUMBER_RE = /^\d{6}-\d{4}$/;
+
+// ─── Required-field validation ───────────────────────────────────────────────
+//
+// The same "can this org actually go live" minimum the self-service wizard
+// already enforces before letting a tenant submit (step 0 + step 2) —
+// reused here so Platform Admin's normal creation flow (CreateOrgDialog,
+// ConvertToCustomerDialog) cannot submit a business setup that's really just
+// the old thin path with an empty form attached (Tenant Registration
+// Unification — Corrective Pass, 2026-08-28). Deliberately narrow: only the
+// fields that block a school from ever taking a real booking (address,
+// licence category, price) are required here — vehicles/instructors/staff/
+// channels stay optional everywhere, exactly as they are in the wizard.
+export function validateRequiredBusinessSetupFields(answers: Answers): Partial<Record<keyof Answers, string>> {
+  const errors: Partial<Record<keyof Answers, string>> = {};
+  if (!answers.address_line1.trim()) errors.address_line1 = 'Ange gatuadress.';
+  if (!answers.postal_code.trim()) errors.postal_code = 'Ange postnummer.';
+  else if (!POSTAL_RE.test(answers.postal_code.trim())) errors.postal_code = 'Ange postnummer i formatet 111 22.';
+  if (!answers.city.trim()) errors.city = 'Ange ort.';
+  if (answers.licence_categories.length === 0) errors.licence_categories = 'Välj minst en behörighet ni utbildar för.';
+  if (answers.standard_lesson_price_sek <= 0) errors.standard_lesson_price_sek = 'Ange ett pris per lektion.';
+  return errors;
+}
