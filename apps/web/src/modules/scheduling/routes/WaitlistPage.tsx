@@ -454,10 +454,8 @@ export function WaitlistPage() {
 
   return (
     <PermissionGate permission={Permissions.SCHEDULING_READ}>
-    <PageLayout>
+    <PageLayout fullBleed>
       <PageHeader
-        title="Väntelista"
-        breadcrumbs={[{ label: 'Väntelista' }]}
         actions={
           <PermissionGate permission={Permissions.SCHEDULING_CREATE}>
             <Button size="sm" className="gap-1.5" onClick={() => setCreateOpen(true)}>

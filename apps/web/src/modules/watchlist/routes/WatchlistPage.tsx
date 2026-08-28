@@ -291,8 +291,6 @@ export function WatchlistPage() {
       {/* Breadcrumb */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
         <nav className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">Bevakningar</span>
-          <span className="text-muted-foreground/50">/</span>
           <span className="font-medium text-foreground">
             {activeTab === 'active' ? 'Aktiva bevakningar' : 'Avklarade bevakningar'}
           </span>

@@ -6,6 +6,7 @@ import { ElevWorkspaceLayout } from '@app/layouts/ElevWorkspaceLayout.js';
 import { EkonomiWorkspaceLayout } from '@app/layouts/EkonomiWorkspaceLayout.js';
 import { PersonalResurserWorkspaceLayout } from '@app/layouts/PersonalResurserWorkspaceLayout.js';
 import { SystemWorkspaceLayout } from '@app/layouts/SystemWorkspaceLayout.js';
+import { SchedulingWorkspaceLayout } from '@modules/scheduling/routes/SchedulingWorkspaceLayout.js';
 import { AuthLayout } from '@app/layouts/AuthLayout.js';
 import { ProtectedRoute } from '@shared/components/guards/ProtectedRoute.js';
 import { PlatformAdminRoute } from '@shared/components/guards/PlatformAdminRoute.js';
@@ -170,6 +171,12 @@ const DashboardPage = lazy(() => import('@modules/dashboard/routes/DashboardPage
 const StudentsPage      = lazy(() => import('@modules/students/index.js').then(m => ({ default: m.StudentsPage })));
 const InaktivaElevPage  = lazy(() => import('@modules/students/routes/InaktivaElevPage.js').then(m => ({ default: m.InaktivaElevPage })));
 const SchedulingPage = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.SchedulingPage })));
+const SchedulingCalendarPage = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.SchedulingCalendarPage })));
+const MySchedulePage         = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.MySchedulePage })));
+const BookingListPage        = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.BookingListPage })));
+const BokningarPage          = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.BokningarPage })));
+const WaitlistPage           = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.WaitlistPage })));
+const WatchlistPage          = lazy(() => import('@modules/watchlist/index.js').then(m => ({ default: m.WatchlistPage })));
 const InstructorsPage = lazy(() => import('@modules/instructors/index.js').then(m => ({ default: m.InstructorsPage })));
 const FinancePage = lazy(() => import('@modules/finance/index.js').then(m => ({ default: m.FinancePage })));
 const CorporatePage = lazy(() => import('@modules/corporate/index.js').then(m => ({ default: m.CorporatePage })));
@@ -1035,6 +1042,75 @@ export const routes: RouteObject[] = [
           </Suspense>
         ),
       },
+      // ── Schema workspace tab routes ──────────────────────────────────────
+      // Klasslista lives at the pre-existing /class-list path (outside the
+      // /scheduling/* prefix) — grouped here under the same
+      // SchedulingWorkspaceLayout as the other Schema tabs (pathless parent
+      // route, same technique used for Elever/Ekonomi/etc.) so it renders
+      // inside the workspace's tab bar instead of navigating away from it.
+      // No path changed for any of these — every existing deep link still
+      // resolves to the exact same component.
+      {
+        element: <SchedulingWorkspaceLayout />,
+        children: [
+          {
+            path: 'scheduling',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <SchedulingCalendarPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'scheduling/mine',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <MySchedulePage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'scheduling/bokningar',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <BokningarPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'scheduling/watchlist',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <WatchlistPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'scheduling/waitlist',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <WaitlistPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'scheduling/list',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <BookingListPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'class-list',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ClassListPage />
+              </Suspense>
+            ),
+          },
+        ],
+      },
       {
         path: 'instructors/*',
         element: (
@@ -1110,14 +1186,6 @@ export const routes: RouteObject[] = [
         element: (
           <Suspense fallback={<LoadingScreen />}>
             <CurriculumTemplatePage />
-          </Suspense>
-        ),
-      },
-      {
-        path: 'class-list',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <ClassListPage />
           </Suspense>
         ),
       },

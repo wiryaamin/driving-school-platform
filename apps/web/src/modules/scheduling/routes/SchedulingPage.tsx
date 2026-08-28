@@ -1,11 +1,4 @@
 import { Routes, Route } from 'react-router-dom';
-import { SchedulingWorkspaceLayout } from './SchedulingWorkspaceLayout.js';
-import { SchedulingCalendarPage } from './SchedulingCalendarPage.js';
-import { MySchedulePage } from './MySchedulePage.js';
-import { BookingListPage } from './BookingListPage.js';
-import { BokningarPage } from './BokningarPage.js';
-import { WaitlistPage } from './WaitlistPage.js';
-import { WatchlistPage } from '@modules/watchlist/index.js';
 import { TrafikPlatsPage } from './TrafikPlatsPage.js';
 import { SchedulingGenerationPage } from './SchedulingGenerationPage.js';
 import { SlotTemplatesPage } from './SlotTemplatesPage.js';
@@ -14,20 +7,17 @@ import { SchedulingStatistikPage } from './SchedulingStatistikPage.js';
 import { KursoverSiktPage } from './KursoverSiktPage.js';
 import { InstructorIcalPage } from './InstructorIcalPage.js';
 
+// The Schema workspace's tab-bar routes (Mitt schema/Bokningsschema/
+// Bokningslista/Bevakningar/Väntelista/Passöversikt/Klasslista) are
+// registered directly in app/router/routes.tsx, wrapped by
+// SchedulingWorkspaceLayout there — see the comment at that route entry
+// for why (Klasslista lives outside the /scheduling/* prefix, so the
+// wrapping layout needs to sit above both prefixes as a true sibling).
+// This component now only owns the remaining, unwrapped admin/settings
+// sub-pages that were never part of the tab bar.
 export function SchedulingPage() {
   return (
     <Routes>
-      {/* Persistent Scheduling workspace shell — same routes as before,
-          just rendered inside the shared tab-bar layout via <Outlet/>
-          instead of each page owning its own copy of the tab bar. */}
-      <Route element={<SchedulingWorkspaceLayout />}>
-        <Route index element={<SchedulingCalendarPage />} />
-        <Route path="mine" element={<MySchedulePage />} />
-        <Route path="list" element={<BookingListPage />} />
-        <Route path="bokningar" element={<BokningarPage />} />
-        <Route path="waitlist" element={<WaitlistPage />} />
-        <Route path="watchlist" element={<WatchlistPage />} />
-      </Route>
       <Route path="planner" element={<TrafikPlatsPage />} />
       <Route path="generation" element={<SchedulingGenerationPage />} />
       <Route path="mallar" element={<SlotTemplatesPage />} />
