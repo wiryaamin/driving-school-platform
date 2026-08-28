@@ -171,7 +171,7 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
         <SidebarItem item={OVERVIEW_ITEM} onNavClick={onNavClick} />
       </div>
 
-      <div className="mx-3 h-px bg-sidebar-border shrink-0" />
+      <div className="mx-3 h-px bg-tenant-sidebar-border shrink-0" />
 
       {/* Scrollable workspace list. On small viewports the list can run
           taller than the pane itself, and this is a nested scroll region
@@ -214,7 +214,7 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
       </div>
 
       {/* Pinned bottom anchor — Inställningar, always visible regardless of section scroll */}
-      <div className="mx-3 h-px bg-sidebar-border shrink-0" />
+      <div className="mx-3 h-px bg-tenant-sidebar-border shrink-0" />
       <div className="px-3 pt-2 pb-3 shrink-0">
         <SidebarItem item={SETTINGS_ITEM} onNavClick={onNavClick} />
       </div>
@@ -233,10 +233,10 @@ export function Sidebar() {
     : null;
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-[280px] flex-col bg-sidebar border-r border-sidebar-border hidden md:flex z-40">
+    <aside className="fixed left-0 top-0 h-full w-[280px] flex-col bg-tenant-sidebar border-r border-tenant-sidebar-border hidden md:flex z-40">
 
       {/* Workspace Header */}
-      <div className="flex items-center gap-3 h-[72px] px-4 border-b border-sidebar-border shrink-0">
+      <div className="flex items-center gap-3 h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0">
         <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shrink-0">
           {orgInitials ? (
             <span className="text-sm font-bold text-primary-foreground">{orgInitials}</span>
@@ -250,9 +250,9 @@ export function Sidebar() {
         </div>
         <div className="min-w-0 flex-1">
           {isLoading ? (
-            <div className="h-4 w-28 bg-sidebar-accent/30 rounded animate-pulse" />
+            <div className="h-4 w-28 bg-tenant-sidebar-accent/30 rounded animate-pulse" />
           ) : (
-            <span className="text-sm font-semibold text-sidebar-primary-foreground truncate block leading-tight">
+            <span className="text-sm font-semibold text-tenant-sidebar-primary-foreground truncate block leading-tight">
               {organization?.name ?? 'Körskola'}
             </span>
           )}
@@ -285,7 +285,7 @@ function SidebarItem({
   if (item.comingSoon) {
     return (
       <div
-        className="flex items-center gap-3 px-2.5 py-1.5 rounded-lg text-sm font-medium text-sidebar-foreground opacity-40 cursor-default select-none"
+        className="flex items-center gap-3 px-2.5 py-1.5 rounded-lg text-sm font-medium text-tenant-sidebar-foreground opacity-40 cursor-default select-none"
         title="Kommer snart"
         aria-disabled="true"
       >
@@ -302,11 +302,11 @@ function SidebarItem({
       to={item.path}
       onClick={onNavClick}
       className={cn(
-        'flex items-center gap-3 py-1.5 rounded-lg text-sm font-medium',
+        'flex items-center gap-3 px-2.5 py-1.5 rounded-lg text-sm font-medium',
         'transition-colors duration-150',
         isActive
-          ? 'bg-sidebar-accent text-sidebar-accent-foreground border-l-[3px] border-sidebar-primary pl-[7px] pr-2.5'
-          : 'text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground px-2.5'
+          ? 'bg-tenant-sidebar-accent text-tenant-sidebar-accent-foreground'
+          : 'text-tenant-sidebar-foreground hover:bg-tenant-sidebar-accent/50 hover:text-tenant-sidebar-accent-foreground'
       )}
     >
       <Icon className="w-4 h-4 shrink-0" strokeWidth={1.75} />
@@ -335,10 +335,10 @@ function OrgStatusChip({ org }: { org: Organization }) {
     return <span className="text-[11px] font-medium text-amber-500 leading-none mt-0.5 block">Testperiod</span>;
   }
   if (org.subscription_tier === 'enterprise') {
-    return <span className="text-[11px] font-medium text-sidebar-primary leading-none mt-0.5 block">Enterprise</span>;
+    return <span className="text-[11px] font-medium text-tenant-sidebar-primary leading-none mt-0.5 block">Enterprise</span>;
   }
   if (org.subscription_tier === 'professional') {
-    return <span className="text-[11px] font-medium text-sidebar-primary leading-none mt-0.5 block">Professional</span>;
+    return <span className="text-[11px] font-medium text-tenant-sidebar-primary leading-none mt-0.5 block">Professional</span>;
   }
-  return <span className="text-[11px] font-medium text-sidebar-foreground/40 leading-none mt-0.5 block">Aktiv</span>;
+  return <span className="text-[11px] font-medium text-tenant-sidebar-foreground/40 leading-none mt-0.5 block">Aktiv</span>;
 }

@@ -68,8 +68,12 @@
     --divider: 216 20% 93%;
     --ring: 214 81% 46%;
 
-    /* Surface (subtle panel distinct from a raised --card) */
-    --surface: 216 20% 98%;
+    /* Surface (subtle panel distinct from a raised --card) — Tenant Dashboard
+       Visual Alignment (2026-08-29): now backs the tenant AppShell's own page
+       canvas (.tenant-shell), giving it a neutral gray distinct from white
+       --card surfaces, matching the reference dashboard's flat, low-contrast
+       background. Was previously defined but unused anywhere in the app. */
+    --surface: 240 5% 96%;
 
     /* Text hierarchy — --foreground/--muted-foreground already cover
        Text Primary/Text Muted; this fills the missing middle tier. */
@@ -83,7 +87,7 @@
     /* Radius */
     --radius: 0.5rem;
 
-    /* Sidebar — literal brand navy */
+    /* Sidebar — literal brand navy (Platform Admin's own sidebar) */
     --sidebar-background: 216 71% 20%;
     --sidebar-foreground: 215 20% 75%;
     --sidebar-primary: 214 90% 62%;
@@ -91,6 +95,27 @@
     --sidebar-accent: 216 55% 26%;
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 216 50% 24%;
+
+    /* Tenant sidebar — scoped charcoal/blue-gray variant (Tenant Dashboard
+       Visual Alignment, 2026-08-29), used only by the tenant dashboard's own
+       Sidebar/MobileSidebar. Deliberately a separate token family from
+       --sidebar-* above rather than repointing it, so Platform Admin's
+       identically-named sidebar tokens (PlatformSidebar.tsx) are untouched. */
+    --tenant-sidebar-background: 228 18% 26%;
+    --tenant-sidebar-foreground: 220 18% 88%;
+    --tenant-sidebar-primary: 220 90% 72%;
+    --tenant-sidebar-primary-foreground: 0 0% 100%;
+    --tenant-sidebar-accent: 228 20% 35%;
+    --tenant-sidebar-accent-foreground: 0 0% 100%;
+    --tenant-sidebar-border: 228 15% 33%;
+
+    /* Action — primary call-to-action accent (Tenant Dashboard Visual
+       Alignment). Defaults to --primary everywhere; only .tenant-shell
+       below overrides it to orange. See Button component (packages/ui)
+       and AppShell.tsx. */
+    --action: var(--primary);
+    --action-foreground: var(--primary-foreground);
+    --action-hover: var(--primary-hover);
 
     /* Layout */
     --sidebar-width: 280px;
@@ -164,6 +189,24 @@
     --sidebar-primary: 214 90% 66%;
     --sidebar-accent: 216 55% 15%;
     --sidebar-border: 216 55% 15%;
+
+    /* Tenant sidebar dark */
+    --tenant-sidebar-background: 228 20% 15%;
+    --tenant-sidebar-accent: 228 18% 22%;
+    --tenant-sidebar-border: 228 16% 20%;
+  }
+
+  /* Tenant dashboard shell scope (Tenant Dashboard Visual Alignment,
+     2026-08-29) — applied once, on AppShell.tsx's outer wrapper. Overrides
+     --action to the reference's orange CTA color only within this DOM
+     subtree; Platform Admin, Student Portal, and public marketing render
+     the same Button component outside this class and keep the unchanged
+     --primary-based blue. One fixed accent regardless of light/dark theme
+     (a button's own background doesn't need to shift with page theme). */
+  .tenant-shell {
+    --action: 16 100% 60%;
+    --action-foreground: 0 0% 100%;
+    --action-hover: 16 90% 54%;
   }
 
   * {

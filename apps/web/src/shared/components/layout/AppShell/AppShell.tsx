@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { Sidebar } from '../Sidebar/Sidebar.js';
@@ -7,6 +8,22 @@ import { CommandPalette } from '../../CommandPalette/CommandPalette.js';
 import { Toaster } from '@platform/ui';
 import { useSessionStore } from '@core/store/session.store.js';
 import { getTrialLockState } from '@core/auth/trialLock.js';
+
+// Dialog/Sheet (packages/ui) render via a Radix Portal into document.body —
+// a DOM sibling of this component, not a descendant — so the `.tenant-shell`
+// class on the wrapper below never reaches them through the normal CSS
+// cascade, and every dialog's primary button would silently fall back to
+// the unscoped (blue) --action default instead of the tenant's orange.
+// Mirroring the class onto <body> for as long as this shell is mounted
+// closes that gap without touching Dialog/Sheet/Portal internals — any
+// portal content attached to body while the tenant dashboard is active
+// inherits the same CSS variables the in-tree class provides.
+function useTenantShellBodyClass(): void {
+  useEffect(() => {
+    document.body.classList.add('tenant-shell');
+    return () => document.body.classList.remove('tenant-shell');
+  }, []);
+}
 
 function TrialGraceBanner() {
   const organization = useSessionStore((s) => s.organization);
@@ -25,8 +42,16 @@ function TrialGraceBanner() {
 }
 
 export function AppShell() {
+  useTenantShellBodyClass();
+
   return (
-    <div className="min-h-screen bg-background">
+    // tenant-shell (Tenant Dashboard Visual Alignment, 2026-08-29) scopes
+    // the orange CTA accent (--action, see Button component) and the
+    // neutral gray page canvas (bg-surface, distinct from white bg-card
+    // content surfaces) to only this tree — Platform Admin/Student Portal/
+    // public marketing use their own separate shell components and are
+    // unaffected. See globals.css for the token definitions.
+    <div className="tenant-shell min-h-screen bg-surface">
       {/* Desktop sidebar — hidden on mobile */}
       <Sidebar />
 

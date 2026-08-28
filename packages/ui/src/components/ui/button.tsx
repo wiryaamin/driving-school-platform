@@ -8,7 +8,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        // Uses --action rather than --primary directly so the tenant
+        // dashboard (AppShell.tsx's .tenant-shell wrapper) can render this
+        // as the reference's orange CTA while Platform Admin/Student
+        // Portal/public marketing — which render this exact same component
+        // outside that wrapper — keep the unchanged brand blue (--action
+        // defaults to --primary's value everywhere else). See globals.css.
+        default: 'bg-action text-action-foreground hover:bg-action-hover',
         destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
         outline: 'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',

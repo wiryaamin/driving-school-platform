@@ -39,7 +39,7 @@
     --input: 216 20% 90%;
     --divider: 216 20% 93%;
     --ring: 214 81% 46%;
-    --surface: 216 20% 98%;
+    --surface: 240 5% 96%;
     --foreground-secondary: 217 20% 32%;
     --disabled: 216 15% 82%;
     --disabled-foreground: 216 10% 55%;
@@ -52,6 +52,16 @@
     --sidebar-accent: 216 55% 26%;
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 216 50% 24%;
+    --tenant-sidebar-background: 228 18% 26%;
+    --tenant-sidebar-foreground: 220 18% 88%;
+    --tenant-sidebar-primary: 220 90% 72%;
+    --tenant-sidebar-primary-foreground: 0 0% 100%;
+    --tenant-sidebar-accent: 228 20% 35%;
+    --tenant-sidebar-accent-foreground: 0 0% 100%;
+    --tenant-sidebar-border: 228 15% 33%;
+    --action: var(--primary);
+    --action-foreground: var(--primary-foreground);
+    --action-hover: var(--primary-hover);
     --sidebar-width: 256px;
     --sidebar-collapsed-width: 64px;
     --topbar-height: 56px;
@@ -98,5 +108,16 @@
     --sidebar-primary: 214 90% 66%;
     --sidebar-accent: 216 55% 15%;
     --sidebar-border: 216 55% 15%;
+    --tenant-sidebar-background: 228 20% 15%;
+    --tenant-sidebar-accent: 228 18% 22%;
+    --tenant-sidebar-border: 228 16% 20%;
+  }
+
+  /* Tenant dashboard shell scope — see apps/web/src/globals.css for the full
+     rationale. Kept in sync here since both stylesheets define this layer. */
+  .tenant-shell {
+    --action: 16 100% 60%;
+    --action-foreground: 0 0% 100%;
+    --action-hover: 16 90% 54%;
   }
 }

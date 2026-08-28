@@ -89,6 +89,32 @@ export const baseTailwindConfig = {
           'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
           border: 'hsl(var(--sidebar-border))',
         },
+        // Tenant sidebar — scoped variant used only by the tenant dashboard's
+        // own Sidebar/MobileSidebar (Tenant Dashboard Visual Alignment,
+        // 2026-08-29). Kept fully separate from `sidebar` above so Platform
+        // Admin's own sidebar (PlatformSidebar.tsx, still using `sidebar-*`)
+        // is unaffected by this recolor.
+        'tenant-sidebar': {
+          DEFAULT: 'hsl(var(--tenant-sidebar-background))',
+          foreground: 'hsl(var(--tenant-sidebar-foreground))',
+          primary: 'hsl(var(--tenant-sidebar-primary))',
+          'primary-foreground': 'hsl(var(--tenant-sidebar-primary-foreground))',
+          accent: 'hsl(var(--tenant-sidebar-accent))',
+          'accent-foreground': 'hsl(var(--tenant-sidebar-accent-foreground))',
+          border: 'hsl(var(--tenant-sidebar-border))',
+        },
+        // Action — the primary call-to-action accent. Defaults to `--primary`
+        // everywhere (identical to today); overridden only inside the
+        // `.tenant-shell` wrapper (AppShell.tsx) so the shared Button
+        // component's `default` variant renders orange in the tenant
+        // dashboard specifically, without touching Platform Admin, Student
+        // Portal, or public marketing, which render the exact same Button
+        // component outside that wrapper.
+        action: {
+          DEFAULT: 'hsl(var(--action))',
+          foreground: 'hsl(var(--action-foreground))',
+          hover: 'hsl(var(--action-hover))',
+        },
       },
       borderRadius: {
         lg: 'var(--radius)',
