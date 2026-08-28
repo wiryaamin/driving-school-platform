@@ -36,6 +36,12 @@ interface WorkspaceTabsLayoutProps {
   /** Icon shown next to the title in the TopBar — pass the same icon used
    * for this workspace's sidebar item for visual consistency. */
   titleIcon?: LucideIcon | undefined;
+  /** Set when this tab bar itself renders inside another workspace's
+   * Outlet (e.g. Rapporter's own tab bar nested inside System) — that
+   * outer workspace has already cancelled the app shell's page padding
+   * once with its own -mx-6 -mt-4, so doing it again here would push
+   * content an extra 24px left, clipping it behind the fixed sidebar. */
+  nested?:    boolean | undefined;
 }
 
 function isTabActive(tab: WorkspaceTab, pathname: string): boolean {
@@ -44,7 +50,7 @@ function isTabActive(tab: WorkspaceTab, pathname: string): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
-export function WorkspaceTabsLayout({ tabs, title, titleIcon }: WorkspaceTabsLayoutProps) {
+export function WorkspaceTabsLayout({ tabs, title, titleIcon, nested }: WorkspaceTabsLayoutProps) {
   const navigate     = useNavigate();
   const location      = useLocation();
   const { can }       = usePermissions();
@@ -62,7 +68,7 @@ export function WorkspaceTabsLayout({ tabs, title, titleIcon }: WorkspaceTabsLay
   const visibleTabs = tabs.filter((tab) => tab.permission == null || can(tab.permission));
 
   return (
-    <div className="flex flex-col h-full min-h-0 -mx-6 -mt-4">
+    <div className={cn('flex flex-col h-full min-h-0', !nested && '-mx-6 -mt-4')}>
 
       {/* Module navigation bar */}
       <div className="flex items-center border-b border-border bg-card shrink-0 px-2">

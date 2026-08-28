@@ -39,7 +39,7 @@ const TABS: WorkspaceTab[] = [
 export function RapporterPage() {
   return (
     <Routes>
-      <Route element={<WorkspaceTabsLayout tabs={TABS} title="Rapporter" titleIcon={ChartBar} />}>
+      <Route element={<WorkspaceTabsLayout tabs={TABS} title="Rapporter" titleIcon={ChartBar} nested />}>
         <Route index                     element={<GrundrapporterPage />} />
         <Route path="kunder"             element={<KunderRapportPage />} />
         <Route path="ehandel"            element={<EhandelRapportPage />} />
