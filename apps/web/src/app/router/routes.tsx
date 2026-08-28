@@ -178,6 +178,7 @@ const BookingListPage        = lazy(() => import('@modules/scheduling/index.js')
 const BokningarPage          = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.BokningarPage })));
 const WaitlistPage           = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.WaitlistPage })));
 const WatchlistPage          = lazy(() => import('@modules/watchlist/index.js').then(m => ({ default: m.WatchlistPage })));
+const KursoverSiktPage       = lazy(() => import('@modules/scheduling/index.js').then(m => ({ default: m.KursoverSiktPage })));
 const InstructorsPage = lazy(() => import('@modules/instructors/index.js').then(m => ({ default: m.InstructorsPage })));
 const FinancePage = lazy(() => import('@modules/finance/index.js').then(m => ({ default: m.FinancePage })));
 const CorporatePage = lazy(() => import('@modules/corporate/index.js').then(m => ({ default: m.CorporatePage })));
@@ -1265,6 +1266,18 @@ export const routes: RouteObject[] = [
             element: (
               <Suspense fallback={<LoadingScreen />}>
                 <TeorifragorPage />
+              </Suspense>
+            ),
+          },
+          {
+            // Kursöversikt (risk1/risk2/intensive/group_theory group
+            // courses) had no tab-bar home anywhere before this — it was a
+            // bare, unwrapped route under Schema. Moved here rather than
+            // duplicated; same component, same URL.
+            path: 'scheduling/kurser',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <KursoverSiktPage />
               </Suspense>
             ),
           },

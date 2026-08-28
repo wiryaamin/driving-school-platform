@@ -79,9 +79,20 @@ function matchesAnyPrefix(prefixes: string[], pathname: string): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
+// Kursöversikt now renders inside Teori's own workspace (see
+// TeoriWorkspaceLayout), even though its URL still starts with
+// /scheduling — Schema's own matchFn below excludes it so the two
+// sidebar items don't both claim to be "active" on the same path.
+const TEORI_PREFIXES = ['/teorifragor', '/scheduling/kurser'];
+
 export const NAVIGATION: NavItem[] = [
   { key: 'elever',    labelSv: 'Kunder',               icon: Users,     path: '/students',   permission: 'students:student:read' as Permission },
-  { key: 'schema',    labelSv: 'Schema',               icon: Calendar,  path: '/scheduling', permission: 'scheduling:booking:read' as Permission },
+  {
+    key: 'schema', labelSv: 'Schema', icon: Calendar, path: '/scheduling', permission: 'scheduling:booking:read' as Permission,
+    matchFn: (pathname) =>
+      !matchesAnyPrefix(TEORI_PREFIXES, pathname) &&
+      matchesAnyPrefix(['/scheduling'], pathname),
+  },
   {
     key: 'ekonomi', labelSv: 'Ekonomi', icon: PieChart, path: '/finance', permission: 'finance:invoice:read' as Permission,
     matchFn: (pathname) =>
@@ -93,7 +104,10 @@ export const NAVIGATION: NavItem[] = [
     matchFn: (pathname) => matchesAnyPrefix(BOKFORING_PREFIXES, pathname),
   },
   { key: 'personal_resurser', labelSv: 'Personal & Resurser', icon: UserCheck, path: '/staff', permission: 'instructors:instructor:read' as Permission },
-  { key: 'teori', labelSv: 'Teori', icon: GraduationCap, path: '/teorifragor', permission: null },
+  {
+    key: 'teori', labelSv: 'Teori', icon: GraduationCap, path: '/teorifragor', permission: null,
+    matchFn: (pathname) => matchesAnyPrefix(TEORI_PREFIXES, pathname),
+  },
   {
     key: 'system', labelSv: 'System', icon: Megaphone, path: '/nyheter', permission: null,
     matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/logs', '/reports', '/insights'], pathname),
