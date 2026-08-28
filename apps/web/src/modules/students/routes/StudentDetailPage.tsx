@@ -226,7 +226,7 @@ function GreenBtn({
           type={type}
           disabled
           title="Denna funktion är under implementation"
-          className="px-4 py-1.5 text-sm font-medium rounded text-white bg-green-600 opacity-40 cursor-not-allowed"
+          className="px-4 py-1.5 text-sm font-medium rounded text-action-foreground bg-action opacity-40 cursor-not-allowed"
         >
           {children}
         </button>
@@ -240,7 +240,7 @@ function GreenBtn({
     <button
       type={type}
       onClick={onClick}
-      className="px-4 py-1.5 text-sm font-medium rounded text-white bg-green-600 hover:bg-green-700 transition-colors"
+      className="px-4 py-1.5 text-sm font-medium rounded text-action-foreground bg-action hover:bg-action-hover transition-colors"
     >
       {children}
     </button>
@@ -261,8 +261,8 @@ function BlueBtn({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'px-4 py-1.5 text-sm font-medium rounded text-white',
-        'bg-blue-600 hover:bg-blue-700 transition-colors',
+        'px-4 py-1.5 text-sm font-medium rounded text-action-foreground',
+        'bg-action hover:bg-action-hover transition-colors',
         disabled && 'opacity-50 cursor-not-allowed'
       )}
     >
@@ -861,7 +861,7 @@ function PasswordResetCard({
           onClick={() => void handleSend('sms')}
           disabled={!phone || sending !== null}
           title={!phone ? 'Inget mobilnummer registrerat' : undefined}
-          className="flex-1 py-2 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+          className="flex-1 py-2 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
         >
           {sending === 'sms' ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
           {sending === 'sms' ? 'Skickar…' : 'Skicka SMS'}
@@ -870,7 +870,7 @@ function PasswordResetCard({
           onClick={() => void handleSend('email')}
           disabled={!email || sending !== null}
           title={!email ? 'Ingen e-postadress registrerad' : undefined}
-          className="flex-1 py-2 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+          className="flex-1 py-2 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
         >
           {sending === 'email' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
           {sending === 'email' ? 'Skickar…' : 'Skicka e-post'}
@@ -941,7 +941,7 @@ function PortalInviteCard({ studentId, studentName }: { studentId: string; stude
         <button
           onClick={handleGenerate}
           disabled={generate.isPending}
-          className="w-full py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+          className="w-full py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
         >
           {generate.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Link2 className="w-3 h-3" />}
           {generate.isPending ? 'Genererar...' : 'Skicka portal-länk'}
@@ -1311,7 +1311,7 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                           <button
                             onClick={() => handleInviteAndNotify(g)}
                             disabled={tokenMut.isPending || sendMessage.isPending}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center gap-1"
                             title="Generera länk och skicka e-postinbjudan"
                           >
                             <Mail className="w-3 h-3" />
@@ -1337,7 +1337,7 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                           <button
                             onClick={() => handleGenerateToken(g)}
                             disabled={tokenMut.isPending}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center gap-1"
                             title="Generera portallänk (manuell kopiering)"
                           >
                             <Link2 className="w-3 h-3" />
@@ -1855,7 +1855,7 @@ function KundkortTab({
                             <button
                               onClick={() => void saveMilestone()}
                               disabled={savingMilestone}
-                              className="h-6 px-2 text-[10px] font-medium text-white bg-green-600 hover:bg-green-700 rounded disabled:opacity-50 transition-colors"
+                              className="h-6 px-2 text-[10px] font-medium text-action-foreground bg-action hover:bg-action-hover rounded disabled:opacity-50 transition-colors"
                             >
                               {savingMilestone ? '...' : 'Spara'}
                             </button>
@@ -2077,7 +2077,7 @@ function KundkortTab({
                 onClick={() => setInternalNotes(!internalNotes)}
                 className={cn(
                   'relative w-8 h-4 rounded-full transition-colors',
-                  internalNotes ? 'bg-blue-500' : 'bg-muted'
+                  internalNotes ? 'bg-action' : 'bg-muted'
                 )}
               >
                 <span className={cn(
@@ -2170,7 +2170,7 @@ function KundkortTab({
             <button
               onClick={onActivate}
               disabled={activating}
-              className="w-full py-1.5 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
+              className="w-full py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-50"
             >
               {activating
                 ? 'Aktiverar...'
@@ -3481,15 +3481,15 @@ function BokningarTab({
 
         {/* Quick nav */}
         <div className="flex items-center gap-2">
-          <Link to="/scheduling" className="px-3 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+          <Link to="/scheduling" className="px-3 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors flex items-center gap-1.5">
             <Calendar className="w-3 h-3" />
             Bokningsschema
           </Link>
-          <Link to="/scheduling/list" className="px-3 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors flex items-center gap-1.5">
+          <Link to="/scheduling/list" className="px-3 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors flex items-center gap-1.5">
             <ClipboardList className="w-3 h-3" />
             Bokningslista
           </Link>
-          <Link to="/scheduling/waitlist" className="px-3 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+          <Link to="/scheduling/waitlist" className="px-3 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors">
             Väntelista
           </Link>
         </div>
@@ -3666,7 +3666,7 @@ function BokningarTab({
               disabled={!student.phone || !!sending}
               onClick={() => void handleSend('sms')}
               title={!student.phone ? 'Eleven saknar telefonnummer' : undefined}
-              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
+              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-action hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed text-action-foreground transition-colors"
             >
               {sending === 'sms' && <Loader2 className="w-3 h-3 animate-spin" />}
               Skicka SMS
@@ -3675,7 +3675,7 @@ function BokningarTab({
               disabled={!student.email || !!sending}
               onClick={() => void handleSend('email')}
               title={!student.email ? 'Eleven saknar e-postadress' : undefined}
-              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
+              className="flex-1 py-2 text-xs font-medium rounded flex items-center justify-center gap-1.5 bg-action hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed text-action-foreground transition-colors"
             >
               {sending === 'email' && <Loader2 className="w-3 h-3 animate-spin" />}
               Skicka e-post
@@ -4514,7 +4514,7 @@ function SmsTab({ studentId, studentName, studentPhone }: {
           <button
             onClick={handleSend}
             disabled={!selected || !message.trim() || !studentPhone || !smsEnabled || sendMessage.isPending}
-            className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {sendMessage.isPending ? 'Skickar...' : 'Skicka SMS'}
           </button>
@@ -4724,7 +4724,7 @@ function WhatsAppTab({ studentId, studentName, studentPhone }: {
           <button
             onClick={handleSend}
             disabled={!selected || !message.trim() || !studentPhone || !whatsappEnabled || sendMessage.isPending}
-            className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {sendMessage.isPending ? 'Skickar...' : 'Skicka WhatsApp'}
           </button>
@@ -4860,7 +4860,7 @@ function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail
           <button
             onClick={handleSend}
             disabled={!studentEmail || !message.trim() || sendMessage.isPending}
-            className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+            className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
             {sendMessage.isPending ? 'Skickar...' : 'Skicka e-post'}
@@ -5094,8 +5094,8 @@ function HistorikTab({ studentId }: { studentId: string }) {
                           className={cn(
                             'w-7 h-7 rounded-full border-2 flex items-center justify-center mx-auto transition-colors',
                             selectedSessionId === s.id
-                              ? 'border-blue-500 bg-blue-500 text-white'
-                              : 'border-border text-muted-foreground hover:border-blue-400 hover:text-blue-500',
+                              ? 'border-action bg-action text-action-foreground'
+                              : 'border-border text-muted-foreground hover:border-action/60 hover:text-action',
                           )}
                         >
                           <svg viewBox="0 0 24 24" className="w-3 h-3 fill-current ml-0.5">

@@ -32,7 +32,7 @@ export function DigitalaAvtalPage() {
           <h1 className="text-base font-semibold text-foreground">Digitala avtal</h1>
           <p className="text-sm text-muted-foreground">Låt elever signera avtal digitalt med Mobilt BankID</p>
         </div>
-        <Button className="bg-green-500 hover:bg-green-600 text-white shrink-0">Installera</Button>
+        <Button className="shrink-0">Installera</Button>
       </div>
 
       {/* Status */}
@@ -83,7 +83,7 @@ export function DigitalaAvtalPage() {
           Aktivera integrationen och börja skicka avtal för elektronisk signering med Mobilt BankID.
           Ni betalar 4,99 kr per signerat avtal — inga startavgifter.
         </p>
-        <Button className="bg-green-500 hover:bg-green-600 text-white">Installera digitala avtal</Button>
+        <Button>Installera digitala avtal</Button>
       </div>
     </div>
   );

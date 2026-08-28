@@ -72,7 +72,7 @@ export function SchedulingWorkspaceLayout() {
                   (tab.path === '/scheduling'
                     ? location.pathname === '/scheduling'
                     : location.pathname.startsWith(tab.path))
-                    ? 'border-primary text-primary'
+                    ? 'border-action text-action'
                     : 'border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
                 )}
               >
@@ -108,13 +108,13 @@ export function SchedulingWorkspaceLayout() {
             </div>
             <button
               onClick={() => navigate('/finance/cash')}
-              className="px-3 py-1 text-xs font-semibold rounded bg-amber-400 text-amber-900 hover:bg-amber-500 transition-colors whitespace-nowrap"
+              className="px-3 py-1 text-xs font-semibold rounded bg-action text-action-foreground hover:bg-action-hover transition-colors whitespace-nowrap"
             >
               Kassa
             </button>
             <button
               onClick={() => navigate('/students')}
-              className="px-3 py-1 text-xs font-semibold rounded bg-green-500 text-white hover:bg-green-600 transition-colors whitespace-nowrap"
+              className="px-3 py-1 text-xs font-semibold rounded bg-action text-action-foreground hover:bg-action-hover transition-colors whitespace-nowrap"
             >
               Ny kund
             </button>

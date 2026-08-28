@@ -240,7 +240,7 @@ export function BaskontaPage() {
           )}
         </div>
         <div className="flex justify-end">
-          <Button size="sm" onClick={() => saveIntervalMut.mutate()} disabled={saveIntervalMut.isPending} className="bg-green-500 hover:bg-green-600 text-white">
+          <Button size="sm" onClick={() => saveIntervalMut.mutate()} disabled={saveIntervalMut.isPending}>
             {saveIntervalMut.isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </div>
@@ -255,7 +255,7 @@ export function BaskontaPage() {
           <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">Fältet är inte obligatoriskt, men om det anges kommer alla transaktioner nästa redovisningsperiod att kopplas till detta kostnadsställe och därmed att synas i SIE-filen. Endast ett kostnadsställe kan anges åt gången i TABS.</p>
         </div>
         <div className="flex justify-end">
-          <Button size="sm" onClick={() => saveIntervalMut.mutate()} disabled={saveIntervalMut.isPending} className="bg-green-500 hover:bg-green-600 text-white">
+          <Button size="sm" onClick={() => saveIntervalMut.mutate()} disabled={saveIntervalMut.isPending}>
             {saveIntervalMut.isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </div>

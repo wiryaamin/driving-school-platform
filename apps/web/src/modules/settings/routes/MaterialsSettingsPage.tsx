@@ -387,7 +387,7 @@ export function MaterialsSettingsPage() {
           <ChevronRight className="w-3 h-3" />
           <span className="text-foreground">Material</span>
         </nav>
-        <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white gap-1.5" onClick={() => { setEditing(null); setShowSheet(true); }}>
+        <Button size="sm" className="gap-1.5" onClick={() => { setEditing(null); setShowSheet(true); }}>
           <Plus className="w-3.5 h-3.5" />
           Lägg till material
         </Button>

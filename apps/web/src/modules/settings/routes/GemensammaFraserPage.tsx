@@ -86,7 +86,7 @@ export function GemensammaFraserPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={openCreate}>
+          <Button size="sm" onClick={openCreate}>
             Skapa fras
           </Button>
         </div>
@@ -134,7 +134,7 @@ export function GemensammaFraserPage() {
           <p className="text-xs text-muted-foreground">{draftText.length}/200 tecken</p>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setShowForm(false)}>Avbryt</Button>
-            <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={save} disabled={saveMut.isPending}>
+            <Button size="sm" onClick={save} disabled={saveMut.isPending}>
               {saveMut.isPending ? 'Sparar…' : 'Spara'}
             </Button>
           </div>

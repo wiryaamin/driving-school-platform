@@ -28,7 +28,7 @@ export function MarknadsföringPage() {
           <h1 className="text-lg font-semibold">Marknadsföring</h1>
           <p className="text-sm text-slate-300">Smarta verktyg för din marknadsföring</p>
         </div>
-        <Button className="bg-green-500 hover:bg-green-600 text-white shrink-0">
+        <Button className="shrink-0">
           Installera
         </Button>
       </div>
@@ -86,7 +86,7 @@ export function MarknadsföringPage() {
         <p className="text-sm text-muted-foreground">
           Aktivera integrationen och börja skapa era första kampanjer redan idag.
         </p>
-        <Button className="bg-green-500 hover:bg-green-600 text-white px-8">
+        <Button className="px-8">
           Installera marknadsföringsmodulen
         </Button>
       </div>

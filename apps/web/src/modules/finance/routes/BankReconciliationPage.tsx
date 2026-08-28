@@ -199,7 +199,7 @@ function ImportWizardSheet({ open, onClose }: ImportWizardSheetProps) {
           {([1, 2] as const).map(s => (
             <div key={s} className="flex items-center gap-2">
               <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold
-                ${step === s ? 'bg-primary text-primary-foreground' : step > s ? 'bg-green-500 text-white' : 'bg-muted text-muted-foreground'}`}>
+                ${step === s ? 'bg-action text-action-foreground' : step > s ? 'bg-green-500 text-white' : 'bg-muted text-muted-foreground'}`}>
                 {step > s ? <CheckCircle2 className="w-4 h-4" /> : s}
               </div>
               <span className={`text-sm ${step === s ? 'font-semibold' : 'text-muted-foreground'}`}>

@@ -264,7 +264,7 @@ export function SegmentPage() {
           <span className="text-foreground">Segment</span>
         </nav>
         <PermissionGate permission={Permissions.STUDENTS_CREATE}>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={openCreate}>
+          <Button size="sm" onClick={openCreate}>
             <Plus className="w-4 h-4 mr-1.5" />
             Skapa nytt segment
           </Button>

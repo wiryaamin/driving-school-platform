@@ -331,7 +331,7 @@ export function WatchlistPage() {
         <div className="ml-auto pb-1">
           <Button
             size="sm"
-            className="border-0 bg-green-600 text-white hover:bg-green-700"
+            className="border-0 bg-action text-action-foreground hover:bg-action-hover"
             onClick={() => setAddOpen(true)}
           >
             <Plus className="mr-1.5 h-4 w-4" />

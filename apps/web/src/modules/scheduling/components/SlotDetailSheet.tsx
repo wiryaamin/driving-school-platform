@@ -215,7 +215,7 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
             <span className="text-xs text-muted-foreground mr-1">Närvaro:</span>
             <Button
               size="sm"
-              className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 text-white border-0"
+              className="h-7 text-xs gap-1 bg-action hover:bg-action-hover text-action-foreground border-0"
               disabled={busy}
               onClick={() => handleStatus('completed')}
             >
@@ -258,7 +258,7 @@ function BookingRow({ booking, slotId, slotLabel, onCancel, onReschedule, onNavi
               {(booking.status === 'draft' || booking.status === 'reserved') && (
                 <Button
                   size="sm"
-                  className="h-8 text-xs gap-1 bg-green-600 hover:bg-green-700 text-white border-0"
+                  className="h-8 text-xs gap-1 bg-action hover:bg-action-hover text-action-foreground border-0"
                   disabled={busy}
                   onClick={() => handleStatus('confirmed')}
                 >

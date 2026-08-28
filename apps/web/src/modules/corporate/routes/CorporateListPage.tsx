@@ -174,7 +174,7 @@ export function CorporateListPage() {
           <Button
             onClick={() => setCreateOpen(true)}
             size="sm"
-            className="border-0 bg-green-600 text-white hover:bg-green-700"
+            className="border-0 bg-action text-action-foreground hover:bg-action-hover"
           >
             <Plus className="mr-1.5 h-4 w-4" />
             Ny företagskund

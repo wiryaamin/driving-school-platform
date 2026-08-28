@@ -79,7 +79,7 @@ function ConfirmDialog({
           <button
             onClick={() => onConfirm(reason)}
             disabled={isPending}
-            className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+            className="px-4 py-2 text-sm font-medium bg-action text-action-foreground rounded-lg hover:bg-action-hover disabled:opacity-50 flex items-center gap-1.5"
           >
             {isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             Bekräfta
@@ -233,7 +233,7 @@ function PackageAssignmentSection({
         <button
           onClick={onAssign}
           disabled={isPending}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-action text-action-foreground rounded-lg hover:bg-action-hover disabled:opacity-50 transition-colors"
         >
           {isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Package className="w-3.5 h-3.5" />}
           Tilldela paket
@@ -404,7 +404,7 @@ export function EnrollmentDetailPage() {
                 <button
                   onClick={() => setShowApproveDialog(true)}
                   disabled={approve.isPending}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-action hover:bg-action-hover text-action-foreground rounded-lg transition-colors disabled:opacity-50"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   Godkänn
@@ -414,7 +414,7 @@ export function EnrollmentDetailPage() {
                 <button
                   onClick={() => setShowConvertDialog(true)}
                   disabled={convert.isPending}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-action hover:bg-action-hover text-action-foreground rounded-lg transition-colors disabled:opacity-50"
                 >
                   <User className="w-4 h-4" />
                   Omvandla till elev
@@ -569,7 +569,7 @@ export function EnrollmentDetailPage() {
                   <button
                     onClick={handleSaveNotes}
                     disabled={updateNotes.isPending}
-                    className="px-3 py-1.5 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                    className="px-3 py-1.5 text-sm font-medium bg-action text-action-foreground rounded-lg hover:bg-action-hover disabled:opacity-50 flex items-center gap-1.5"
                   >
                     {updateNotes.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                     Spara

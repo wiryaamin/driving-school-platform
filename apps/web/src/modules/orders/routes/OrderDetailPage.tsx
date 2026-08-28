@@ -143,7 +143,7 @@ export function OrderDetailPage() {
                 <button
                   onClick={() => void handleConfirm()}
                   disabled={updateMutation.isPending}
-                  className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm rounded-lg bg-action text-action-foreground font-medium hover:bg-action-hover disabled:opacity-50"
                 >
                   Bekräfta order
                 </button>
@@ -152,7 +152,7 @@ export function OrderDetailPage() {
                 <button
                   onClick={() => void handleMarkPaid()}
                   disabled={updateMutation.isPending}
-                  className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm rounded-lg bg-action text-action-foreground font-medium hover:bg-action-hover disabled:opacity-50"
                 >
                   Markera betald
                 </button>

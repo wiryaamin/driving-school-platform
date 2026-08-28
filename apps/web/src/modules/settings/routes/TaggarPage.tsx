@@ -87,7 +87,7 @@ export function TaggarPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={openCreate}>
+          <Button size="sm" onClick={openCreate}>
             <Plus className="w-4 h-4 mr-1.5" />
             Skapa ny tagg
           </Button>

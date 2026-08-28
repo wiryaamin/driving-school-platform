@@ -103,7 +103,7 @@ export function OrderListPage() {
             className={[
               'px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
               statusFilter === tab.value
-                ? 'bg-blue-600 text-white'
+                ? 'bg-action text-action-foreground'
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
             ].join(' ')}
           >

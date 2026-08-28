@@ -443,7 +443,7 @@ export function CommunicationHubPage() {
         {/* Quick actions */}
         <div className="flex items-center gap-2 flex-wrap">
           <Button
-            className="bg-green-500 hover:bg-green-600 text-white"
+            className="bg-action hover:bg-action-hover text-action-foreground"
             onClick={() => navigate('/communication/compose')}
           >
             <Plus className="w-4 h-4 mr-1.5" />

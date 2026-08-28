@@ -88,7 +88,7 @@ export function PresentkortSettingsPage() {
           />
         </div>
         <div className="flex justify-end">
-          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} className="bg-green-500 hover:bg-green-600 text-white">
+          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
             {saveMut.isPending ? 'Sparar…' : 'Spara inställningar'}
           </Button>
         </div>

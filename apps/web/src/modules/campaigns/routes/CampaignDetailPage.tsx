@@ -396,7 +396,7 @@ export function CampaignDetailPage() {
               <PermissionGate permission={Permissions.FINANCE_CAMPAIGN_UPDATE}>
                 <Button
                   size="sm"
-                  className="bg-green-600 hover:bg-green-700 text-white"
+                  className="bg-action hover:bg-action-hover text-action-foreground"
                   disabled={activate.isPending}
                   onClick={() => void handleActivate()}
                 >

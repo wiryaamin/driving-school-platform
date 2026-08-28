@@ -150,7 +150,7 @@ export function KassaSettingsPage() {
           <input type="number" value={payTermsDays} onChange={e => setPayTermsDays(Number(e.target.value))} min={0} max={365} className="w-28 h-9 px-3 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40" />
         </div>
         <div className="flex justify-end">
-          <Button size="sm" onClick={save} disabled={isPending} className="bg-green-500 hover:bg-green-600 text-white">
+          <Button size="sm" onClick={save} disabled={isPending}>
             {isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </div>

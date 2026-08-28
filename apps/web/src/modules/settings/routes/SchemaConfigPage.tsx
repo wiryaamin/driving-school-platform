@@ -116,7 +116,7 @@ export function SchemaConfigPage() {
         </label>
 
         <div className="flex justify-end">
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+          <Button size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
             {saveMut.isPending ? 'Sparar…' : 'Spara'}
           </Button>
         </div>

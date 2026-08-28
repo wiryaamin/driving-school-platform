@@ -140,7 +140,7 @@ export function HelgdagarPage() {
           <Button size="sm" variant="outline" onClick={importHolidays} disabled={saveMut.isPending}>
             Importera helgdagar
           </Button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={() => setShowForm(true)}>
+          <Button size="sm" onClick={() => setShowForm(true)}>
             Skapa helgdag
           </Button>
         </div>
@@ -169,7 +169,7 @@ export function HelgdagarPage() {
           </div>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setShowForm(false)}>Avbryt</Button>
-            <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={addCustom} disabled={saveMut.isPending}>
+            <Button size="sm" onClick={addCustom} disabled={saveMut.isPending}>
               {saveMut.isPending ? 'Sparar…' : 'Spara'}
             </Button>
           </div>

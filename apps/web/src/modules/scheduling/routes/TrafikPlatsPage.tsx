@@ -387,7 +387,7 @@ export function TrafikPlatsPage() {
                             </Button>
                             <Button
                               size="sm"
-                              className="h-7 px-3 text-xs bg-green-500 hover:bg-green-600 text-white border-0"
+                              className="h-7 px-3 text-xs bg-action hover:bg-action-hover text-action-foreground border-0"
                               onClick={(e) => { e.stopPropagation(); handleSlotClick(slot); }}
                             >
                               Visa

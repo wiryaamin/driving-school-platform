@@ -31,7 +31,7 @@ export function SkillsterPage() {
           <h1 className="text-base font-semibold text-foreground">Skillster</h1>
           <p className="text-sm text-muted-foreground">Realistisk körsimulator som kompletterar praktisk undervisning</p>
         </div>
-        <Button className="bg-green-500 hover:bg-green-600 text-white shrink-0">Installera</Button>
+        <Button className="shrink-0">Installera</Button>
       </div>
 
       {/* Status */}
@@ -74,7 +74,7 @@ export function SkillsterPage() {
         <p className="text-sm text-muted-foreground">
           Aktivera integrationen och börja synkronisera elevernas framsteg från körsimulator till Teoricentralen.
         </p>
-        <Button className="bg-green-500 hover:bg-green-600 text-white">Installera Skillster-integration</Button>
+        <Button>Installera Skillster-integration</Button>
       </div>
     </div>
   );

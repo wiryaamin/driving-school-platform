@@ -108,7 +108,7 @@ function StudentWorkspaceEmptyState({ onAdd }: { onAdd: () => void }) {
         <Button
           onClick={onAdd}
           size="sm"
-          className="bg-green-600 hover:bg-green-700 text-white border-0"
+          className="bg-action hover:bg-action-hover text-action-foreground border-0"
         >
           <Plus className="w-4 h-4 mr-1.5" />
           Lägg till kund
@@ -196,7 +196,7 @@ export function StudentDashboardPage() {
             <Button
               size="sm"
               onClick={() => navigate('/students/list?create=1')}
-              className="bg-green-600 hover:bg-green-700 text-white border-0"
+              className="bg-action hover:bg-action-hover text-action-foreground border-0"
             >
               <Plus className="w-4 h-4 mr-1.5" />
               Ny kund

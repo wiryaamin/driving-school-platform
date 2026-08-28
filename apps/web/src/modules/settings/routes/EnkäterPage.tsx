@@ -37,7 +37,7 @@ export function EnkäterPage() {
           <h1 className="text-base font-semibold text-foreground">Enkäter</h1>
           <p className="text-sm text-muted-foreground">Samla in feedback och förbättra er utbildning med enkäter</p>
         </div>
-        <Button className="bg-green-500 hover:bg-green-600 text-white shrink-0">Installera</Button>
+        <Button className="shrink-0">Installera</Button>
       </div>
 
       {/* Status */}
@@ -107,7 +107,7 @@ export function EnkäterPage() {
           elever för att kontinuerligt förbättra er verksamhet. Enkäter kommer att integreras med
           automationsfunktionen när den lanseras för att möjliggöra automatiska utskick.
         </p>
-        <Button className="bg-green-500 hover:bg-green-600 text-white">Installera enkäter (kostnadsfritt)</Button>
+        <Button>Installera enkäter (kostnadsfritt)</Button>
       </div>
     </div>
   );

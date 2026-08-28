@@ -307,7 +307,7 @@ export function LeadsPage() {
             <Users className="w-5 h-5 text-purple-600" />
             Leads
             {newCount > 0 && (
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">{newCount} ny{newCount !== 1 ? 'a' : ''}</span>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-action text-action-foreground">{newCount} ny{newCount !== 1 ? 'a' : ''}</span>
             )}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">

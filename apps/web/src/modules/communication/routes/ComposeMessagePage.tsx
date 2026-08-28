@@ -249,7 +249,7 @@ export function ComposeMessagePage() {
               </Button>
             )}
             <Button
-              className="bg-green-500 hover:bg-green-600 text-white"
+              className="bg-action hover:bg-action-hover text-action-foreground"
               onClick={() => handleSend()}
               disabled={send.isPending}
             >

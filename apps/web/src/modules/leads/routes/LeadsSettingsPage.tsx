@@ -427,7 +427,7 @@ export function LeadsSettingsPage() {
           <Users className="w-4 h-4" />
           Leads
           {newCount > 0 && (
-            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">{newCount}</span>
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-action text-action-foreground">{newCount}</span>
           )}
         </h2>
         <p className="text-sm text-muted-foreground mt-0.5">

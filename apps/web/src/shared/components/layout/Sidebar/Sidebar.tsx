@@ -237,9 +237,9 @@ export function Sidebar() {
 
       {/* Workspace Header */}
       <div className="flex items-center gap-3 h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0">
-        <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-action flex items-center justify-center shrink-0">
           {orgInitials ? (
-            <span className="text-sm font-bold text-primary-foreground">{orgInitials}</span>
+            <span className="text-sm font-bold text-action-foreground">{orgInitials}</span>
           ) : (
             <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
               <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -312,7 +312,7 @@ function SidebarItem({
       <Icon className="w-4 h-4 shrink-0" strokeWidth={1.75} />
       <span className="truncate flex-1">{item.labelSv}</span>
       {item.badge !== undefined && item.badge > 0 && (
-        <span className="ml-auto shrink-0 text-[11px] font-semibold bg-primary text-primary-foreground rounded-full w-5 h-5 flex items-center justify-center">
+        <span className="ml-auto shrink-0 text-[11px] font-semibold bg-action text-action-foreground rounded-full w-5 h-5 flex items-center justify-center">
           {item.badge > 99 ? '99+' : item.badge}
         </span>
       )}

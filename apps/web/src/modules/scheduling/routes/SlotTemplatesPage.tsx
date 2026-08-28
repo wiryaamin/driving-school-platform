@@ -286,7 +286,7 @@ function GenerateWeekCard() {
       <button
         onClick={handleGenerate}
         disabled={generate.isPending}
-        className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
+        className="w-full py-2.5 bg-action hover:bg-action-hover disabled:opacity-50 text-action-foreground font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2"
       >
         {generate.isPending
           ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -453,7 +453,7 @@ export function SlotTemplatesPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-action hover:bg-action-hover text-action-foreground text-sm font-semibold rounded-xl transition-colors"
         >
           <Plus className="w-4 h-4" />
           Ny mall
@@ -483,7 +483,7 @@ export function SlotTemplatesPage() {
           </p>
           <button
             onClick={() => setShowCreate(true)}
-            className="mt-2 flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors"
+            className="mt-2 flex items-center gap-2 px-4 py-2.5 bg-action hover:bg-action-hover text-action-foreground text-sm font-semibold rounded-xl transition-colors"
           >
             <Plus className="w-4 h-4" />
             Skapa din första mall

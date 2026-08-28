@@ -118,7 +118,7 @@ export function EnrollmentListPage() {
             onClick={() => handleStatusChange(tab.value)}
             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
               statusFilter === tab.value
-                ? 'bg-blue-600 text-white'
+                ? 'bg-action text-action-foreground'
                 : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-700'
             }`}
           >

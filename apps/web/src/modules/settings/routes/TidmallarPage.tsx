@@ -48,7 +48,7 @@ export function TidmallarPage() {
         </nav>
         <div className="flex items-center gap-2">
           <button type="button" className="text-xs text-primary hover:underline">Ge feedback</button>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" asChild>
+          <Button size="sm" asChild>
             <Link to="/settings/finance/lesson-types">Hantera lektionstyper</Link>
           </Button>
         </div>

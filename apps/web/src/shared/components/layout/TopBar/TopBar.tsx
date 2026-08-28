@@ -268,8 +268,8 @@ export function TopBar() {
             cn(
               'hidden sm:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold transition-colors',
               isActive
-                ? 'bg-amber-500 text-white'
-                : 'bg-amber-400 hover:bg-amber-500 text-white'
+                ? 'bg-action-hover text-action-foreground'
+                : 'bg-action hover:bg-action-hover text-action-foreground'
             )
           }
         >
@@ -481,8 +481,8 @@ function UserMenu({ displayName, email, role }: UserMenuProps) {
         aria-haspopup="true"
         aria-expanded={open}
       >
-        <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0">
-          <span className="text-xs font-semibold text-primary-foreground">{initials || '?'}</span>
+        <div className="w-7 h-7 rounded-full bg-action flex items-center justify-center shrink-0">
+          <span className="text-xs font-semibold text-action-foreground">{initials || '?'}</span>
         </div>
         <span className="hidden sm:block truncate max-w-[120px]">{displayName}</span>
         <ChevronDown className={cn('w-3.5 h-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />

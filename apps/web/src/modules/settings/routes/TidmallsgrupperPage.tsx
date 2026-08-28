@@ -129,7 +129,7 @@ export function TidmallsgrupperPage() {
           <span className="text-foreground">Tidmallsgrupper</span>
         </nav>
         <PermissionGate permission={Permissions.SCHEDULING_SLOT_CREATE}>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={openCreate}>
+          <Button size="sm" onClick={openCreate}>
             <Plus className="w-4 h-4 mr-1.5" />
             Skapa tidmallsgrupp
           </Button>

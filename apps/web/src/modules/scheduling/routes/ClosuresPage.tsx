@@ -297,7 +297,7 @@ export function ClosuresPage() {
           <PermissionGate permission={Permissions.SCHEDULING_AVAILABILITY_UPDATE}>
             <button
               onClick={openCreate}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-action hover:bg-action-hover text-action-foreground text-sm font-semibold rounded-xl transition-colors"
             >
               <Plus className="w-4 h-4" />
               Ny stängning
@@ -329,7 +329,7 @@ export function ClosuresPage() {
             <PermissionGate permission={Permissions.SCHEDULING_AVAILABILITY_UPDATE}>
               <button
                 onClick={openCreate}
-                className="mt-2 flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors"
+                className="mt-2 flex items-center gap-2 px-4 py-2.5 bg-action hover:bg-action-hover text-action-foreground text-sm font-semibold rounded-xl transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 Skapa din första stängning

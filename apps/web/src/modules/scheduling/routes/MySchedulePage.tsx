@@ -135,7 +135,7 @@ function AgendaBookingRow({
               onClick={() => handleAttendance('completed')}
               disabled={busy}
               title="Registrera närvaro"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-action hover:bg-action-hover text-action-foreground disabled:opacity-50 transition-colors"
             >
               {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
               <span className="hidden sm:inline">Närvaro</span>

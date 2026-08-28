@@ -126,7 +126,7 @@ function SaveButton({ onClick, loading, label = 'Spara' }: { onClick: () => void
       <button
         onClick={onClick}
         disabled={loading}
-        className="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white rounded-full px-6 py-2 text-sm font-semibold flex items-center gap-2"
+        className="bg-action hover:bg-action-hover disabled:opacity-60 text-action-foreground rounded-full px-6 py-2 text-sm font-semibold flex items-center gap-2"
       >
         {loading && <Loader2 className="w-4 h-4 animate-spin" />}
         {label}
@@ -652,7 +652,7 @@ function AvailabilityRulesSection({
             <button
               onClick={handleAdd}
               disabled={createMutation.isPending || !newStart || !newEnd || !newEffectiveFrom}
-              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+              className="bg-action hover:bg-action-hover disabled:opacity-50 text-action-foreground rounded px-4 py-2 text-sm font-medium"
             >
               {createMutation.isPending ? 'Sparar...' : 'Spara regel'}
             </button>
@@ -891,7 +891,7 @@ function TimeOffSection({
             <button
               onClick={handleAdd}
               disabled={createMutation.isPending || !newStartDate || !newEndDate}
-              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+              className="bg-action hover:bg-action-hover disabled:opacity-50 text-action-foreground rounded px-4 py-2 text-sm font-medium"
             >
               {createMutation.isPending ? 'Sparar...' : 'Skicka ansökan'}
             </button>
@@ -1142,7 +1142,7 @@ function VehicleAssignmentsSection({
             <button
               onClick={handleAssign}
               disabled={assignMutation.isPending || !newVehicleId}
-              className="bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-medium"
+              className="bg-action hover:bg-action-hover disabled:opacity-50 text-action-foreground rounded px-4 py-2 text-sm font-medium"
             >
               {assignMutation.isPending ? 'Sparar...' : 'Tilldela'}
             </button>
@@ -1362,7 +1362,7 @@ function CertificationsSection({
             <button
               onClick={handleSaveCert}
               disabled={!certIssuedAt || createMutation.isPending}
-              className="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
+              className="bg-action hover:bg-action-hover disabled:opacity-60 text-action-foreground rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
             >
               {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
               Spara intyg
@@ -1611,7 +1611,7 @@ function LoggarTab({ instructorId }: { instructorId: string }) {
                       className={cn(
                         'w-7 h-7 rounded border text-sm flex items-center justify-center',
                         p === page
-                          ? 'bg-blue-500 border-blue-500 text-white'
+                          ? 'bg-action border-action text-action-foreground'
                           : 'border-gray-300 hover:bg-gray-50',
                       )}
                     >
@@ -1844,7 +1844,7 @@ function InstallningarTab({
           <button
             onClick={handleGenerateLink}
             disabled={generateToken.isPending}
-            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
+            className="bg-action hover:bg-action-hover disabled:opacity-60 text-action-foreground rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
           >
             {generateToken.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
             {portalUrl ? 'Generera ny länk' : 'Generera portallänk'}

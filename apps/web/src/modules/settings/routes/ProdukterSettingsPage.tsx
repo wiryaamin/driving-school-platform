@@ -225,7 +225,7 @@ export function ProdukterSettingsPage() {
           <span className="text-foreground">Produkter</span>
         </nav>
         <PermissionGate permission={Permissions.FINANCE_PACKAGE_CREATE}>
-          <Button size="sm" className="bg-green-500 hover:bg-green-600 text-white" onClick={openCreate}>
+          <Button size="sm" onClick={openCreate}>
             <Plus className="w-4 h-4 mr-1.5" />
             Skapa produkt
           </Button>

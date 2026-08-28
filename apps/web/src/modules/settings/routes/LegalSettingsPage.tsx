@@ -117,7 +117,6 @@ export function LegalSettingsPage() {
           <div className="flex justify-end">
             <Button
               size="sm"
-              className="bg-green-500 hover:bg-green-600 text-white"
               onClick={() => void save(section.key)}
               disabled={saving === section.key}
             >
