@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, ExternalLink, LifeBuoy, LogOut, MapPin, Menu, MessageCircle, MessageSquare, Monitor, Moon, Globe, History, Phone, Search, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Newspaper, HelpCircle, Image as ImageIcon, Store, Star, Trash2 } from 'lucide-react';
+import { Bell, ChevronDown, LogOut, MapPin, Menu, MessageSquare, Moon, Search, Settings, Sun, User, ShoppingCart, Mail, CheckCircle, XCircle, Clock, Star, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate, useLocation, NavLink } from 'react-router-dom';
 import { cn } from '@/lib/utils.js';
@@ -289,7 +289,6 @@ export function TopBar() {
 
           <FavoritesMenu />
           <NotificationBell />
-          <HelpSupportMenu />
 
           <UserMenu
             displayName={profile ? `${profile.first_name} ${profile.last_name}` : (user?.email ?? '')}
@@ -432,154 +431,6 @@ function NotificationBell() {
                 Visar de {notifications.length} senaste notiserna
               </p>
             </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─── Help & Support Menu ──────────────────────────────────────────────────────
-
-function HelpSupportMenu() {
-  const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
-
-  const HELP_GROUPS: Array<{ heading?: string; items: Array<{
-    key:         string;
-    labelSv:     string;
-    icon:        typeof LifeBuoy;
-    href?:       string;
-    tel?:        string;
-    path?:       string;
-    external?:   boolean;
-    comingSoon?: boolean;
-  }> }> = [
-    {
-      items: [
-        { key: 'help',      labelSv: 'Hjälpcenter',    icon: LifeBuoy,      comingSoon: true },
-        { key: 'feedback',  labelSv: 'Feedbackportal',  icon: MessageSquare, comingSoon: true },
-        // Ändringslogg is the Announcements/Nyheter feature under a different
-        // name — same page, not a separate coming-soon item (see 'news' below).
-        { key: 'changelog', labelSv: 'Ändringslogg',   icon: History,       path: '/nyheter' },
-      ],
-    },
-    {
-      items: [
-        { key: 'chat',       labelSv: 'Chatta',         icon: MessageCircle, comingSoon: true },
-        { key: 'facebook',   labelSv: 'Facebook-grupp', icon: Globe,         href: 'https://www.facebook.com/', external: true },
-        { key: 'teamviewer', labelSv: 'TeamViewer',     icon: Monitor,       href: 'https://www.teamviewer.com/', external: true },
-      ],
-    },
-    {
-      items: [
-        { key: 'phone', labelSv: '08-38 33 30', icon: Phone, tel: '+4683833330' },
-      ],
-    },
-    {
-      heading: 'Resurser',
-      items: [
-        { key: 'news',    labelSv: 'Nyheter',        icon: Newspaper,  path: '/nyheter' },
-        { key: 'faq',     labelSv: 'Vanliga frågor', icon: HelpCircle, comingSoon: true },
-        { key: 'gallery', labelSv: 'Bildgalleri',    icon: ImageIcon,  comingSoon: true },
-        { key: 'shop',    labelSv: 'Köp online',     icon: Store,      comingSoon: true },
-      ],
-    },
-  ];
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          'w-9 h-9 rounded-lg flex items-center justify-center transition-colors',
-          'text-muted-foreground hover:text-foreground hover:bg-accent',
-          open && 'text-foreground bg-accent',
-        )}
-        aria-label="Hjälp och support"
-        aria-haspopup="true"
-        aria-expanded={open}
-      >
-        <LifeBuoy className="w-4 h-4" />
-      </button>
-
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute right-0 top-full mt-1 w-60 bg-popover border border-border rounded-xl shadow-lg z-50 overflow-hidden py-1">
-            <div className="px-3 py-2 border-b border-border mb-1">
-              <p className="text-xs font-semibold text-popover-foreground">Hjälp & Support</p>
-            </div>
-
-            {HELP_GROUPS.map((group, gi) => (
-              <div key={gi}>
-                {gi > 0 && <div className="mx-2 my-1 h-px bg-border" />}
-                {group.heading && (
-                  <p className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                    {group.heading}
-                  </p>
-                )}
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  const baseClass = cn(
-                    'w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-accent text-popover-foreground',
-                    item.comingSoon && 'opacity-40 cursor-default hover:bg-transparent',
-                  );
-
-                  if (item.comingSoon) {
-                    return (
-                      <div key={item.key} className={baseClass} title="Kommer snart" aria-disabled="true">
-                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                        <span className="flex-1">{item.labelSv}</span>
-                      </div>
-                    );
-                  }
-
-                  if (item.path) {
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => { setOpen(false); navigate(item.path!); }}
-                        className={baseClass}
-                      >
-                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                        <span className="flex-1 text-left">{item.labelSv}</span>
-                      </button>
-                    );
-                  }
-
-                  if (item.tel) {
-                    return (
-                      <a key={item.key} href={`tel:${item.tel}`} onClick={() => setOpen(false)} className={baseClass}>
-                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                        <span className="flex-1 font-mono text-xs">{item.labelSv}</span>
-                      </a>
-                    );
-                  }
-
-                  if (item.href) {
-                    return (
-                      <a
-                        key={item.key}
-                        href={item.href}
-                        target={item.external ? '_blank' : undefined}
-                        rel={item.external ? 'noopener noreferrer' : undefined}
-                        onClick={() => setOpen(false)}
-                        className={baseClass}
-                      >
-                        <Icon className="w-4 h-4 shrink-0 text-muted-foreground" />
-                        <span className="flex-1">{item.labelSv}</span>
-                        {item.external && <ExternalLink className="w-3 h-3 shrink-0 opacity-40" />}
-                      </a>
-                    );
-                  }
-
-
-                  return null;
-                })}
-              </div>
-            ))}
           </div>
         </>
       )}

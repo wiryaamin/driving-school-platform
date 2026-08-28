@@ -7,7 +7,7 @@ import {
   Settings,
   UserCheck,
   BookOpen, Rocket, PieChart,
-  Megaphone, GraduationCap,
+  Megaphone, GraduationCap, LifeBuoy,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
@@ -112,6 +112,7 @@ export const NAVIGATION: NavItem[] = [
     key: 'system', labelSv: 'System', icon: Megaphone, path: '/nyheter', permission: null,
     matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/logs', '/reports', '/insights'], pathname),
   },
+  { key: 'hjalp_support', labelSv: 'Hjälp & Support', icon: LifeBuoy, path: '/hjalp-support', permission: null },
 ];
 
 // ─── Shared Nav Content ───────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { EkonomiWorkspaceLayout } from '@app/layouts/EkonomiWorkspaceLayout.js';
 import { PersonalResurserWorkspaceLayout } from '@app/layouts/PersonalResurserWorkspaceLayout.js';
 import { SystemWorkspaceLayout } from '@app/layouts/SystemWorkspaceLayout.js';
 import { TeoriWorkspaceLayout } from '@app/layouts/TeoriWorkspaceLayout.js';
+import { HjalpSupportWorkspaceLayout } from '@app/layouts/HjalpSupportWorkspaceLayout.js';
 import { SchedulingWorkspaceLayout } from '@modules/scheduling/routes/SchedulingWorkspaceLayout.js';
 import { AuthLayout } from '@app/layouts/AuthLayout.js';
 import { ProtectedRoute } from '@shared/components/guards/ProtectedRoute.js';
@@ -203,6 +204,8 @@ const ResourcesPage          = lazy(() => import('@modules/resources/index.js').
 const RegulatoryPage         = lazy(() => import('@modules/regulatory/index.js').then(m => ({ default: m.RegulatoryPage })));
 const DocumentsPage          = lazy(() => import('@modules/documents/index.js').then(m => ({ default: m.DocumentsPage })));
 const NyheterPage            = lazy(() => import('@modules/settings/index.js').then(m => ({ default: m.NyheterPage })));
+const HjalpSupportPage       = lazy(() => import('@modules/support/index.js').then(m => ({ default: m.HjalpSupportPage })));
+const ResurserPage           = lazy(() => import('@modules/support/index.js').then(m => ({ default: m.ResurserPage })));
 const TeorifragorPage        = lazy(() => import('@modules/settings/index.js').then(m => ({ default: m.TeorifragorPage })));
 const StaffPage              = lazy(() => import('@modules/staff/index.js').then(m => ({ default: m.StaffPage })));
 const GuardiansPage          = lazy(() => import('@modules/guardians/index.js').then(m => ({ default: m.GuardiansPage })));
@@ -1309,6 +1312,35 @@ export const routes: RouteObject[] = [
             element: (
               <Suspense fallback={<LoadingScreen />}>
                 <RapporterPage />
+              </Suspense>
+            ),
+          },
+        ],
+      },
+
+      // ── Hjälp & Support workspace ────────────────────────────────────────
+      // Migrated off the header's support icon dropdown (former TopBar
+      // HelpSupportMenu) into a permanent, discoverable sidebar workspace.
+      // Same functions, same external links/tel/coming-soon items — see
+      // modules/support/lib/supportItems.ts. Ändringslogg (this workspace)
+      // and Nyheter (Resurser tab) both point at System's existing /nyheter
+      // route, same as the original dropdown did — not a duplicate page.
+      {
+        element: <HjalpSupportWorkspaceLayout />,
+        children: [
+          {
+            path: 'hjalp-support',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <HjalpSupportPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'hjalp-support/resurser',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <ResurserPage />
               </Suspense>
             ),
           },
