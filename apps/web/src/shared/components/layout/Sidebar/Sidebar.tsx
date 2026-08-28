@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Users, ChartBar,
+  Users,
   Calendar,
   Settings,
   UserCheck,
@@ -94,12 +94,8 @@ export const NAVIGATION: NavItem[] = [
   },
   { key: 'personal_resurser', labelSv: 'Personal & Resurser', icon: UserCheck, path: '/staff', permission: 'instructors:instructor:read' as Permission },
   {
-    key: 'rapporter', labelSv: 'Rapporter', icon: ChartBar, path: '/reports', permission: null,
-    matchFn: (pathname) => matchesAnyPrefix(['/reports', '/insights'], pathname),
-  },
-  {
     key: 'system', labelSv: 'System', icon: Megaphone, path: '/nyheter', permission: null,
-    matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/teorifragor', '/logs'], pathname),
+    matchFn: (pathname) => matchesAnyPrefix(['/nyheter', '/teorifragor', '/logs', '/reports', '/insights'], pathname),
   },
 ];
 

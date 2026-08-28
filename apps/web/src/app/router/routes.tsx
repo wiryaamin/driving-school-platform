@@ -1206,14 +1206,6 @@ export const routes: RouteObject[] = [
         ),
       },
       {
-        path: 'reports/*',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <RapporterPage />
-          </Suspense>
-        ),
-      },
-      {
         path: 'settings/*',
         element: (
           <Suspense fallback={<LoadingScreen />}>
@@ -1281,6 +1273,14 @@ export const routes: RouteObject[] = [
             element: (
               <Suspense fallback={<LoadingScreen />}>
                 <LogsPage />
+              </Suspense>
+            ),
+          },
+          {
+            path: 'reports/*',
+            element: (
+              <Suspense fallback={<LoadingScreen />}>
+                <RapporterPage />
               </Suspense>
             ),
           },
