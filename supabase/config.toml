@@ -458,7 +458,3 @@ verify_jwt = true
 [functions.platform-admin]
 enabled = true
 verify_jwt = true
-
-[functions.tenant-onboarding]
-enabled = true
-verify_jwt = true

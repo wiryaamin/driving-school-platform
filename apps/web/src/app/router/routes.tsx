@@ -44,10 +44,6 @@ const PlatformOnboardingJourneyPage = lazy(() => import('@modules/platform/index
 const OnboardingCommandCenterPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.OnboardingCommandCenterPage })));
 const TrialRequestsPage = lazy(() => import('@modules/platform/index.js').then(m => ({ default: m.TrialRequestsPage })));
 
-// ─── Tenant Onboarding module (lazy) ──────────────────────────────────────────
-const TenantOnboardingPage = lazy(() => import('@modules/tenant-onboarding/index.js').then(m => ({ default: m.TenantOnboardingPage })));
-const BusinessDiscoveryPage = lazy(() => import('@modules/tenant-onboarding/index.js').then(m => ({ default: m.BusinessDiscoveryPage })));
-
 // ─── Public catalog (lazy) ────────────────────────────────────────────────────
 const PublicCatalogPage       = lazy(() => import('@modules/public-catalog/index.js').then(m => ({ default: m.PublicCatalogPage })));
 const PublicPackageDetailPage = lazy(() => import('@modules/public-catalog/index.js').then(m => ({ default: m.PublicPackageDetailPage })));
@@ -871,21 +867,23 @@ export const routes: RouteObject[] = [
       </ProtectedRoute>
     ),
     children: [
+      // Kom igång removed (Tenant Registration Unification — Final Removal,
+      // 2026-08-28): normal tenant creation now completes required business
+      // setup during registration/provisioning, so the tenant-facing
+      // checklist and Business Discovery revisit page are gone. Both paths
+      // kept as client-side redirects only for stale bookmarks/internal
+      // links — see docs/KOM_IGANG_REMOVAL_AUDIT context in this session's
+      // history for the full dependency trace. Business logic these pages
+      // used to expose (business_profile, runFullPipeline,
+      // computeOnboardingProgress, Go Live) is untouched and still used
+      // directly by provisioning and by Platform Admin's own monitoring.
       {
         path: 'setup',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <TenantOnboardingPage />
-          </Suspense>
-        ),
+        element: <Navigate to="/dashboard" replace />,
       },
       {
         path: 'setup/business-discovery',
-        element: (
-          <Suspense fallback={<LoadingScreen />}>
-            <BusinessDiscoveryPage />
-          </Suspense>
-        ),
+        element: <Navigate to="/dashboard" replace />,
       },
       {
         path: 'dashboard',

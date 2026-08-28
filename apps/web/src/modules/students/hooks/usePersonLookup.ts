@@ -46,7 +46,7 @@ export interface PersonLookupResponse {
 // supabase-js wraps a non-2xx response in FunctionsHttpError whose .message is
 // a generic "Edge Function returned a non-2xx status code" — the real
 // {code, message} body must be read from error.context separately (same
-// idiom as modules/tenant-onboarding/hooks/useTenantOnboarding.ts).
+// idiom as modules/platform/lib/provisioningSchema.ts's extractFunctionErrorMessage()).
 async function extractErrorMessage(error: unknown, fallback: string): Promise<string> {
   if (error instanceof FunctionsHttpError) {
     try {

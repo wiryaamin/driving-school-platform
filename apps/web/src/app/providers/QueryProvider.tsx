@@ -9,8 +9,9 @@ import { ApiError } from '@platform/utils';
  * True for any 4xx (client) error — regardless of whether it surfaced as this
  * app's own ApiError or as a raw FunctionsHttpError from supabase.functions.invoke()
  * (the latter never becomes an ApiError; its status lives on error.context, the
- * unread Response object — see apps/web/src/modules/tenant-onboarding/hooks/useTenantOnboarding.ts
- * for the same read pattern used when parsing the body instead of just the status).
+ * unread Response object — see apps/web/src/modules/platform/lib/provisioningSchema.ts's
+ * extractFunctionErrorMessage() for the same read pattern used when parsing the body
+ * instead of just the status).
  *
  * 401 is deliberately excluded: unlike 403/404/etc., a 401 here reflects a
  * momentarily stale access token (e.g. after the tab was backgrounded past

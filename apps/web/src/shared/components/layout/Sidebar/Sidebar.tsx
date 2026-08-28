@@ -6,7 +6,7 @@ import {
   Calendar,
   Settings,
   UserCheck,
-  BookOpen, Rocket, PieChart,
+  BookOpen, PieChart,
   Megaphone, GraduationCap, LifeBuoy,
   type LucideIcon,
 } from 'lucide-react';
@@ -49,18 +49,6 @@ const OVERVIEW_ITEM: NavItem = {
   labelSv:    'Översikt',
   icon:       LayoutDashboard,
   path:       '/dashboard',
-  permission: null,
-};
-
-// Shown only while the org hasn't reached Go Live (Customer Provisioning &
-// Tenant Onboarding Architecture, Section 17) — disappears permanently once
-// organization.go_live_at is set, the same way the item never existed for a
-// tenant that onboarded before this capability shipped.
-const SETUP_ITEM: NavItem = {
-  key:        'setup',
-  labelSv:    'Kom igång',
-  icon:       Rocket,
-  path:       '/setup',
   permission: null,
 };
 
@@ -123,8 +111,6 @@ interface SidebarNavContentProps {
 
 export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   const { can } = usePermissions();
-  const { organization } = useSession();
-  const showSetup = organization != null && organization.go_live_at == null;
 
   // P2-2 (Final Gap Analysis): reuses the existing communications queue-health
   // endpoint — the same summary CommunicationHubPage already renders on open —
@@ -180,10 +166,9 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   return (
     <div className="flex flex-col flex-1 min-h-0">
 
-      {/* Primary anchor — Översikt (+ Kom igång while Tenant Onboarding is active) */}
+      {/* Primary anchor — Översikt */}
       <div className="px-3 pt-3 pb-2 shrink-0 space-y-0.5">
         <SidebarItem item={OVERVIEW_ITEM} onNavClick={onNavClick} />
-        {showSetup && <SidebarItem item={SETUP_ITEM} onNavClick={onNavClick} />}
       </div>
 
       <div className="mx-3 h-px bg-sidebar-border shrink-0" />
