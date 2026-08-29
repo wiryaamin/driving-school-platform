@@ -67,3 +67,33 @@ export function useUploadOrgBrandingAsset() {
     },
   });
 }
+
+// Clears an uploaded asset (e.g. a bad upload — wrong aspect ratio, wrong
+// background) so the slot falls back to its default placeholder and the
+// tenant can upload a replacement. Only removes the settings reference, not
+// the underlying Storage object — matches useUploadOrgBrandingAsset's own
+// scope, and an orphaned file is harmless (upsert overwrites it on re-upload).
+export function useRemoveOrgBrandingAsset() {
+  const { organization } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (assetKey: BrandingAssetKey) => {
+      if (!orgId) throw new Error('Ingen organisation');
+
+      const { data: cur } = await supabase.from('organizations').select('settings').eq('id', orgId).single();
+      const currentSettings = (cur as unknown as { settings: Record<string, unknown> } | null)?.settings ?? {};
+      const currentAssets = { ...((currentSettings['branding_assets'] as Record<string, string> | undefined) ?? {}) };
+      delete currentAssets[assetKey];
+
+      const { error: dbError } = await supabase.from('organizations').update({
+        settings: { ...currentSettings, branding_assets: currentAssets },
+      } as never).eq('id', orgId);
+      if (dbError) throw new Error(dbError.message);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['org-branding-assets', orgId] });
+    },
+  });
+}

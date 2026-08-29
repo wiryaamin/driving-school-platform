@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight, AlertTriangle, ShieldCheck, XCircle, Upload } from 'lucide-react';
+import { Building2, ChevronRight, AlertTriangle, ShieldCheck, XCircle, Upload, Trash2 } from 'lucide-react';
 import {
   Button, Skeleton,
   Card, CardContent, CardHeader, CardTitle, CardFooter,
@@ -10,7 +10,7 @@ import {
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
-import { useOrgBrandingAssets, useUploadOrgBrandingAsset } from '@shared/hooks/useOrgBranding.js';
+import { useOrgBrandingAssets, useUploadOrgBrandingAsset, useRemoveOrgBrandingAsset } from '@shared/hooks/useOrgBranding.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -149,6 +149,7 @@ export function CompanySettingsPage() {
   // this page's audience just wants "upload our logo", not asset variants.
   const { data: brandingAssets } = useOrgBrandingAssets();
   const uploadLogo = useUploadOrgBrandingAsset();
+  const removeLogo = useRemoveOrgBrandingAsset();
   const logoUrl = brandingAssets?.['logo_light'];
 
   function handleLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -162,6 +163,13 @@ export function CompanySettingsPage() {
       },
     );
     e.target.value = '';
+  }
+
+  function handleRemoveLogo() {
+    removeLogo.mutate('logo_light', {
+      onSuccess: () => toast({ title: 'Logotyp borttagen' }),
+      onError: () => toast({ title: 'Fel vid borttagning', variant: 'destructive' }),
+    });
   }
 
   const { data: org, isLoading } = useQuery<OrgRow | null>({
@@ -500,17 +508,32 @@ export function CompanySettingsPage() {
             <h1 className="text-xl font-semibold tracking-tight text-foreground">Företag</h1>
             <p className="text-sm text-muted-foreground">Hantera verksamhetens uppgifter.</p>
           </div>
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground rounded-lg border border-dashed border-border px-3 py-2 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-colors">
-            <input
-              type="file"
-              className="sr-only"
-              accept="image/png,image/jpeg,image/webp,image/svg+xml"
-              onChange={handleLogoFile}
-              disabled={uploadLogo.isPending}
-            />
-            <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-            {uploadLogo.isPending ? 'Laddar upp…' : logoUrl ? 'Byt logotyp' : 'Ladda upp logotyp'}
-          </label>
+          <div className="flex items-center gap-2">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground rounded-lg border border-dashed border-border px-3 py-2 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-colors">
+              <input
+                type="file"
+                className="sr-only"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                onChange={handleLogoFile}
+                disabled={uploadLogo.isPending}
+              />
+              <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+              {uploadLogo.isPending ? 'Laddar upp…' : logoUrl ? 'Byt logotyp' : 'Ladda upp logotyp'}
+            </label>
+            {logoUrl && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs text-destructive hover:text-destructive"
+                onClick={handleRemoveLogo}
+                disabled={removeLogo.isPending}
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" aria-hidden="true" />
+                {removeLogo.isPending ? 'Tar bort…' : 'Ta bort logotyp'}
+              </Button>
+            )}
+          </div>
           <p className="text-[11px] text-muted-foreground max-w-sm">
             Visas i sidomenyn i er instrumentpanel. Fler varianter (mörk bakgrund, favicon m.m.) hanteras under{' '}
             <Link to="/settings/website/brand" className="underline hover:text-foreground">Webbplats → Varumärke</Link>.
