@@ -159,7 +159,7 @@ export function DashboardPage() {
   const pendingTo   = useMemo(() => new Date(Date.now() +  7 * 86_400_000).toISOString(), []);
   const { data: pendingBookingsData, isLoading: bookingsLoading } = useBookingList({ from: pendingFrom, to: pendingTo, per_page: 100 }, { enabled: orgReady });
   const { data: queueHealthData }    = useQueueHealth({ enabled: orgReady });
-  const { data: recentActivityData, isLoading: activityLoading } = useRecentActivity(5);
+  const { data: recentActivityData, isLoading: activityLoading } = useRecentActivity(5, { enabled: orgReady });
 
   // Leads / Anmälningar — same data sources as their own standalone pages
   // (useLeadsList already shared with LeadsPage; useEnrollmentList already
@@ -168,7 +168,7 @@ export function DashboardPage() {
   const leadCounts = useMemo(() => deriveLeadCounts(leadsData ?? []), [leadsData]);
   const leadsTotalActive = leadCounts.new + leadCounts.contacted;
 
-  const { data: enrollmentsData, isLoading: enrollmentsLoading } = useEnrollmentList({ per_page: 1 });
+  const { data: enrollmentsData, isLoading: enrollmentsLoading } = useEnrollmentList({ per_page: 1 }, { enabled: orgReady });
 
   const reservedCount = useMemo(
     () => (pendingBookingsData?.data ?? []).filter((b) => b.status === 'reserved').length,

@@ -225,10 +225,11 @@ async function apiUpdateOnboarding({ id, onboarding_status }: { id: string; onbo
 
 // ─── Query hooks ──────────────────────────────────────────────────────────────
 
-export function useEnrollmentList(params: EnrollmentListParams = {}) {
+export function useEnrollmentList(params: EnrollmentListParams = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey:  enrollmentKeys.list(params),
     queryFn:   () => apiFetchEnrollments({ per_page: 25, ...params }),
+    enabled:   options?.enabled ?? true,
     staleTime: 60_000,
   });
 }
