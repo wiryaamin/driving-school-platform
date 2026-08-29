@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Building2, ChevronRight, AlertTriangle, ShieldCheck, XCircle } from 'lucide-react';
+import { Building2, ChevronRight, AlertTriangle, ShieldCheck, XCircle, Upload } from 'lucide-react';
 import {
   Button, Skeleton,
   Card, CardContent, CardHeader, CardTitle, CardFooter,
@@ -10,6 +10,7 @@ import {
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
+import { useOrgBrandingAssets, useUploadOrgBrandingAsset } from '@shared/hooks/useOrgBranding.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,29 @@ export function CompanySettingsPage() {
   const { organization } = useSession();
   const orgId = organization?.id;
   const queryClient = useQueryClient();
+
+  // Company logo (2026-08-29): same logo_light asset/hook already used by
+  // Settings → Webbplats → Varumärke and by the tenant sidebar mark — one
+  // upload here updates both, since it's the same organizations.settings
+  // .branding_assets['logo_light'] value under the hood. Kept as a single
+  // control here (unlike Varumärke's 7 light/dark/favicon/etc. slots) since
+  // this page's audience just wants "upload our logo", not asset variants.
+  const { data: brandingAssets } = useOrgBrandingAssets();
+  const uploadLogo = useUploadOrgBrandingAsset();
+  const logoUrl = brandingAssets?.['logo_light'];
+
+  function handleLogoFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    uploadLogo.mutate(
+      { assetKey: 'logo_light', file },
+      {
+        onSuccess: () => toast({ title: 'Logotyp sparades' }),
+        onError: () => toast({ title: 'Fel vid uppladdning', variant: 'destructive' }),
+      },
+    );
+    e.target.value = '';
+  }
 
   const { data: org, isLoading } = useQuery<OrgRow | null>({
     queryKey: ['org-company-settings', orgId],
@@ -464,12 +488,33 @@ export function CompanySettingsPage() {
 
       {/* Page header card */}
       <Card>
-        <CardContent className="p-8 flex flex-col items-center text-center gap-2">
-          <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 flex items-center justify-center">
-            <Building2 className="w-6 h-6" strokeWidth={1.75} aria-hidden="true" />
+        <CardContent className="p-8 flex flex-col items-center text-center gap-3">
+          <div className="w-16 h-16 rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 flex items-center justify-center overflow-hidden shrink-0">
+            {logoUrl ? (
+              <img src={logoUrl} alt={form.name || 'Företagslogotyp'} className="w-full h-full object-contain p-1.5" />
+            ) : (
+              <Building2 className="w-6 h-6" strokeWidth={1.75} aria-hidden="true" />
+            )}
           </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">Företag</h1>
-          <p className="text-sm text-muted-foreground">Hantera verksamhetens uppgifter.</p>
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">Företag</h1>
+            <p className="text-sm text-muted-foreground">Hantera verksamhetens uppgifter.</p>
+          </div>
+          <label className="inline-flex items-center gap-2 text-xs font-medium text-foreground rounded-lg border border-dashed border-border px-3 py-2 cursor-pointer hover:border-primary/50 hover:bg-muted/50 transition-colors">
+            <input
+              type="file"
+              className="sr-only"
+              accept="image/png,image/jpeg,image/webp,image/svg+xml"
+              onChange={handleLogoFile}
+              disabled={uploadLogo.isPending}
+            />
+            <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+            {uploadLogo.isPending ? 'Laddar upp…' : logoUrl ? 'Byt logotyp' : 'Ladda upp logotyp'}
+          </label>
+          <p className="text-[11px] text-muted-foreground max-w-sm">
+            Visas i sidomenyn i er instrumentpanel. Fler varianter (mörk bakgrund, favicon m.m.) hanteras under{' '}
+            <Link to="/settings/website/brand" className="underline hover:text-foreground">Webbplats → Varumärke</Link>.
+          </p>
         </CardContent>
       </Card>
 
