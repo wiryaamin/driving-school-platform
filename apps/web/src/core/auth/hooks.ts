@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@core/api/supabase.js';
 import { useSessionStore } from '@core/store/session.store.js';
 import { logger } from '@platform/utils';
+import { parseJwtClaims } from '@/lib/auth/jwt.js';
 import type { SignInCredentials, SignInResult } from '@platform/types';
 
 /**
@@ -15,7 +16,7 @@ export function useAuth() {
 
   const signIn = useCallback(async (credentials: SignInCredentials): Promise<SignInResult> => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: credentials.email,
         password: credentials.password,
       });
@@ -35,12 +36,30 @@ export function useAuth() {
         };
       }
 
+      // An account with valid credentials but no organization membership and
+      // no platform-admin flag has nowhere to land — AuthProvider's own
+      // session sync would silently clearSession() the moment it observes
+      // this (see syncSession's "user has no organization and is not a
+      // platform admin" branch), bouncing the user back to /auth/login with
+      // no explanation at all. Catching it here, synchronously, right after
+      // sign-in, means the user actually sees why instead of experiencing an
+      // unexplained "login doesn't work."
+      const claims = data.session ? parseJwtClaims(data.session.access_token) : null;
+      if (claims && !claims.organization_id && !claims.is_platform_admin) {
+        await supabase.auth.signOut();
+        clearSession();
+        return {
+          success: false,
+          error: 'Ditt konto är inte kopplat till någon organisation. Kontakta support för hjälp.',
+        };
+      }
+
       return { success: true };
     } catch (err) {
       logger.error('Sign-in unexpected error', err);
       return { success: false, error: 'Något gick fel. Kontakta support.' };
     }
-  }, []);
+  }, [clearSession]);
 
   const signOut = useCallback(async (): Promise<void> => {
     // Must be recorded before signOut() clears the session — identity_security_events
