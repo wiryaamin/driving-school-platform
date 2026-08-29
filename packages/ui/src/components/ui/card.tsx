@@ -28,7 +28,11 @@ const CardTitle = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivE
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('font-semibold leading-none tracking-tight', className)}
+      // font-heading (Listivo design-reference audit, 2026-08-29): CardTitle
+      // renders a <div>, not a heading tag, so the `.tenant-shell h1..h4`
+      // CSS rule in globals.css can't reach it — it opts in directly here
+      // instead, on the one shared component every card title goes through.
+      className={cn('font-heading font-semibold leading-none tracking-tight', className)}
       {...props}
     />
   )

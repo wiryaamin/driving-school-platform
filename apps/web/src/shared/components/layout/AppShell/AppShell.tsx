@@ -63,7 +63,14 @@ export function AppShell() {
         <TopBar />
         <TrialGraceBanner />
         <main className="flex-1 pt-[52px] overflow-auto">
-          <div className="p-4 md:p-5">
+          {/* p-[15px]/lg:p-[30px] (Listivo design-reference audit, 2026-08-29):
+              the source's mobile/desktop container padding, applied on the
+              one shared page-content wrapper every tenant route renders
+              into. Jumps at lg: (1024px), not md: (768px) — the 30px step
+              landed exactly on tablet width otherwise, squeezing KPI-card
+              grids into wrapping/truncated labels that weren't there
+              before; md: keeps the previous 20px so tablet is unaffected. */}
+          <div className="p-[15px] md:p-5 lg:p-[30px]">
             <Outlet />
           </div>
         </main>

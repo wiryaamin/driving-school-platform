@@ -100,7 +100,7 @@
        neutral gray — same relationship as the reference's page-background/
        content-surface split (a barely-tinted light blue-gray vs white),
        applied to a value we'd already chosen for unrelated reasons. */
-    --surface: 214 20% 97%;
+    --surface: 216 33% 97%;
 
     /* Text hierarchy — --foreground/--muted-foreground already cover
        Text Primary/Text Muted; this fills the missing middle tier. */
@@ -111,8 +111,12 @@
     --disabled-foreground: 216 10% 55%;
     --selection: 214 81% 92%;
 
-    /* Radius */
-    --radius: 0.5rem;
+    /* Radius — 10px (Listivo design-reference audit, 2026-08-29): this is
+       the "large surface" tier (rounded-lg — Card, Dialog/Sheet); the
+       "standard control" tier (rounded-md, 5px) and the tight-nested tier
+       (rounded-sm, 3px) are fixed values in tailwind.config.base.js rather
+       than calc() offsets from this variable — see that file's comment. */
+    --radius: 0.625rem;
 
     /* Sidebar — literal brand navy (Platform Admin's own sidebar) */
     --sidebar-background: 216 71% 20%;
@@ -224,16 +228,68 @@
   }
 
   /* Tenant dashboard shell scope (Tenant Dashboard Visual Alignment,
-     2026-08-29) — applied once, on AppShell.tsx's outer wrapper. Overrides
-     --action to the reference's orange CTA color only within this DOM
-     subtree; Platform Admin, Student Portal, and public marketing render
-     the same Button component outside this class and keep the unchanged
-     --primary-based blue. One fixed accent regardless of light/dark theme
-     (a button's own background doesn't need to shift with page theme). */
+     2026-08-29) — applied once, on AppShell.tsx's outer wrapper (and
+     mirrored onto <body> for the shell's lifetime, so Radix portals —
+     Dialog/Sheet/Select/Dropdown, which render into document.body — pick
+     up every override below too; see AppShell.tsx's useTenantShellBodyClass).
+     --action stays a fixed brand accent regardless of light/dark theme (a
+     button's own background doesn't need to shift with page theme).
+     The palette below (Listivo design-reference audit, 2026-08-29) is
+     LIGHT-ONLY and deliberately scoped to this class rather than :root —
+     Platform Admin, Student/Guardian/Instructor Portal, and public
+     marketing keep the original neutral-gray palette. See the matching
+     `.dark .tenant-shell` block further down, which must restore dark-mode
+     values for every token overridden here (custom properties don't
+     "turn off" on their own — without that block, toggling dark mode while
+     on the tenant dashboard would leave these light values stuck). */
   .tenant-shell {
     --action: 16 100% 60%;
     --action-foreground: 0 0% 100%;
     --action-hover: 16 90% 54%;
+
+    --foreground: 208 29% 22%;          /* ≈ #283948 — Listivo primary text */
+    --foreground-secondary: 207 24% 32%;
+    --muted-foreground: 206 20% 45%;    /* ≈ #556E82 — Listivo secondary text */
+    --border: 210 45% 85%;              /* ≈ #D5E3F0 family — Listivo light border */
+    --input: 210 45% 85%;
+    --accent: 209 55% 93%;              /* ≈ #E6F0FA — Listivo light surface */
+    --accent-foreground: 208 29% 22%;
+    --secondary: 209 55% 93%;
+    --secondary-foreground: 208 29% 22%;
+    --muted: 209 40% 95%;
+  }
+
+  /* Dark-mode safety net for the tenant palette above — restores the same
+     values the app already used in dark mode before this audit, so dark
+     mode is unaffected (Listivo has no dark theme to draw from; this pass
+     is about the light enterprise look). */
+  .dark .tenant-shell {
+    --foreground: 214 40% 98%;
+    --foreground-secondary: 216 20% 80%;
+    --muted-foreground: 216 20% 65%;
+    --border: 216 33% 17%;
+    --input: 216 33% 17%;
+    --accent: 216 33% 17%;
+    --accent-foreground: 214 40% 98%;
+    --secondary: 216 33% 17%;
+    --secondary-foreground: 214 40% 98%;
+    --muted: 216 33% 17%;
+    --surface: 217 40% 11%;
+  }
+
+  /* Heading typeface (Listivo design-reference audit, 2026-08-29) — real
+     heading tags inside the tenant dashboard (page titles, section
+     headings) get Red Hat Display instead of the body Inter face, for the
+     source's stronger heading/body contrast. Scoped the same way as the
+     palette above. CardTitle (packages/ui) renders a <div>, not a heading
+     tag, so it opts in explicitly via the font-heading utility instead of
+     this selector. */
+  .tenant-shell h1,
+  .tenant-shell h2,
+  .tenant-shell h3,
+  .tenant-shell h4 {
+    font-family: 'Red Hat Display', Inter, system-ui, sans-serif;
+    letter-spacing: -0.01em;
   }
 
   * {

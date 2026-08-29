@@ -116,13 +116,24 @@ export const baseTailwindConfig = {
           hover: 'hsl(var(--action-hover))',
         },
       },
+      // Listivo design-reference audit (2026-08-29): a restrained two-tier
+      // radius system — 5px for standard controls (Button, Input, Select,
+      // Tabs, Dropdown/Select content), 10px for large surfaces (Card,
+      // Dialog/Sheet). md/sm are fixed values rather than calc() offsets
+      // from --radius so the two tiers can each land on the source's exact
+      // 5px/10px targets instead of being arithmetically tied together.
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        lg: 'var(--radius)',   // 10px — see globals.css
+        md: '0.3125rem',       // 5px — standard controls
+        sm: '0.1875rem',       // 3px — tightly-nested elements (menu items)
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
+        // Headings only (Listivo design-reference audit, 2026-08-29) — see
+        // globals.css's `.tenant-shell h1..h4` rule and CardTitle, which
+        // apply this via the `font-heading` class rather than every page
+        // needing to reach for it individually.
+        heading: ['"Red Hat Display"', 'Inter', 'system-ui', 'sans-serif'],
       },
       keyframes: {
         'accordion-down': {

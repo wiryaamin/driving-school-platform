@@ -39,12 +39,12 @@
     --input: 216 20% 90%;
     --divider: 216 20% 93%;
     --ring: 214 81% 46%;
-    --surface: 214 20% 97%; /* Listivo design-reference audit (2026-08-29) — see apps/web/src/globals.css header comment */
+    --surface: 216 33% 97%; /* Listivo design-reference audit (2026-08-29) — see apps/web/src/globals.css header comment */
     --foreground-secondary: 217 20% 32%;
     --disabled: 216 15% 82%;
     --disabled-foreground: 216 10% 55%;
     --selection: 214 81% 92%;
-    --radius: 0.5rem;
+    --radius: 0.625rem; /* 10px large-surface tier — Listivo design-reference audit (2026-08-29), see apps/web/src/globals.css */
     --sidebar-background: 216 71% 20%;
     --sidebar-foreground: 215 20% 75%;
     --sidebar-primary: 214 90% 62%;
@@ -119,5 +119,38 @@
     --action: 16 100% 60%;
     --action-foreground: 0 0% 100%;
     --action-hover: 16 90% 54%;
+
+    --foreground: 208 29% 22%;
+    --foreground-secondary: 207 24% 32%;
+    --muted-foreground: 206 20% 45%;
+    --border: 210 45% 85%;
+    --input: 210 45% 85%;
+    --accent: 209 55% 93%;
+    --accent-foreground: 208 29% 22%;
+    --secondary: 209 55% 93%;
+    --secondary-foreground: 208 29% 22%;
+    --muted: 209 40% 95%;
+  }
+
+  .dark .tenant-shell {
+    --foreground: 214 40% 98%;
+    --foreground-secondary: 216 20% 80%;
+    --muted-foreground: 216 20% 65%;
+    --border: 216 33% 17%;
+    --input: 216 33% 17%;
+    --accent: 216 33% 17%;
+    --accent-foreground: 214 40% 98%;
+    --secondary: 216 33% 17%;
+    --secondary-foreground: 214 40% 98%;
+    --muted: 216 33% 17%;
+    --surface: 217 40% 11%;
+  }
+
+  .tenant-shell h1,
+  .tenant-shell h2,
+  .tenant-shell h3,
+  .tenant-shell h4 {
+    font-family: 'Red Hat Display', Inter, system-ui, sans-serif;
+    letter-spacing: -0.01em;
   }
 }

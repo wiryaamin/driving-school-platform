@@ -6,7 +6,8 @@ import { Button, cn } from '@platform/ui';
  * horizontal padding (High-Fidelity Hero Design Specification, Part 5).
  *
  * Radius is deliberately `rounded-xl` (12px, Tailwind's fixed scale) rather
- * than `rounded-lg` (`var(--radius)`, 8px) — Visual Refinement Sprint,
+ * than `rounded-lg` (`var(--radius)`, 10px as of the Listivo design-reference
+ * audit, 2026-08-29 — was 8px) — Visual Refinement Sprint,
  * "premium enterprise" button treatment. Using the fixed Tailwind value
  * instead of the shared `--radius` token keeps this a public-site-only
  * change: it does not alter the authenticated app's global radius, which
