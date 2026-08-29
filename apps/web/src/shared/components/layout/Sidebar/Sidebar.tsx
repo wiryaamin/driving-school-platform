@@ -112,6 +112,7 @@ interface SidebarNavContentProps {
 
 export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   const { can } = usePermissions();
+  const { organization } = useSession();
 
   // P2-2 (Final Gap Analysis): reuses the existing communications queue-health
   // endpoint — the same summary CommunicationHubPage already renders on open —
@@ -119,7 +120,11 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
   // check for a delivery failure. Not a second notification system, just this
   // count surfaced one level higher up. Shown on the Elever workspace item
   // now that Kommunikation is a tab inside it rather than its own nav item.
-  const { data: queueHealth } = useQueueHealth();
+  // Gated on organization readiness (2026-08-30) — fired unconditionally
+  // before, causing spurious 403s against the org-scoped queue-health
+  // function whenever this mounts before session sync completes (or for
+  // an org-less session that shouldn't reach this shell at all).
+  const { data: queueHealth } = useQueueHealth({ enabled: !!organization?.id });
   const commBadge = queueHealth?.total_retryable ?? 0;
 
   // Scroll affordance for the operational-sections pane below — on small

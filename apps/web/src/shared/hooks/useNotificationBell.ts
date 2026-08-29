@@ -67,18 +67,19 @@ async function apiFetchNotifications(qs: string): Promise<NotificationListRespon
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
-export function useRecentActivity(limit = 8) {
+export function useRecentActivity(limit = 8, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: notificationBellKeys.recent(limit),
     queryFn:  () => apiFetchNotifications(
       `per_page=${limit}&sort_by=created_at&sort_dir=desc`
     ),
+    enabled:   options?.enabled ?? true,
     staleTime: 2 * 60 * 1000,
     retry: false,
   });
 }
 
-export function useNotificationDot(): boolean {
+export function useNotificationDot(options?: { enabled?: boolean }): boolean {
   const { data } = useQuery({
     queryKey: notificationBellKeys.failedDot(),
     queryFn:  async () => {
@@ -89,6 +90,7 @@ export function useNotificationDot(): boolean {
         return false;
       }
     },
+    enabled:   options?.enabled ?? true,
     staleTime: 5 * 60 * 1000,
   });
   return data ?? false;

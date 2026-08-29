@@ -366,9 +366,16 @@ function NotifRow({ n, onNavigate }: { n: Notification; onNavigate: (path: strin
 }
 
 function NotificationBell() {
-  const hasUnread = useNotificationDot();
+  // Gated on organization readiness (2026-08-30): fired unconditionally
+  // before, so a platform admin or an org-less session (mid-sync right
+  // after login, or a self-service trial account stuck without an org)
+  // produced spurious 403s against the org-scoped notifications function —
+  // same pattern DashboardPage.tsx already uses for useQueueHealth.
+  const { organization } = useSessionStore();
+  const orgReady = !!organization?.id;
+  const hasUnread = useNotificationDot({ enabled: orgReady });
   const [open, setOpen] = useState(false);
-  const { data, isLoading } = useRecentActivity(10);
+  const { data, isLoading } = useRecentActivity(10, { enabled: orgReady });
   const navigate = useNavigate();
 
   const notifications = data?.data ?? [];
