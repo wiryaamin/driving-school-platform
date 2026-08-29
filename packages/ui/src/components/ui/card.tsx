@@ -5,7 +5,12 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('rounded-xl border bg-card text-card-foreground shadow-sm', className)}
+      // rounded-lg (not -xl): matches the radius every other shared surface
+      // (Dialog, Select/Dropdown content, Tabs list) already uses — Card was
+      // the one outlier on a wider radius, and this is one shared component,
+      // so the fix cascades everywhere Card is used instead of touching call
+      // sites individually. See globals.css's design-token notes.
+      className={cn('rounded-lg border bg-card text-card-foreground shadow-sm', className)}
       {...props}
     />
   )

@@ -16,6 +16,30 @@
   white) so every existing `bg-primary text-primary-foreground` button/link
   in the app stays accessible without changing which class names anything
   uses. --primary-dark is the literal brand navy.
+
+  Listivo design-reference audit (2026-08-29): a Listivo (marketing
+  classified-ads theme) stylesheet was reviewed as a visual-system reference
+  for the tenant/admin UI's surrounding chrome — text colors, surfaces,
+  borders, spacing, radius, shadow — NOT its blue/orange brand colors, its
+  marketing-scale type/button sizing, or any of its component code. Findings:
+    - --foreground (dark navy-on-light) / --muted-foreground (slate-blue
+      secondary text) already match the reference's #283948 / #556E82
+      text-color relationship — no change needed.
+    - --border/--input (a light blue-gray) already match the reference's
+      #D5E3F0 family — no change needed.
+    - --shadow-sm/md/lg (see below) already express the same "restrained,
+      mostly-border-driven" shadow philosophy as the reference's single
+      `0 6px 20px rgba(42,57,70,.08)` value, applied consistently to
+      dropdowns/dialogs/menus rather than ordinary cards — no change needed.
+    - --surface's hue was nudged into this same blue-gray family (was a pure
+      neutral gray) to match the reference's page-background/content-surface
+      relationship; see its own comment below.
+    - The Card component's radius was normalized to match every other shared
+      surface (packages/ui/src/components/ui/card.tsx) — it was the one
+      outlier on a wider radius than Button/Input/Select/Dialog/Tabs.
+  The tenant's single orange --action accent (below) is unaffected by this
+  audit and remains authoritative; this pass only touched the neutral chrome
+  around it.
 */
 
 @layer base {
@@ -69,11 +93,14 @@
     --ring: 214 81% 46%;
 
     /* Surface (subtle panel distinct from a raised --card) — Tenant Dashboard
-       Visual Alignment (2026-08-29): now backs the tenant AppShell's own page
-       canvas (.tenant-shell), giving it a neutral gray distinct from white
-       --card surfaces, matching the reference dashboard's flat, low-contrast
-       background. Was previously defined but unused anywhere in the app. */
-    --surface: 240 5% 96%;
+       Visual Alignment (2026-08-29): backs the tenant AppShell's own page
+       canvas (.tenant-shell), giving it a neutral panel distinct from white
+       --card surfaces. Hue nudged into our own --border/--primary family
+       (2026-08-29, Listivo design-reference audit) rather than a pure
+       neutral gray — same relationship as the reference's page-background/
+       content-surface split (a barely-tinted light blue-gray vs white),
+       applied to a value we'd already chosen for unrelated reasons. */
+    --surface: 214 20% 97%;
 
     /* Text hierarchy — --foreground/--muted-foreground already cover
        Text Primary/Text Muted; this fills the missing middle tier. */

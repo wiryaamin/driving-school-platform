@@ -39,7 +39,7 @@
     --input: 216 20% 90%;
     --divider: 216 20% 93%;
     --ring: 214 81% 46%;
-    --surface: 240 5% 96%;
+    --surface: 214 20% 97%; /* Listivo design-reference audit (2026-08-29) — see apps/web/src/globals.css header comment */
     --foreground-secondary: 217 20% 32%;
     --disabled: 216 15% 82%;
     --disabled-foreground: 216 10% 55%;
