@@ -29,16 +29,14 @@ export function MobileSidebar() {
         {/* Header */}
         <div className="flex items-center h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0 gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            {/* bg-tenant-sidebar-accent, not bg-action — see Sidebar.tsx's
-                identical comment (2026-08-29): keeps the orange action color
-                out of the logo mark's box, so a non-square/transparent logo
-                never lets that orange bleed through object-contain's
-                letterbox gap. */}
-            <div className="w-10 h-10 rounded-xl bg-tenant-sidebar-accent flex items-center justify-center shrink-0 overflow-hidden">
+            {/* No box/background — see Sidebar.tsx's identical comment
+                (2026-08-29): the logo sits directly on the sidebar rather
+                than inside a separate colored tile. */}
+            <div className="w-10 h-10 flex items-center justify-center shrink-0">
               {logoUrl ? (
-                <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1.5" />
+                <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1" />
               ) : (
-                <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-tenant-sidebar-accent-foreground" stroke="currentColor" strokeWidth={2}>
+                <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-tenant-sidebar-foreground" stroke="currentColor" strokeWidth={2}>
                   <path d="M12 2L2 7l10 5 10-5-10-5z" />
                   <path d="M2 17l10 5 10-5" />
                   <path d="M2 12l10 5 10-5" />

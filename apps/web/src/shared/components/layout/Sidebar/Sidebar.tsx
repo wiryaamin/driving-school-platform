@@ -247,24 +247,21 @@ export function Sidebar() {
 
       {/* Workspace Header */}
       <div className="flex items-center gap-3 h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0">
-        {/* bg-tenant-sidebar-accent, not bg-action (2026-08-29): the mark's
-            box used the orange action color as its fill, so any uploaded
-            logo whose aspect ratio isn't an exact 1:1 match for this square
-            — the vast majority of real uploads — left object-contain's
-            letterbox gap showing orange through the rounded corners (looked
-            like a stray triangle). A school's logo is an identity element,
-            not an action affordance, so it never belonged on the orange
-            token to begin with; the sidebar's own neutral accent surface
-            (already used for hover states elsewhere in this file) reads as
-            a natural dark "plate" behind any logo — transparent, white-bg,
-            or self-contained badge alike — without competing with it. */}
-        <div className="w-10 h-10 rounded-xl bg-tenant-sidebar-accent flex items-center justify-center shrink-0 overflow-hidden">
+        {/* No box/background at all (2026-08-29): a filled tile (first
+            bg-action, then bg-tenant-sidebar-accent) always read as a
+            separate "badge" sitting on the sidebar rather than the logo
+            belonging to it — and any fill color reintroduces the same
+            object-contain-letterbox-gap problem the moment a logo's aspect
+            ratio isn't an exact 1:1 match, just in a different color.
+            Transparent has no such failure mode: whatever object-contain
+            doesn't cover is simply more sidebar, not a visible seam. */}
+        <div className="w-10 h-10 flex items-center justify-center shrink-0">
           {logoUrl ? (
-            <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1.5" />
+            <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1" />
           ) : orgInitials ? (
-            <span className="text-sm font-bold text-tenant-sidebar-accent-foreground">{orgInitials}</span>
+            <span className="text-sm font-bold text-tenant-sidebar-foreground">{orgInitials}</span>
           ) : (
-            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-tenant-sidebar-accent-foreground" stroke="currentColor" strokeWidth={2}>
+            <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-tenant-sidebar-foreground" stroke="currentColor" strokeWidth={2}>
               <path d="M12 2L2 7l10 5 10-5-10-5z" />
               <path d="M2 17l10 5 10-5" />
               <path d="M2 12l10 5 10-5" />
