@@ -243,9 +243,14 @@
      "turn off" on their own — without that block, toggling dark mode while
      on the tenant dashboard would leave these light values stuck). */
   .tenant-shell {
-    --action: 16 100% 60%;
+    /* Claude brand orange (2026-08-29) — was a generic vivid orange
+       (16 100% 60% ≈ #FF6633); replaced with Anthropic's actual Claude
+       accent, the warm muted terracotta/clay used in the Claude app icon
+       (#D97757 ≈ 15 63% 60%). Hover keeps the same hue/saturation, just
+       darker, matching the existing hover-darkening pattern. */
+    --action: 15 63% 60%;
     --action-foreground: 0 0% 100%;
-    --action-hover: 16 90% 54%;
+    --action-hover: 15 63% 52%;
 
     --foreground: 208 29% 22%;          /* ≈ #283948 — Listivo primary text */
     --foreground-secondary: 207 24% 32%;
