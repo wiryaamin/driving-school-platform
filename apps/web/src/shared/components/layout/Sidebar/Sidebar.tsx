@@ -16,6 +16,7 @@ import type { Permission } from '@core/rbac/permissions.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import type { Organization } from '@platform/types';
 import { useQueueHealth } from '@modules/communication/hooks/useCommunication.js';
+import { useOrgBrandingAssets } from '@shared/hooks/useOrgBranding.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -227,6 +228,15 @@ export function SidebarNavContent({ onNavClick }: SidebarNavContentProps) {
 
 export function Sidebar() {
   const { organization, isLoading } = useSession();
+  // Tenant Company Logo (2026-08-29): the upload flow itself already existed
+  // (Settings → Webbplats → Varumärke → "Ljus logotyp"), but nothing in the
+  // tenant dashboard's own chrome ever consumed the result — the sidebar
+  // mark stayed permanently on initials/a generic icon regardless of what a
+  // school uploaded. logo_light (designed for a dark background) is the
+  // right asset for this dark sidebar; falls back to initials/icon exactly
+  // as before when no logo has been uploaded yet.
+  const { data: brandingAssets } = useOrgBrandingAssets();
+  const logoUrl = brandingAssets?.['logo_light'];
 
   const orgInitials = organization?.name
     ? organization.name.split(' ').slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('')
@@ -237,8 +247,10 @@ export function Sidebar() {
 
       {/* Workspace Header */}
       <div className="flex items-center gap-3 h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0">
-        <div className="w-10 h-10 rounded-xl bg-action flex items-center justify-center shrink-0">
-          {orgInitials ? (
+        <div className="w-10 h-10 rounded-xl bg-action flex items-center justify-center shrink-0 overflow-hidden">
+          {logoUrl ? (
+            <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1" />
+          ) : orgInitials ? (
             <span className="text-sm font-bold text-action-foreground">{orgInitials}</span>
           ) : (
             <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>

@@ -1,11 +1,16 @@
 import { X } from 'lucide-react';
 import { useUiStore } from '@core/store/ui.store.js';
 import { useSession } from '@shared/hooks/useSession.js';
+import { useOrgBrandingAssets } from '@shared/hooks/useOrgBranding.js';
 import { SidebarNavContent } from './Sidebar.js';
 
 export function MobileSidebar() {
   const { isMobileMenuOpen, closeMobileMenu } = useUiStore();
   const { organization } = useSession();
+  // See Sidebar.tsx's identical logic (2026-08-29) — the desktop and mobile
+  // sidebar marks must show the same uploaded logo, not just one of them.
+  const { data: brandingAssets } = useOrgBrandingAssets();
+  const logoUrl = brandingAssets?.['logo_light'];
 
   if (!isMobileMenuOpen) return null;
 
@@ -24,12 +29,16 @@ export function MobileSidebar() {
         {/* Header */}
         <div className="flex items-center h-[72px] px-4 border-b border-tenant-sidebar-border shrink-0 gap-3">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="w-10 h-10 rounded-xl bg-action flex items-center justify-center shrink-0">
-              <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
+            <div className="w-10 h-10 rounded-xl bg-action flex items-center justify-center shrink-0 overflow-hidden">
+              {logoUrl ? (
+                <img src={logoUrl} alt={organization?.name ?? 'Logotyp'} className="w-full h-full object-contain p-1" />
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+              )}
             </div>
             <span className="text-sm font-semibold text-tenant-sidebar-primary-foreground truncate leading-tight">
               {organization?.name ?? 'Körskola'}
