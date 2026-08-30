@@ -119,7 +119,7 @@ export function CancelBookingDialog({
 
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
-            <Label htmlFor="cancel-category">Orsak</Label>
+            <Label htmlFor="cancel-category">Orsak (valfritt)</Label>
             <Select
               value={category}
               onValueChange={(v) => setCategory(v as CancellationCategory)}
