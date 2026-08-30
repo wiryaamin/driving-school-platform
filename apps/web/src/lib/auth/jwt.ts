@@ -58,12 +58,22 @@ export function parseJwtClaims(accessToken: string): JwtClaims | null {
  * lessons) rather than the School Administrator dashboard, since that
  * dashboard's finance/org-wide widgets aren't relevant to their role;
  * everyone else lands on the general dashboard.
+ *
+ * A user with no organization_id and no platform-admin flag (a disabled
+ * profile, an offboarded member, or an invite never activated —
+ * get_user_jwt_claims returns this same empty shape for all three, and the
+ * JWT alone can't tell them apart) used to still fall through to
+ * '/dashboard' — rendering the full tenant shell with nothing to scope its
+ * data to, so every widget's query 403'd. Routed to /403 instead, found via
+ * a real account stuck in exactly this state during live testing,
+ * 2026-08-30.
  */
 export function getPostLoginRoute(
-  claims: { is_platform_admin?: boolean; role?: string | null } | null,
+  claims: { is_platform_admin?: boolean; role?: string | null; organization_id?: string | null } | null,
 ): string {
   if (claims?.is_platform_admin) return '/platform/dashboard';
   if (claims?.role === 'instructor' || claims?.role === 'instructor_senior') return '/instructor-app';
+  if (!claims?.organization_id) return '/403?reason=no_organization';
   return '/dashboard';
 }
 
