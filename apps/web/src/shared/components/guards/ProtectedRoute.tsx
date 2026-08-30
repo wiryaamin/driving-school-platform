@@ -37,7 +37,7 @@ export function ProtectedRoute({
   loginRedirect = '/auth/login',
   forbiddenRedirect = '/403',
 }: ProtectedRouteProps) {
-  const { isAuthenticated, isLoading, hasAllPermissions, hasAnyPermission, organization } = useSessionStore();
+  const { isAuthenticated, isLoading, hasAllPermissions, hasAnyPermission, organization, user } = useSessionStore();
   const location = useLocation();
 
   // Show loading spinner while auth state is being determined
@@ -46,6 +46,21 @@ export function ProtectedRoute({
   // Redirect to login if not authenticated, preserving the intended destination
   if (!isAuthenticated) {
     return <Navigate to={loginRedirect} state={{ from: location }} replace />;
+  }
+
+  // Authenticated but no organization and not a platform admin (a disabled
+  // profile, an offboarded member, or any other state get_user_jwt_claims
+  // returns empty claims for) has nothing here to actually access.
+  // getPostLoginRoute already steers a *fresh* login/redirect away from
+  // /dashboard for this case, but that only runs once, at the login moment
+  // — a reload, a bookmark, or an already-open tab landing straight on a
+  // protected route never passes back through it, so the empty-claims user
+  // still reached the full tenant shell with every widget's query 403ing.
+  // This is the check that actually holds regardless of how the route was
+  // reached. Confirmed via a real account stuck in exactly this state
+  // during live testing, 2026-08-30.
+  if (!user?.is_platform_admin && !organization) {
+    return <Navigate to="/403?reason=no_organization" replace />;
   }
 
   // Trial expired past its 7-day grace period: block the whole app until a
