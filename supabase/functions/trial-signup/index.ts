@@ -32,17 +32,22 @@
  * false), so there is no buildEdgeContext/JWT to lean on.
  *
  * Routes:
- *   POST /                       — one-shot short registration: collects every
- *                                  field needed to create the trafikskola
- *                                  (contact, legal name, address, licence
- *                                  categories, price) in a single request,
- *                                  saves it as the session's interview_
- *                                  answers immediately, and sends the
- *                                  verification email. No separate
- *                                  "questionnaire" step exists anymore
- *                                  (Starta provperiod — direct registration +
- *                                  email verification + password activation,
- *                                  2026-08-30).
+ *   POST /                       — one-shot short registration: collects only
+ *                                  what identifies the trafikskola (contact,
+ *                                  phone, legal name, address) in a single
+ *                                  request. Licence categories and lesson
+ *                                  price are NOT collected here (2026-08-30,
+ *                                  "remove business configuration step") —
+ *                                  every canonically-supported category is
+ *                                  enabled automatically at the platform's
+ *                                  default price, both editable afterward.
+ *                                  Saves the full answer set as the
+ *                                  session's interview_answers immediately
+ *                                  and sends the verification email. No
+ *                                  separate "questionnaire" step exists
+ *                                  anymore (Starta provperiod — direct
+ *                                  registration + email verification +
+ *                                  password activation, 2026-08-30).
  *   GET  /:token/verify-email    — confirms the applicant controls this
  *                                  address, then immediately runs the same
  *                                  risk-assessment + provisioning finalize()
@@ -75,6 +80,11 @@ import { enforceIpRateLimit, getClientIp } from '../_shared/rate-limit.ts';
 import { dispatchMessage }     from '../_shared/comm-providers.ts';
 import { verifyEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
 import { provisionTrialOrganization, type CompleteAnswers, type ProvisionResult } from '../_shared/trial-provisioning.ts';
+// Single source of truth for "every supported licence category" (Starta
+// provperiod — remove business configuration step, 2026-08-30) — the same
+// list the Configuration Extraction Engine already validates against, not a
+// second, independently-maintained copy.
+import { VALID_LICENCE_CATEGORIES } from '../_shared/provisioning-extraction.ts';
 
 // deno-lint-ignore no-explicit-any
 type DbClient = any;
@@ -88,6 +98,11 @@ const TOKEN_BYTES = 32;
 // e.g. invite-user/index.ts's INVITABLE_ROLES).
 const ORG_NUMBER_RE = /^\d{6}-\d{4}$/;
 const POSTAL_RE = /^\d{3}\s?\d{2}$/;
+const PHONE_RE = /^\+?[\d\s-]{7,20}$/;
+// The tenant no longer sets this at registration (2026-08-30, "remove
+// business configuration step") — a platform default, editable afterward
+// via Ekonomi → Lektionstyper, same as the field it replaces on the form.
+const DEFAULT_LESSON_PRICE_SEK = 595;
 
 function ok<T>(data: T, correlationId: string, status = 200): Response {
   return new Response(JSON.stringify({ data }), { status, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId } });
@@ -164,25 +179,20 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
   const email          = str(body, 'email').toLowerCase();
   const firstName      = str(body, 'contact_first_name');
   const lastName       = str(body, 'contact_last_name');
+  const phone          = str(body, 'phone');
   const legalName      = str(body, 'legal_name');
   const addressLine1   = str(body, 'address_line1');
   const postalCode     = str(body, 'postal_code');
   const city           = str(body, 'city');
-  const licenceCategories = Array.isArray(body['licence_categories'])
-    ? (body['licence_categories'] as unknown[]).filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
-    : [];
-  const priceRaw = body['standard_lesson_price_sek'];
-  const price = typeof priceRaw === 'number' ? priceRaw : Number(priceRaw);
 
   if (!EMAIL_RE.test(email) || email.length > 200) return fail(422, 'VALIDATION_ERROR', 'Ange en giltig e-postadress.', correlationId);
   if (firstName.length < 1 || firstName.length > 100) return fail(422, 'VALIDATION_ERROR', 'Ange ditt förnamn.', correlationId);
   if (lastName.length < 1 || lastName.length > 100) return fail(422, 'VALIDATION_ERROR', 'Ange ditt efternamn.', correlationId);
+  if (phone.length > 0 && !PHONE_RE.test(phone)) return fail(422, 'VALIDATION_ERROR', 'Ange ett giltigt telefonnummer.', correlationId);
   if (legalName.length < 2 || legalName.length > 150) return fail(422, 'VALIDATION_ERROR', 'Ange trafikskolans juridiska företagsnamn.', correlationId);
   if (addressLine1.length < 1) return fail(422, 'VALIDATION_ERROR', 'Ange gatuadress.', correlationId);
   if (!POSTAL_RE.test(postalCode)) return fail(422, 'VALIDATION_ERROR', 'Ange postnummer i formatet 111 22.', correlationId);
   if (city.length < 1) return fail(422, 'VALIDATION_ERROR', 'Ange ort.', correlationId);
-  if (licenceCategories.length === 0) return fail(422, 'VALIDATION_ERROR', 'Välj minst en behörighet ni utbildar för.', correlationId);
-  if (!Number.isFinite(price) || price <= 0) return fail(422, 'VALIDATION_ERROR', 'Ange ett pris per lektion.', correlationId);
 
   const drivingSchoolName = legalName;
 
@@ -218,23 +228,26 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
   }
 
   // ── Build the full answer set now — everything provisioning needs is
-  // already in hand (Starta provperiod — direct registration, 2026-08-30),
-  // unlike the old flow where only email/school-name existed at this point
-  // and the rest arrived later via a separate guided interview. Fields the
-  // short registration form no longer asks for keep the exact same defaults
-  // documented in the field-inventory audit and already used elsewhere
-  // (EMPTY_ANSWERS in apps/web's businessSetupAnswers.ts) — duplicated here
-  // per the established Edge-Function convention (Deno can't import
-  // workspace packages).
+  // already in hand (Starta provperiod — direct registration, 2026-08-30).
+  // Licence categories and lesson price are no longer registration
+  // questions at all (2026-08-30, "remove business configuration step") —
+  // every canonically-supported category is enabled automatically
+  // (VALID_LICENCE_CATEGORIES is the single source of truth, shared with
+  // the Configuration Extraction Engine's own validation) at the platform's
+  // default price. Every other field the short registration form doesn't
+  // ask for keeps the exact same defaults documented in the field-inventory
+  // audit and already used elsewhere (EMPTY_ANSWERS in apps/web's
+  // businessSetupAnswers.ts) — duplicated here per the established
+  // Edge-Function convention (Deno can't import workspace packages).
   const answers: CompleteAnswers = {
     contact_first_name: firstName, contact_last_name: lastName,
-    legal_name: legalName, org_number: '', vat_number: '', contact_phone: '',
+    legal_name: legalName, org_number: '', vat_number: '', contact_phone: phone,
     country: 'SE', default_language: 'sv', timezone: 'Europe/Stockholm',
     address_line1: addressLine1, postal_code: postalCode, city,
     branches: 1, branch_entries: [],
-    licence_categories: licenceCategories, standard_lesson_duration_minutes: 40,
+    licence_categories: [...VALID_LICENCE_CATEGORIES], standard_lesson_duration_minutes: 40,
     lesson_type_durations: {},
-    standard_lesson_price_sek: price,
+    standard_lesson_price_sek: DEFAULT_LESSON_PRICE_SEK,
     teaching_languages: ['sv'],
     vehicle_count: 0, vehicle_transmission: 'manual', vehicles: [],
     administrators: 1, admin_entries: [],

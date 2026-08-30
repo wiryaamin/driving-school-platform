@@ -2,36 +2,39 @@ import { useRef, useState } from 'react';
 import { Loader2, CheckCircle2, ChevronLeft } from 'lucide-react';
 import { Button, Input, toast } from '@platform/ui';
 import { startTrial, TrialSignupError } from '../lib/trialSignupApi.js';
-import { Field, Pill } from './BusinessSetupFieldKit.js';
-import { EMAIL_RE, POSTAL_RE, LICENCE_CATEGORY_OPTIONS } from '../lib/businessSetupAnswers.js';
+import { Field } from './BusinessSetupFieldKit.js';
+import { EMAIL_RE, POSTAL_RE } from '../lib/businessSetupAnswers.js';
 
 // ─── Short registration data shape ──────────────────────────────────────────
 //
-// Starta provperiod — direct registration + email verification + password
-// activation (2026-08-30): only the fields genuinely needed to create a
-// trafikskola, per the field-inventory audit's KEEP list — everything else
-// (vehicles, staff, working hours, communication channels, VAT period, ...)
-// is auto-configured with the platform's existing defaults or filled in
-// later under Inställningar, never asked here.
+// Starta provperiod — remove business configuration step and use smart
+// defaults (2026-08-30): registration now asks only for what identifies the
+// trafikskola. Licence categories and lesson price are no longer collected
+// here at all — every supported category is enabled automatically and
+// priced at the platform default (595 kr), both fully editable afterward
+// under Ekonomi → Lektionstyper. This mirrors the field-inventory audit's
+// KEEP list minus those two fields, plus the phone number the audit flagged
+// as collected-but-never-stored in an earlier pass (now wired to
+// organizations.settings.customer_phone — see business-setup-provisioning.ts).
 interface ShortAnswers {
   email: string;
   contact_first_name: string;
   contact_last_name: string;
+  phone: string;
   legal_name: string;
   address_line1: string;
   postal_code: string;
   city: string;
-  licence_categories: string[];
-  standard_lesson_price_sek: number;
 }
 
 const EMPTY: ShortAnswers = {
-  email: '', contact_first_name: '', contact_last_name: '', legal_name: '',
+  email: '', contact_first_name: '', contact_last_name: '', phone: '', legal_name: '',
   address_line1: '', postal_code: '', city: '',
-  licence_categories: [], standard_lesson_price_sek: 595,
 };
 
-const STEP_TITLES = ['Om din trafikskola', 'Er utbildning', 'Granska'];
+const PHONE_RE = /^\+?[\d\s-]{7,20}$/;
+
+const STEP_TITLES = ['Om dig och din trafikskola', 'Granska'];
 const TOTAL_STEPS = STEP_TITLES.length;
 
 function stepError(step: number, a: ShortAnswers): string | null {
@@ -39,14 +42,11 @@ function stepError(step: number, a: ShortAnswers): string | null {
     if (!EMAIL_RE.test(a.email.trim())) return 'Ange en giltig e-postadress.';
     if (!a.contact_first_name.trim()) return 'Ange ditt förnamn.';
     if (!a.contact_last_name.trim()) return 'Ange ditt efternamn.';
+    if (a.phone.trim().length > 0 && !PHONE_RE.test(a.phone.trim())) return 'Ange ett giltigt telefonnummer.';
     if (a.legal_name.trim().length < 2) return 'Ange trafikskolans juridiska företagsnamn.';
     if (!a.address_line1.trim()) return 'Ange gatuadress.';
     if (!POSTAL_RE.test(a.postal_code.trim())) return 'Ange postnummer i formatet 111 22.';
     if (!a.city.trim()) return 'Ange ort.';
-  }
-  if (step === 1) {
-    if (a.licence_categories.length === 0) return 'Välj minst en behörighet ni utbildar för.';
-    if (!(a.standard_lesson_price_sek > 0)) return 'Ange ett pris per lektion.';
   }
   return null;
 }
@@ -56,9 +56,10 @@ function stepError(step: number, a: ShortAnswers): string | null {
  * action. Shared verbatim between the standalone /start-trial page
  * (StartTrialPage) and the landing page's "Kom igång" section
  * (CallToAction.tsx). Clicking "Starta provperiod" opens this form directly;
- * there is no separate "just tell us your email" screen in front of it —
- * everything provisioning needs is collected here, in one continuous flow,
- * before the first (and only) submission fires the verification email.
+ * there is no separate "just tell us your email" screen in front of it, and
+ * (as of this redesign) no business-configuration step either — only
+ * identity information the trafikskola itself has to provide. Everything
+ * else is a platform default, applied automatically and editable afterward.
  */
 export function TrialSignupForm() {
   const [step, setStep] = useState(0);
@@ -85,7 +86,7 @@ export function TrialSignupForm() {
   }
 
   async function handleSubmit() {
-    const error = stepError(0, answers) ?? stepError(1, answers);
+    const error = stepError(0, answers);
     if (error) {
       toast({ title: error, variant: 'destructive' });
       return;
@@ -96,12 +97,11 @@ export function TrialSignupForm() {
         email: answers.email.trim(),
         contact_first_name: answers.contact_first_name.trim(),
         contact_last_name: answers.contact_last_name.trim(),
+        phone: answers.phone.trim(),
         legal_name: answers.legal_name.trim(),
         address_line1: answers.address_line1.trim(),
         postal_code: answers.postal_code.trim(),
         city: answers.city.trim(),
-        licence_categories: answers.licence_categories,
-        standard_lesson_price_sek: answers.standard_lesson_price_sek,
         website: honeypotRef.current?.value ?? '',
       });
       setSendFailed(!result.email_verification_sent);
@@ -158,6 +158,9 @@ export function TrialSignupForm() {
               <Input value={answers.contact_last_name} onChange={(e) => set('contact_last_name', e.target.value)} autoComplete="family-name" />
             </Field>
           </div>
+          <Field label="Telefonnummer till trafikskolan">
+            <Input type="tel" value={answers.phone} onChange={(e) => set('phone', e.target.value)} placeholder="070-123 45 67" autoComplete="tel" />
+          </Field>
           <Field label="Juridiskt företagsnamn *">
             <Input value={answers.legal_name} onChange={(e) => set('legal_name', e.target.value)} placeholder="Lindqvists Trafikskola AB" />
           </Field>
@@ -177,44 +180,24 @@ export function TrialSignupForm() {
 
       {step === 1 && (
         <div className="space-y-4">
-          <Field label="Vilka behörigheter utbildar ni för? *">
-            <div className="flex flex-wrap gap-2">
-              {LICENCE_CATEGORY_OPTIONS.map((cat) => (
-                <Pill
-                  key={cat}
-                  active={answers.licence_categories.includes(cat)}
-                  onClick={() => set(
-                    'licence_categories',
-                    answers.licence_categories.includes(cat)
-                      ? answers.licence_categories.filter((c) => c !== cat)
-                      : [...answers.licence_categories, cat],
-                  )}
-                >
-                  {cat}
-                </Pill>
-              ))}
-            </div>
-          </Field>
-          <Field label="Pris per lektion (kr) *">
-            <Input
-              type="number" min={1} className="max-w-[160px]"
-              value={answers.standard_lesson_price_sek}
-              onChange={(e) => set('standard_lesson_price_sek', Number(e.target.value) || 0)}
-            />
-          </Field>
-          <p className="text-xs text-muted-foreground">Priset sätts på alla era lektionstyper direkt — ni kan alltid ändra det senare i Ekonomi.</p>
+          <dl className="grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">Trafikskola</dt><dd className="col-span-2 text-foreground">{answers.legal_name}</dd>
+            <dt className="text-muted-foreground">Kontaktperson</dt><dd className="col-span-2 text-foreground">{answers.contact_first_name} {answers.contact_last_name}</dd>
+            <dt className="text-muted-foreground">E-post</dt><dd className="col-span-2 text-foreground">{answers.email}</dd>
+            {answers.phone.trim() && (<><dt className="text-muted-foreground">Telefon</dt><dd className="col-span-2 text-foreground">{answers.phone}</dd></>)}
+            <dt className="text-muted-foreground">Adress</dt><dd className="col-span-2 text-foreground">{answers.address_line1}, {answers.postal_code} {answers.city}</dd>
+          </dl>
+          <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-1.5">
+            <p className="text-sm text-foreground">
+              Vi konfigurerar grundinställningarna automatiskt så att ni snabbt kan komma igång. Ni kan ändra dem när som helst efter registreringen.
+            </p>
+            <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+              <li>Alla behörigheter är aktiverade från början</li>
+              <li>Standardpris: 595 kr per lektion</li>
+              <li>Standardlängd: 40 minuter</li>
+            </ul>
+          </div>
         </div>
-      )}
-
-      {step === 2 && (
-        <dl className="grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">Trafikskola</dt><dd className="col-span-2 text-foreground">{answers.legal_name}</dd>
-          <dt className="text-muted-foreground">E-post</dt><dd className="col-span-2 text-foreground">{answers.email}</dd>
-          <dt className="text-muted-foreground">Kontaktperson</dt><dd className="col-span-2 text-foreground">{answers.contact_first_name} {answers.contact_last_name}</dd>
-          <dt className="text-muted-foreground">Adress</dt><dd className="col-span-2 text-foreground">{answers.address_line1}, {answers.postal_code} {answers.city}</dd>
-          <dt className="text-muted-foreground">Behörigheter</dt><dd className="col-span-2 text-foreground">{answers.licence_categories.join(', ')}</dd>
-          <dt className="text-muted-foreground">Pris per lektion</dt><dd className="col-span-2 text-foreground">{answers.standard_lesson_price_sek} kr</dd>
-        </dl>
       )}
 
       <div className="flex items-center gap-2 pt-2">

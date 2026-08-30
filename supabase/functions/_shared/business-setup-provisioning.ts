@@ -156,6 +156,27 @@ export async function provisionBusinessConfiguration(
   const { correlationId } = opts;
   const warnings: string[] = [];
 
+  // ── Step A: tenant contact phone ──────────────────────────────────────────
+  // Canonical destination: organizations.settings.customer_phone — the exact
+  // key gatherKnownBusinessFacts() (tenant-onboarding-pipeline.ts) and
+  // public-branding.ts already read, and Företagsuppgifter (Company Settings)
+  // already writes via its own "Skolans telefonnummer" field. Neither
+  // org-creation call site (trial-provisioning.ts nor this function's other
+  // caller, platform-admin/index.ts's handleProvision) ever wrote this key,
+  // so a phone number collected at signup/creation was silently discarded —
+  // fixed here once, shared by both paths, rather than duplicated in each
+  // (Starta provperiod — remove business configuration step, 2026-08-30).
+  if (answers.contact_phone && answers.contact_phone.trim().length > 0) {
+    const { data: orgRow } = await db.from('organizations').select('settings').eq('id', orgId).maybeSingle();
+    const current = (orgRow?.settings ?? {}) as Record<string, unknown>;
+    const { error: phoneErr } = await db.from('organizations')
+      .update({ settings: { ...current, customer_phone: answers.contact_phone.trim() } }).eq('id', orgId);
+    if (phoneErr) {
+      logger.warn('business-setup-provisioning.contact_phone_failed', { correlation_id: correlationId, error: phoneErr.message });
+      warnings.push('Telefonnummer kunde inte sparas automatiskt.');
+    }
+  }
+
   // ── Step B: communication channel activation ─────────────────────────────
   if (answers.channels) {
     if (answers.channels.email) {

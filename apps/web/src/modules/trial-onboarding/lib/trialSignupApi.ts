@@ -45,12 +45,12 @@ export interface StartTrialInput {
   email: string;
   contact_first_name: string;
   contact_last_name: string;
+  /** Optional — the trafikskola's own phone number, not the applicant's personal number. */
+  phone?: string;
   legal_name: string;
   address_line1: string;
   postal_code: string;
   city: string;
-  licence_categories: string[];
-  standard_lesson_price_sek: number;
   /** Honeypot — always empty for a real visitor. */
   website?: string;
 }
