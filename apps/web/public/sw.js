@@ -7,7 +7,7 @@
  *   - Push notification handling for lesson reminders
  */
 
-const CACHE_NAME = 'trafikskola-v3';
+const CACHE_NAME = 'trafikskola-v4';
 
 const STATIC_EXTENSIONS = ['.js', '.css', '.woff', '.woff2', '.ttf', '.png', '.svg', '.ico'];
 
@@ -83,12 +83,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation: network-first, fallback to cached /
-  event.respondWith(
-    fetch(event.request).catch(() =>
-      caches.match('/').then((r) => r ?? new Response('Offline', { status: 503 }))
-    )
-  );
+  // Navigation (actual page loads): network-first, fallback to cached app
+  // shell. Deliberately scoped to request.mode === 'navigate' only — this
+  // used to catch every remaining GET (manifest.json, robots.txt, sitemap.xml,
+  // ...), so a single transient network failure on one of those substituted
+  // the cached HTML shell for what should have been JSON/plain text,
+  // surfacing as a confusing "Manifest: Line 1, column 1, Syntax error"
+  // instead of the real, unrelated network blip that actually caused it.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(() =>
+        caches.match('/').then((r) => r ?? new Response('Offline', { status: 503 }))
+      )
+    );
+  }
+  // Everything else (manifest.json, robots.txt, sitemap.xml, ...): let the
+  // browser handle it natively — a real network failure should surface as
+  // exactly that, not as a substituted, mismatched cached response.
 });
 
 // ── Push notifications ────────────────────────────────────────────────────────
