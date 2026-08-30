@@ -568,7 +568,24 @@ export function CreateSlotSheet({
         </div>
 
         <ScrollArea className="flex-1 min-h-0">
-          <div className="px-6 py-5 space-y-6">
+          {/* grid grid-cols-1 (not a plain block div) breaks a real width-
+              propagation bug: Radix's ScrollArea Viewport wraps its child in
+              an internal shrink-to-fit (table-display) layout, so a plain
+              block div here still reports its child content's full natural
+              width upward — measured at ~1920px for the Lektionsmall row's
+              16 cards vs. the dialog's own 576px — which silently drags
+              every later field (e.g. "Till") far outside the dialog's
+              visible area, since DialogContent clips overflow rather than
+              scrolling it. min-w-0 alone doesn't help here: it only
+              overrides the flex/grid-item default of min-width:auto, and
+              this div isn't a flex/grid item in the first place. A
+              single-column CSS grid, unlike block/table layout, sizes
+              itself from the *available* space of its own formatting
+              context rather than its content's intrinsic width, which is
+              what actually breaks the propagation. Confirmed with a real
+              headless-browser reproduction before landing this fix,
+              2026-08-31. */}
+          <div className="grid grid-cols-1 px-6 py-5 space-y-6">
 
             {/* ── Lektionsmall ─────────────────────────────────────────────── */}
             <div>
