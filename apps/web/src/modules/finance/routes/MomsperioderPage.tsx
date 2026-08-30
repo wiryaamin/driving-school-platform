@@ -482,9 +482,12 @@ function PeriodRow({ period }: { period: VatPeriod }) {
 
   return (
     <>
-      <button
-        className="w-full text-left hover:bg-muted/30 transition-colors"
+      <div
+        className="w-full text-left hover:bg-muted/30 transition-colors cursor-pointer"
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(true); } }}
       >
         <div className="flex items-center justify-between px-6 py-3 gap-3">
           <div className="flex items-center gap-3 min-w-0">
@@ -526,7 +529,7 @@ function PeriodRow({ period }: { period: VatPeriod }) {
             <ChevronRight className="w-4 h-4 text-muted-foreground" />
           </div>
         </div>
-      </button>
+      </div>
       {open && <PeriodDetailSheet period={period} onClose={() => setOpen(false)} />}
     </>
   );

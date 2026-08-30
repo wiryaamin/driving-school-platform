@@ -1341,10 +1341,10 @@ export function SlotDetailSheet({ slot: slotProp, open, onOpenChange }: SlotDeta
 
               {/* ── Layer 1: Lesson identity ──────────────────────── */}
               <div className="space-y-1.5">
-                <p className="text-2xl font-bold text-foreground tracking-tight flex items-center flex-wrap gap-2">
+                <div className="text-2xl font-bold text-foreground tracking-tight flex items-center flex-wrap gap-2">
                   {startLabel}–{endLabel}
                   <Badge variant="outline" className="text-xs font-medium align-middle">{duration} min</Badge>
-                </p>
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-muted-foreground">
                     {formatCapacity(slot.current_bookings, slot.max_bookings)} bokningar

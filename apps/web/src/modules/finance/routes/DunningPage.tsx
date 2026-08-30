@@ -528,14 +528,14 @@ function ScheduleDetailSheet({
 
           <div className="mt-4 space-y-1 text-sm text-muted-foreground">
             {schedule.description && <p>{schedule.description}</p>}
-            <p className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1">
               {schedule.is_default && (
                 <Badge variant="secondary">Standardplan</Badge>
               )}
               {schedule.is_active
                 ? <span className="text-green-600 font-medium">Aktiv</span>
                 : <span className="text-muted-foreground">Inaktiv</span>}
-            </p>
+            </div>
           </div>
 
           <div className="mt-6">
