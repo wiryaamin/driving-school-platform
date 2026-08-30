@@ -446,18 +446,37 @@ export async function provisionBusinessResources(
   }
 
   // ── Step E5: materialize real, bookable lesson_slots ──────────────────────
+  // Found via a real end-to-end production test (Starta provperiod
+  // pre-deployment verification, 2026-08-30): generate_slots_for_organization
+  // passed p_lesson_type_id: null "meaning all lesson types," but the
+  // underlying generate_slots_for_rule SQL function has never supported a
+  // null wildcard — it looks up the passed id in lesson_types and raises
+  // "lesson_type_id <NULL> not found" when it's null, failing the entire
+  // call every single time. Pre-existing since 2026-08-28 (commit 74e9b996)
+  // — silently swallowed by logger.warn with no visibility anywhere until
+  // this task's warnings surfacing made it observable for the first time.
+  // Every trial/manually-created org's bookable-slots promise ("bokningsbara
+  // pass för de kommande två veckorna") was never actually being kept. Fix:
+  // call once per real, active lesson type instead of once with null.
   let slotsGenerated = 0;
   if (createdInstructorIds.length > 0) {
     const todayIso = new Date().toISOString().slice(0, 10);
     const rangeEndIso = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const { data: genResult, error: genErr } = await db.rpc('generate_slots_for_organization', { p_organization_id: orgId, p_lesson_type_id: null, p_start_date: todayIso, p_end_date: rangeEndIso });
-    if (genErr) {
-      logger.warn('business-setup-provisioning.slot_generation_failed', { correlation_id: correlationId, error: genErr.message });
-      warnings.push('Bokningsbara pass kunde inte genereras automatiskt.');
-    } else {
+    const { data: activeLessonTypes } = await db
+      .from('lesson_types').select('id').eq('organization_id', orgId).eq('is_active', true);
+    const lessonTypeIds = ((activeLessonTypes ?? []) as Array<{ id: string }>).map((lt) => lt.id);
+    let anyGenerationFailed = false;
+    for (const lessonTypeId of lessonTypeIds) {
+      const { data: genResult, error: genErr } = await db.rpc('generate_slots_for_organization', { p_organization_id: orgId, p_lesson_type_id: lessonTypeId, p_start_date: todayIso, p_end_date: rangeEndIso });
+      if (genErr) {
+        logger.warn('business-setup-provisioning.slot_generation_failed', { correlation_id: correlationId, lesson_type_id: lessonTypeId, error: genErr.message });
+        anyGenerationFailed = true;
+        continue;
+      }
       const row = (Array.isArray(genResult) ? genResult[0] : genResult) as { slots_created?: number } | undefined;
-      slotsGenerated = row?.slots_created ?? 0;
+      slotsGenerated += row?.slots_created ?? 0;
     }
+    if (anyGenerationFailed) warnings.push('Bokningsbara pass kunde inte genereras automatiskt för alla lektionstyper.');
   }
 
   return {
