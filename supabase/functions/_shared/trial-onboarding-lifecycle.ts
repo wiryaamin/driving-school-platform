@@ -15,13 +15,13 @@ export function verifyEmailHtml(schoolName: string, verifyUrl: string): string {
       <p style="font-size: 20px; font-weight: 700; margin-bottom: 4px;">Trafikcloud</p>
       <h2 style="font-size: 18px; margin-top: 24px;">Bekräfta din e-postadress</h2>
       <p>Hej,</p>
-      <p>Vi har tagit emot er registrering för <strong>${schoolName}</strong>. Bekräfta att det här är rätt e-postadress så skickar vi nästa steg.</p>
+      <p>Vi har tagit emot er registrering för <strong>${schoolName}</strong>. Klicka på länken nedan för att bekräfta att det här är rätt e-postadress — då konfigurerar vi er trafikskola direkt.</p>
       <p style="margin: 32px 0;">
         <a href="${verifyUrl}" style="background: #16a34a; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block;">
           Bekräfta e-postadress
         </a>
       </p>
-      <p style="font-size: 13px; color: #64748b;">Inget konto eller lösenord finns ännu — det kommer senare, efter att ni svarat på några frågor om er verksamhet. Länken är giltig i 7 dagar.</p>
+      <p style="font-size: 13px; color: #64748b;">Inget konto eller lösenord finns ännu — det skapar ni i nästa steg, direkt efter att er e-postadress är bekräftad. Länken är giltig i 7 dagar.</p>
     </div>`;
 }
 

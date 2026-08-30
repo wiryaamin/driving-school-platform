@@ -32,22 +32,40 @@
  * false), so there is no buildEdgeContext/JWT to lean on.
  *
  * Routes:
- *   POST /                       — start a trial: create session (NOT org), send verification email
- *   GET  /:token/verify-email    — confirms the applicant controls this address; sends the questionnaire email
- *   GET  /:token                 — resume: session status + saved answers
- *   PATCH /:token                — autosave partial interview answers
- *   POST /:token/complete        — validate + mark questionnaire_completed.
- *                                  Does NOT provision anything (2026-08-08,
- *                                  "remove auto-approval" hardening) — no
- *                                  organization, tenant user, or external
- *                                  integration is created here. Platform
- *                                  Admin must explicitly approve
- *                                  (POST /platform-admin/trial-requests/:id/
- *                                  approve, which calls
- *                                  _shared/trial-provisioning.ts's
- *                                  provisionTrialOrganization — same
- *                                  implementation, not a second one) before
- *                                  any of that happens.
+ *   POST /                       — one-shot short registration: collects every
+ *                                  field needed to create the trafikskola
+ *                                  (contact, legal name, address, licence
+ *                                  categories, price) in a single request,
+ *                                  saves it as the session's interview_
+ *                                  answers immediately, and sends the
+ *                                  verification email. No separate
+ *                                  "questionnaire" step exists anymore
+ *                                  (Starta provperiod — direct registration +
+ *                                  email verification + password activation,
+ *                                  2026-08-30).
+ *   GET  /:token/verify-email    — confirms the applicant controls this
+ *                                  address, then immediately runs the same
+ *                                  risk-assessment + provisioning finalize()
+ *                                  used to power POST /:token/complete below
+ *                                  — there is nothing left to fill in after
+ *                                  verification, so approval/provisioning no
+ *                                  longer waits on a second visit.
+ *   GET  /:token                 — resume: current session status (used as a
+ *                                  fallback by the client when it has no
+ *                                  fresh verification-redirect result to
+ *                                  show, e.g. the applicant reopens an old
+ *                                  link later).
+ *   PATCH /:token                — legacy autosave endpoint, kept only so an
+ *                                  in-flight session from before this
+ *                                  redesign can still be resumed/inspected;
+ *                                  the current registration form never calls
+ *                                  it (everything is submitted in one shot).
+ *   POST /:token/complete        — legacy manual-submit endpoint, kept as a
+ *                                  fallback finalize path (e.g. retrying a
+ *                                  'provisioning_failed' session) — shares
+ *                                  finalizeVerifiedSession() with
+ *                                  GET /:token/verify-email rather than
+ *                                  duplicating the risk+provisioning logic.
  */
 
 import { serveCors }           from '../_shared/cors.ts';
@@ -55,8 +73,8 @@ import { createServiceClient } from '../_shared/supabase.ts';
 import { logger }              from '../_shared/logger.ts';
 import { enforceIpRateLimit, getClientIp } from '../_shared/rate-limit.ts';
 import { dispatchMessage }     from '../_shared/comm-providers.ts';
-import { verifyEmailHtml, questionnaireEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
-import { provisionTrialOrganization, type CompleteAnswers } from '../_shared/trial-provisioning.ts';
+import { verifyEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
+import { provisionTrialOrganization, type CompleteAnswers, type ProvisionResult } from '../_shared/trial-provisioning.ts';
 
 // deno-lint-ignore no-explicit-any
 type DbClient = any;
@@ -69,6 +87,7 @@ const TOKEN_BYTES = 32;
 // workspace packages, per the established Edge Function convention (see
 // e.g. invite-user/index.ts's INVITABLE_ROLES).
 const ORG_NUMBER_RE = /^\d{6}-\d{4}$/;
+const POSTAL_RE = /^\d{3}\s?\d{2}$/;
 
 function ok<T>(data: T, correlationId: string, status = 200): Response {
   return new Response(JSON.stringify({ data }), { status, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId } });
@@ -91,13 +110,14 @@ function generateToken(): string {
 }
 
 // ─── Email templates ──────────────────────────────────────────────────────────
-// verifyEmailHtml/questionnaireEmailHtml live in
-// _shared/trial-onboarding-lifecycle.ts (shared with platform-admin's Resend
-// Verification/Resend Questionnaire actions). passwordCreationEmailHtml/
-// buildWelcomeConfigItems/welcomeConfigEmailHtml moved to
+// verifyEmailHtml lives in _shared/trial-onboarding-lifecycle.ts (shared
+// with platform-admin's own Resend Verification action; questionnaireEmailHtml
+// also still lives there for platform-admin's legacy Resend Questionnaire
+// action, just no longer imported here — this function no longer sends a
+// separate questionnaire email). passwordCreationEmailHtml/
+// buildWelcomeConfigItems/welcomeConfigEmailHtml live in
 // _shared/trial-provisioning.ts along with the provisioning logic that
-// sends them (2026-08-08, "remove auto-approval" hardening) — this
-// function no longer provisions, so it no longer needs them.
+// sends them.
 
 // ─── Handler ────────────────────────────────────────────────────────────────────
 
@@ -141,11 +161,30 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
     return ok({ started: true }, correlationId, 201);
   }
 
-  const email           = str(body, 'email').toLowerCase();
-  const drivingSchoolName = str(body, 'driving_school_name');
+  const email          = str(body, 'email').toLowerCase();
+  const firstName      = str(body, 'contact_first_name');
+  const lastName       = str(body, 'contact_last_name');
+  const legalName      = str(body, 'legal_name');
+  const addressLine1   = str(body, 'address_line1');
+  const postalCode     = str(body, 'postal_code');
+  const city           = str(body, 'city');
+  const licenceCategories = Array.isArray(body['licence_categories'])
+    ? (body['licence_categories'] as unknown[]).filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+    : [];
+  const priceRaw = body['standard_lesson_price_sek'];
+  const price = typeof priceRaw === 'number' ? priceRaw : Number(priceRaw);
 
   if (!EMAIL_RE.test(email) || email.length > 200) return fail(422, 'VALIDATION_ERROR', 'Ange en giltig e-postadress.', correlationId);
-  if (drivingSchoolName.length < 2 || drivingSchoolName.length > 150) return fail(422, 'VALIDATION_ERROR', 'Ange trafikskolans namn.', correlationId);
+  if (firstName.length < 1 || firstName.length > 100) return fail(422, 'VALIDATION_ERROR', 'Ange ditt förnamn.', correlationId);
+  if (lastName.length < 1 || lastName.length > 100) return fail(422, 'VALIDATION_ERROR', 'Ange ditt efternamn.', correlationId);
+  if (legalName.length < 2 || legalName.length > 150) return fail(422, 'VALIDATION_ERROR', 'Ange trafikskolans juridiska företagsnamn.', correlationId);
+  if (addressLine1.length < 1) return fail(422, 'VALIDATION_ERROR', 'Ange gatuadress.', correlationId);
+  if (!POSTAL_RE.test(postalCode)) return fail(422, 'VALIDATION_ERROR', 'Ange postnummer i formatet 111 22.', correlationId);
+  if (city.length < 1) return fail(422, 'VALIDATION_ERROR', 'Ange ort.', correlationId);
+  if (licenceCategories.length === 0) return fail(422, 'VALIDATION_ERROR', 'Välj minst en behörighet ni utbildar för.', correlationId);
+  if (!Number.isFinite(price) || price <= 0) return fail(422, 'VALIDATION_ERROR', 'Ange ett pris per lektion.', correlationId);
+
+  const drivingSchoolName = legalName;
 
   const db = createServiceClient();
 
@@ -178,15 +217,44 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
     return fail(409, 'DUPLICATE_REQUEST', 'Det finns redan en pågående registrering för denna e-postadress. Kolla er inkorg efter tidigare mail, eller kontakta support@trafikcloud.se.', correlationId);
   }
 
+  // ── Build the full answer set now — everything provisioning needs is
+  // already in hand (Starta provperiod — direct registration, 2026-08-30),
+  // unlike the old flow where only email/school-name existed at this point
+  // and the rest arrived later via a separate guided interview. Fields the
+  // short registration form no longer asks for keep the exact same defaults
+  // documented in the field-inventory audit and already used elsewhere
+  // (EMPTY_ANSWERS in apps/web's businessSetupAnswers.ts) — duplicated here
+  // per the established Edge-Function convention (Deno can't import
+  // workspace packages).
+  const answers: CompleteAnswers = {
+    contact_first_name: firstName, contact_last_name: lastName,
+    legal_name: legalName, org_number: '', vat_number: '', contact_phone: '',
+    country: 'SE', default_language: 'sv', timezone: 'Europe/Stockholm',
+    address_line1: addressLine1, postal_code: postalCode, city,
+    branches: 1, branch_entries: [],
+    licence_categories: licenceCategories, standard_lesson_duration_minutes: 40,
+    lesson_type_durations: {},
+    standard_lesson_price_sek: price,
+    teaching_languages: ['sv'],
+    vehicle_count: 0, vehicle_transmission: 'manual', vehicles: [],
+    administrators: 1, admin_entries: [],
+    receptionists: 0, receptionist_entries: [],
+    instructors: 0, instructor_entries: [],
+    working_hours_start: '08:00', working_hours_end: '17:00', weekend_schedule: 'closed',
+    channels: { email: true, sms: false, whatsapp: false, invoice_notifications: true },
+    vat_period: 'quarterly', payment_methods: ['invoice'],
+  };
+
   // ── Create the session ONLY — no organization row yet ──────────────────
   // The organization (and every tenant user / externally-provisioned
-  // integration) is created only once this session reaches 'provisioning'
-  // inside handleComplete — a rejected/cancelled/expired trial never
-  // creates any of them. See migration 20260808180915 and the header
-  // comment above.
+  // integration) is created only once email verification finalizes the
+  // session (see handleVerifyEmail/finalizeVerifiedSession below) — a
+  // rejected/cancelled/expired trial never creates any of them. See
+  // migration 20260808180915 and the header comment above.
   const token = generateToken();
   const { data: sessionRow, error: sessionErr } = await db.from('tenant_trial_sessions').insert({
     token, email, driving_school_name: drivingSchoolName, organization_id: null, status: 'pending_verification',
+    interview_answers: answers,
   }).select('id').single();
   if (sessionErr || !sessionRow) {
     logger.error('trial-signup.session_create_failed', { error: sessionErr?.message, correlation_id: correlationId });
@@ -196,7 +264,6 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
     sessionId: sessionRow.id, email, drivingSchoolName, eventType: 'request_created', actorType: 'applicant',
   });
 
-  const setupUrl = `${getAppOrigin()}/onboarding/${token}`;
   // Built from SUPABASE_URL, not the incoming request's own path — the
   // hosted gateway delivers req.url with /functions/v1/<name> already
   // stripped (same root cause as the earlier /health routing bug), so
@@ -207,13 +274,10 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
   const functionsUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const verifyUrl = `${functionsUrl}/functions/v1/trial-signup/${token}/verify-email`;
 
-  // Only the verification email sends now — Email #2 (welcome + the real
-  // questionnaire link) is deliberately held back until handleVerifyEmail
-  // confirms the tenant actually controls this address. Unlike before
-  // (both emails firing unconditionally at signup), a failed send here is
-  // surfaced to the caller (email_verification_sent) rather than silently
-  // swallowed — this email is now load-bearing: if it never arrives, the
-  // tenant has no way to ever reach the interview.
+  // The verification email is the applicant's only way to reach activation
+  // now — there is no separate questionnaire step to fall back on, so a
+  // failed send is surfaced to the caller (email_verification_sent) rather
+  // than silently swallowed.
   let emailVerificationSent = false;
   try {
     const verifyResult = await dispatchMessage({
@@ -230,7 +294,7 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
   }
 
   logger.info('trial-signup.started', { correlation_id: correlationId, session_id: sessionRow.id, email_verification_sent: emailVerificationSent });
-  return ok({ token, setup_url: setupUrl, email_verification_sent: emailVerificationSent }, correlationId, 201);
+  return ok({ token, email_verification_sent: emailVerificationSent }, correlationId, 201);
 }
 
 // ─── GET /:token/verify-email — confirms the tenant controls this address ───
@@ -243,13 +307,21 @@ async function handleStart(req: Request, correlationId: string): Promise<Respons
 // XSS hardening, since that domain also carries session cookies for every
 // other project. Confirmed live: a JSON route on this same function keeps
 // its correct Content-Type, only the HTML route was downgraded. So instead
-// of fighting the gateway, this redirects to our own domain — the existing
-// onboarding wizard already has all the "link is invalid/expired/rejected"
-// messaging built in (it calls GET /:token itself and surfaces INVALID_
-// REASON_MESSAGE), so only the success/already-verified path needs a query
-// flag to trigger a confirmation toast.
-function verifyRedirect(token: string, verified?: boolean): Response {
-  const url = `${getAppOrigin()}/onboarding/${token}${verified ? '?verified=1' : ''}`;
+// of fighting the gateway, this redirects to our own domain's /onboarding/
+// :token page, now a lightweight activation-status screen (no interview
+// form left to render) — the redirect itself carries the outcome (status,
+// and the real action_link when one exists) as query params so that page
+// can show it immediately without a second round trip; it strips both from
+// the visible URL on load the same way the accept-invite/reset-password
+// callbacks already do for their own tokens.
+function verifyRedirect(token: string, outcome?: { status: 'active' | 'review'; actionLink?: string | null }): Response {
+  const params = new URLSearchParams();
+  if (outcome) {
+    params.set('status', outcome.status);
+    if (outcome.actionLink) params.set('action_link', outcome.actionLink);
+  }
+  const qs = params.toString();
+  const url = `${getAppOrigin()}/onboarding/${token}${qs ? `?${qs}` : ''}`;
   return Response.redirect(url, 302);
 }
 
@@ -262,9 +334,12 @@ async function handleVerifyEmail(token: string, correlationId: string): Promise<
   if (session.status === 'expired') return verifyRedirect(token);
   if (session.status === 'rejected' || session.status === 'cancelled') return verifyRedirect(token);
 
-  const setupUrl = `${getAppOrigin()}/onboarding/${token}`;
-
-  if (session.email_verified_at) return verifyRedirect(token, true);
+  // Already verified (a replay click, e.g. an email security scanner or the
+  // applicant clicking the link twice) — the session has already been
+  // finalized one way or another, so just land on the status page and let
+  // it fetch the real current state via GET /:token rather than re-running
+  // (and potentially re-provisioning) anything here.
+  if (session.email_verified_at) return verifyRedirect(token);
 
   const { error: verifyErr } = await db.from('tenant_trial_sessions')
     .update({ email_verified_at: new Date().toISOString(), status: 'email_verified' }).eq('id', session.id);
@@ -276,25 +351,24 @@ async function handleVerifyEmail(token: string, correlationId: string): Promise<
     sessionId: session.id, email: session.email, drivingSchoolName: session.driving_school_name,
     eventType: 'email_verified', actorType: 'applicant',
   });
-
-  // Email #2 — welcome + the real questionnaire link — only sends now,
-  // gated on the verification click that just happened above.
-  try {
-    const questionnaireResult = await dispatchMessage({
-      channel: 'email', provider: 'resend', to: session.email, from: 'Trafikcloud <info@trafikcloud.se>',
-      subject: 'Berätta om er verksamhet – Trafikcloud',
-      body: questionnaireEmailHtml(session.driving_school_name, setupUrl),
-    });
-    if (questionnaireResult.status !== 'sent') {
-      logger.warn('trial-signup.questionnaire_email_failed', { correlation_id: correlationId, error: questionnaireResult.error });
-    }
-  } catch (err) {
-    logger.warn('trial-signup.questionnaire_email_exception', { correlation_id: correlationId, error: err instanceof Error ? err.message : String(err) });
-  }
-
   logger.info('trial-signup.email_verified', { correlation_id: correlationId, session_id: session.id });
 
-  return verifyRedirect(token, true);
+  // Nothing left to fill in after verification — every field provisioning
+  // needs was already collected at registration, so approval + provisioning
+  // (or the manual-review fallback) runs immediately, in this same request.
+  const answers = session.interview_answers as CompleteAnswers;
+  if (!Array.isArray(answers.licence_categories) || answers.licence_categories.length === 0) {
+    // Defensive only — the current registration form always sends this;
+    // this can only happen for a pre-redesign session that somehow never
+    // reached the old questionnaire step. Leave it verified and let the
+    // legacy POST /:token/complete path (or Platform Admin) handle it.
+    logger.error('trial-signup.verify_missing_answers', { correlation_id: correlationId, session_id: session.id });
+    return verifyRedirect(token);
+  }
+
+  const outcome = await finalizeVerifiedSession(db, session, correlationId);
+  if (outcome.kind === 'review') return verifyRedirect(token, { status: 'review' });
+  return verifyRedirect(token, { status: 'active', actionLink: outcome.result.actionLink });
 }
 
 // ─── Session lookup helper ───────────────────────────────────────────────────
@@ -483,18 +557,84 @@ async function assessTrialRisk(db: DbClient, email: string, answers: CompleteAns
   return { needsReview: reasons.length > 0, reasons };
 }
 
-// ─── POST /:token/complete — submit the questionnaire ───────────────────────
+// ─── Shared finalize: risk-assess, then approve+provision or flag for review ──
 //
-// Validates, then either auto-approves and provisions immediately (the
-// standard case — see assessTrialRisk above) or falls back to the
-// pre-existing manual Platform Admin review queue for the small minority of
-// registrations that trip a risk signal. Either way, provisioning (when it
-// runs) is the exact same _shared/trial-provisioning.ts implementation
-// Platform Admin's own POST /platform-admin/trial-requests/:id/approve
-// calls — one provisioning system, two ways to reach the same approval
-// step. Resubmitting from provisioning_failed (after a transient failure,
-// or after Trafikcloud corrects something) is allowed — it just re-runs
-// this same logic.
+// Extracted so GET /:token/verify-email (the current, single-step path — the
+// registration form already collected everything, so verification is the
+// only remaining gate) and POST /:token/complete (kept as a fallback finalize
+// path, e.g. retrying a 'provisioning_failed' session) share one
+// implementation instead of two copies of the same risk+provisioning logic.
+// Either way, provisioning (when it runs) is the exact same
+// _shared/trial-provisioning.ts implementation Platform Admin's own POST
+// /platform-admin/trial-requests/:id/approve calls — one provisioning
+// system, several ways to reach the same approval step.
+type FinalizeOutcome =
+  | { kind: 'review'; message: string }
+  | { kind: 'active'; result: Extract<ProvisionResult, { ok: true }> };
+
+async function finalizeVerifiedSession(
+  db: DbClient,
+  session: { id: string; email: string; driving_school_name: string; interview_answers: Record<string, unknown> },
+  correlationId: string,
+): Promise<FinalizeOutcome> {
+  const answers = session.interview_answers as CompleteAnswers;
+  const risk = await assessTrialRisk(db, session.email, answers);
+
+  await db.from('tenant_trial_sessions').update({ status: 'questionnaire_completed' }).eq('id', session.id);
+  await logTrialEvent(db, {
+    sessionId: session.id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'questionnaire_completed', actorType: 'applicant',
+    metadata: risk.needsReview ? { flagged_for_review: true, risk_reasons: risk.reasons } : undefined,
+  });
+
+  if (risk.needsReview) {
+    logger.info('trial-signup.flagged_for_review', { correlation_id: correlationId, session_id: session.id, reasons: risk.reasons });
+    return {
+      kind: 'review',
+      message: 'Tack! Er registrering granskas manuellt av Trafikcloud — det gäller ett litet antal registreringar. Ni får ett mail så snart er trafikskola är redo att användas. Ni kan öppna den här länken igen för att se aktuell status.',
+    };
+  }
+
+  // ── Standard case: approve and provision immediately, no human in the loop ──
+  await logTrialEvent(db, {
+    sessionId: session.id, email: session.email, drivingSchoolName: session.driving_school_name,
+    eventType: 'approved', actorType: 'system',
+  });
+  await db.from('tenant_trial_sessions').update({ status: 'approved' }).eq('id', session.id);
+
+  const result = await provisionTrialOrganization(
+    db,
+    { id: session.id, email: session.email, driving_school_name: session.driving_school_name, interview_answers: answers as unknown as Record<string, unknown> },
+    correlationId,
+  );
+
+  if (!result.ok) {
+    // provisionTrialOrganization already rolled back everything it created
+    // and left the session in provisioning_failed — Platform Admin can
+    // retry via the existing approve action (TRIAL_APPROVABLE_STATUSES
+    // already includes provisioning_failed), so this degrades to exactly
+    // the pre-existing manual-review path rather than a dead end.
+    logger.error('trial-signup.auto_provisioning_failed', {
+      correlation_id: correlationId, session_id: session.id, code: result.code, error: result.message,
+    });
+    return {
+      kind: 'review',
+      message: 'Tack! Vi kunde inte slutföra konfigurationen automatiskt just nu — Trafikcloud tittar på det manuellt. Ni får ett mail så snart er trafikskola är redo att användas.',
+    };
+  }
+
+  logger.info('trial-signup.auto_provisioned', { correlation_id: correlationId, session_id: session.id, organization_id: result.organizationId });
+  return { kind: 'active', result };
+}
+
+// ─── POST /:token/complete — legacy manual-submit finalize path ─────────────
+//
+// The current registration form never calls this — GET /:token/verify-email
+// already finalizes the session the moment the applicant verifies their
+// email, since there is no later questionnaire step left to submit from.
+// Kept as a fallback (e.g. retrying a 'provisioning_failed' session, or
+// finishing a session created before this redesign) — shares
+// finalizeVerifiedSession() with verify-email rather than a second copy.
 
 async function handleComplete(token: string, correlationId: string): Promise<Response> {
   const db = createServiceClient();
@@ -506,58 +646,16 @@ async function handleComplete(token: string, correlationId: string): Promise<Res
   if (unverified) return unverified;
 
   const answers = session!.interview_answers as CompleteAnswers;
-
   if (!Array.isArray(answers.licence_categories) || answers.licence_categories.length === 0) {
     return fail(422, 'VALIDATION_ERROR', 'Välj minst en behörighet ni utbildar för.', correlationId);
   }
 
-  const risk = await assessTrialRisk(db, session!.email, answers);
-
-  await db.from('tenant_trial_sessions').update({ status: 'questionnaire_completed' }).eq('id', session!.id);
-  await logTrialEvent(db, {
-    sessionId: session!.id, email: session!.email, drivingSchoolName: session!.driving_school_name,
-    eventType: 'questionnaire_completed', actorType: 'applicant',
-    metadata: risk.needsReview ? { flagged_for_review: true, risk_reasons: risk.reasons } : undefined,
-  });
-
-  if (risk.needsReview) {
-    logger.info('trial-signup.flagged_for_review', { correlation_id: correlationId, session_id: session!.id, reasons: risk.reasons });
-    return ok({
-      status: 'questionnaire_completed',
-      message: 'Tack! Er registrering granskas manuellt av Trafikcloud — det gäller ett litet antal registreringar. Ni får ett mail så snart er trafikskola är redo att användas. Ni kan öppna den här länken igen för att se aktuell status.',
-    } satisfies CompleteTrialReviewResult, correlationId, 200);
+  const outcome = await finalizeVerifiedSession(db, session!, correlationId);
+  if (outcome.kind === 'review') {
+    return ok({ status: 'questionnaire_completed', message: outcome.message } satisfies CompleteTrialReviewResult, correlationId, 200);
   }
 
-  // ── Standard case: approve and provision immediately, no human in the loop ──
-  await logTrialEvent(db, {
-    sessionId: session!.id, email: session!.email, drivingSchoolName: session!.driving_school_name,
-    eventType: 'approved', actorType: 'system',
-  });
-  await db.from('tenant_trial_sessions').update({ status: 'approved' }).eq('id', session!.id);
-
-  const result = await provisionTrialOrganization(
-    db,
-    { id: session!.id, email: session!.email, driving_school_name: session!.driving_school_name, interview_answers: answers as unknown as Record<string, unknown> },
-    correlationId,
-  );
-
-  if (!result.ok) {
-    // provisionTrialOrganization already rolled back everything it created
-    // and left the session in provisioning_failed — Platform Admin can
-    // retry via the existing approve action (TRIAL_APPROVABLE_STATUSES
-    // already includes provisioning_failed), so this degrades to exactly
-    // the pre-existing manual-review path rather than a dead end.
-    logger.error('trial-signup.auto_provisioning_failed', {
-      correlation_id: correlationId, session_id: session!.id, code: result.code, error: result.message,
-    });
-    return ok({
-      status: 'questionnaire_completed',
-      message: 'Tack! Vi kunde inte slutföra konfigurationen automatiskt just nu — Trafikcloud tittar på det manuellt. Ni får ett mail så snart er trafikskola är redo att användas.',
-    } satisfies CompleteTrialReviewResult, correlationId, 200);
-  }
-
-  logger.info('trial-signup.auto_provisioned', { correlation_id: correlationId, session_id: session!.id, organization_id: result.organizationId });
-
+  const result = outcome.result;
   return ok({
     status: 'active',
     organization_id: result.organizationId,

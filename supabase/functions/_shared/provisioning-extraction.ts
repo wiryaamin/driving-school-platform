@@ -100,8 +100,15 @@ export function extractConfiguration(
   if (branches.source === 'tenant_answer' && (!Number.isInteger(branches.value) || branches.value < 1 || branches.value > 200)) {
     return { ok: false, error: { field: 'branches', message: 'branches must be a positive integer' } };
   }
-  if (instructors.source === 'tenant_answer' && (!Number.isInteger(instructors.value) || instructors.value < 1 || instructors.value > 2000)) {
-    return { ok: false, error: { field: 'instructors', message: 'instructors must be a positive integer' } };
+  // >= 0, not >= 1 (Starta provperiod — direct registration + email
+  // verification + password activation, 2026-08-30): the short registration
+  // form no longer requires staff/instructors at signup — a real trial
+  // submitting instructors: 0 hit this exact >= 1 floor and failed
+  // provisioning outright ("instructors must be a positive integer"),
+  // caught only by a real end-to-end test against the hosted database.
+  // Mirrors vehicles' own non-negative bound directly below.
+  if (instructors.source === 'tenant_answer' && (!Number.isInteger(instructors.value) || instructors.value < 0 || instructors.value > 2000)) {
+    return { ok: false, error: { field: 'instructors', message: 'instructors must be a non-negative integer' } };
   }
   if (vehicles.source === 'tenant_answer' && (!Number.isInteger(vehicles.value) || vehicles.value < 0 || vehicles.value > 2000)) {
     return { ok: false, error: { field: 'vehicles', message: 'vehicles must be a non-negative integer' } };

@@ -1,3 +1,4 @@
+import { cloneElement, isValidElement, useId, type ReactElement } from 'react';
 import { Input } from '@platform/ui';
 import { cn } from '@/lib/utils.js';
 import {
@@ -29,12 +30,35 @@ export function Pill({ active, onClick, children }: { active: boolean; onClick: 
   );
 }
 
+// Every field renders exactly one control (an Input, a <select>, or a Pill-
+// group <div>) as its only child — this associates the visible label with
+// that control properly instead of the plain, unassociated <label> this
+// component used to render (Starta provperiod — direct registration + email
+// verification + password activation, 2026-08-30, "accessibility"; these are
+// now critical customer-facing forms, not just internal admin tooling, so
+// the pre-existing gap is fixed here rather than deferred again). A real
+// form control (Input/select) gets htmlFor/id, matching native label
+// semantics; a Pill-group div isn't a single control a <label> can target,
+// so it gets the equivalent ARIA group pattern instead.
 export function Field({ label, error, children }: { label: string; error?: string | undefined; children: React.ReactNode }) {
+  const controlId = useId();
+  const errorId = useId();
+  const labelId = `${controlId}-label`;
+  const isFormControl = isValidElement(children) && (children.type === Input || children.type === 'select');
+
+  const control = isValidElement(children)
+    ? cloneElement(children as ReactElement<Record<string, unknown>>, isFormControl
+      ? { id: controlId, 'aria-invalid': error ? true : undefined, 'aria-describedby': error ? errorId : undefined }
+      : { role: 'group', 'aria-labelledby': labelId, 'aria-describedby': error ? errorId : undefined })
+    : children;
+
   return (
     <div className="space-y-1.5">
-      <label className="text-sm font-medium text-foreground">{label}</label>
-      {children}
-      {error && <p className="text-xs text-destructive font-medium">{error}</p>}
+      {isFormControl
+        ? <label htmlFor={controlId} className="text-sm font-medium text-foreground">{label}</label>
+        : <span id={labelId} className="text-sm font-medium text-foreground block">{label}</span>}
+      {control}
+      {error && <p id={errorId} className="text-xs text-destructive font-medium" role="alert">{error}</p>}
     </div>
   );
 }

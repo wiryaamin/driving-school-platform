@@ -8,9 +8,10 @@ import { TrialSignupForm } from '@modules/trial-onboarding/index.js';
  * real self-service trial-signup form (TrialSignupForm.js) — this section,
  * the site's one true conversion action (navigation.ts's DEMO_CTA and every
  * CTA consuming it), previously fed the old manual-review/Convert-to-
- * Customer pipeline, which never runs the Business Discovery questionnaire.
- * Filling in this form now genuinely starts the pre-account guided-interview
- * → automatic-configuration → administrator-account flow end to end.
+ * Customer pipeline. Filling in this form (a short, direct registration as
+ * of the 2026-08-30 redesign — see TrialSignupForm.js) starts the real
+ * verify-email → automatic-configuration → password-activation flow end to
+ * end, with no separate interview step in between.
  */
 export function CallToAction() {
   return (
@@ -23,7 +24,7 @@ export function CallToAction() {
         />
 
         <p className="mx-auto mt-4 max-w-xl text-pretty text-center text-base font-normal leading-[1.5] text-muted-foreground">
-          Svara på några frågor om er verksamhet — Trafikcloud konfigurerar resten automatiskt.
+          Fyll i uppgifterna nedan — Trafikcloud konfigurerar resten automatiskt.
         </p>
 
         <div className="mt-8">

@@ -23,6 +23,7 @@ export function ResetPasswordPage() {
   const { t } = useTranslation('auth');
   const navigate = useNavigate();
   const [state, setState] = useState<PageState>('verifying');
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const ranOnce = useRef(false);
 
   useEffect(() => {
@@ -52,6 +53,13 @@ export function ResetPasswordPage() {
       await supabase.auth.signOut({ scope: 'local' });
       const outcome = await establishCallbackSession(params);
       setState(outcome.ok ? 'ready' : { error: outcome.reason });
+      if (outcome.ok) {
+        // The recovery-scoped session's own email — shown read-only in
+        // SetNewPasswordForm so the person can see which account they're
+        // resetting.
+        const { data } = await supabase.auth.getUser();
+        if (data.user?.email) setAccountEmail(data.user.email);
+      }
     })();
   }, []);
 
@@ -73,7 +81,7 @@ export function ResetPasswordPage() {
       <div className="mb-6">
         <h2 className="text-xl font-semibold text-foreground">{t('reset_password.title')}</h2>
       </div>
-      <SetNewPasswordForm mode="recovery" onSuccess={handleSuccess} />
+      <SetNewPasswordForm mode="recovery" onSuccess={handleSuccess} email={accountEmail} />
     </div>
   );
 }

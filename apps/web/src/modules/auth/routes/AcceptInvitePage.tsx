@@ -26,6 +26,7 @@ export function AcceptInvitePage() {
   const { organization } = useSession();
   const [state, setState] = useState<PageState>('verifying');
   const [pendingOrgName, setPendingOrgName] = useState<string | null>(null);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const ranOnce = useRef(false);
 
   useEffect(() => {
@@ -64,6 +65,13 @@ export function AcceptInvitePage() {
       const row = Array.isArray(data) ? data[0] as { organization_name?: string } | undefined : undefined;
       if (row?.organization_name) setPendingOrgName(row.organization_name);
     });
+    // The invite-scoped session's own email — shown read-only in
+    // SetNewPasswordForm so the applicant can see which account they're
+    // activating without it being editable (editing it would desynchronize
+    // from the token's actual account identity).
+    void supabase.auth.getUser().then(({ data }) => {
+      if (data.user?.email) setAccountEmail(data.user.email);
+    });
   }, [state]);
 
   const handleSuccess = async () => {
@@ -93,7 +101,7 @@ export function AcceptInvitePage() {
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">{t('invite.subtitle')}</p>
       </div>
-      <SetNewPasswordForm mode="invite" onSuccess={handleSuccess} />
+      <SetNewPasswordForm mode="invite" onSuccess={handleSuccess} email={accountEmail} />
     </div>
   );
 }

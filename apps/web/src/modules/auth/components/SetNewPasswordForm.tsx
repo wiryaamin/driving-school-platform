@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Eye, EyeOff } from 'lucide-react';
 import { useTranslation } from '@platform/i18n';
 import { ConfirmPasswordResetSchema, type ConfirmPasswordResetDto } from '@platform/validation';
 import { supabase } from '@core/api/supabase.js';
@@ -11,6 +12,16 @@ interface SetNewPasswordFormProps {
   /** Selects which i18n copy block ('reset_password' vs 'invite') and post-submit behavior. */
   mode: 'recovery' | 'invite';
   onSuccess: () => void | Promise<void>;
+  /**
+   * The account's own verified email, read-only display only (Starta
+   * provperiod — direct registration + email verification + password
+   * activation, 2026-08-30) — sourced from the real Supabase session the
+   * caller already established from the recovery/invite link, so it can
+   * never drift from the token's actual account identity. Optional: a
+   * caller that hasn't fetched it yet (or can't) simply omits the field
+   * rather than showing a wrong or empty one.
+   */
+  email?: string | null;
 }
 
 /**
@@ -19,9 +30,11 @@ interface SetNewPasswordFormProps {
  * already exchanged the email link for a real (recovery-scoped) Supabase
  * session — this form's only job is collecting and applying the new password.
  */
-export function SetNewPasswordForm({ mode, onSuccess }: SetNewPasswordFormProps) {
+export function SetNewPasswordForm({ mode, onSuccess, email }: SetNewPasswordFormProps) {
   const { t } = useTranslation('auth');
   const [serverError, setServerError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const copy = mode === 'recovery' ? 'reset_password' : 'invite';
 
   const {
@@ -85,43 +98,80 @@ export function SetNewPasswordForm({ mode, onSuccess }: SetNewPasswordFormProps)
         </div>
       )}
 
+      {email && (
+        <div className="space-y-1.5">
+          <label htmlFor="account_email" className="text-sm font-medium text-foreground">{t('reset_password.account_email_label')}</label>
+          <input
+            id="account_email"
+            type="email"
+            value={email}
+            readOnly
+            disabled
+            aria-readonly="true"
+            className="w-full px-3 py-2 text-sm rounded-lg border border-input bg-muted text-muted-foreground cursor-not-allowed"
+          />
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <label htmlFor="new_password" className="text-sm font-medium text-foreground">{t(`${copy}.new_password_label`)}</label>
-        <input
-          {...register('password')}
-          id="new_password"
-          type="password"
-          autoComplete="new-password"
-          autoFocus
-          className={cn(
-            'w-full px-3 py-2 text-sm rounded-lg border bg-background',
-            'placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
-            'transition-colors',
-            passwordError ? 'border-destructive focus:ring-destructive' : 'border-input'
-          )}
-        />
+        <div className="relative">
+          <input
+            {...register('password')}
+            id="new_password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="new-password"
+            autoFocus
+            aria-describedby={passwordError ? 'new_password_error' : 'new_password_hint'}
+            className={cn(
+              'w-full px-3 py-2 pr-10 text-sm rounded-lg border bg-background',
+              'placeholder:text-muted-foreground',
+              'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
+              'transition-colors',
+              passwordError ? 'border-destructive focus:ring-destructive' : 'border-input'
+            )}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            aria-label={t(showPassword ? 'reset_password.hide_password' : 'reset_password.show_password')}
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded-r-lg"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
         {passwordError
-          ? <p className="text-xs text-destructive" role="alert">{passwordError}</p>
-          : <p className="text-xs text-muted-foreground">{t(`${copy}.password_hint`)}</p>}
+          ? <p id="new_password_error" className="text-xs text-destructive" role="alert">{passwordError}</p>
+          : <p id="new_password_hint" className="text-xs text-muted-foreground">{t(`${copy}.password_hint`)}</p>}
       </div>
 
       <div className="space-y-1.5">
         <label htmlFor="confirm_password" className="text-sm font-medium text-foreground">{t(`${copy}.confirm_password_label`)}</label>
-        <input
-          {...register('confirmPassword')}
-          id="confirm_password"
-          type="password"
-          autoComplete="new-password"
-          className={cn(
-            'w-full px-3 py-2 text-sm rounded-lg border bg-background',
-            'placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
-            'transition-colors',
-            confirmError ? 'border-destructive focus:ring-destructive' : 'border-input'
-          )}
-        />
-        {confirmError && <p className="text-xs text-destructive" role="alert">{confirmError}</p>}
+        <div className="relative">
+          <input
+            {...register('confirmPassword')}
+            id="confirm_password"
+            type={showConfirm ? 'text' : 'password'}
+            autoComplete="new-password"
+            aria-describedby={confirmError ? 'confirm_password_error' : undefined}
+            className={cn(
+              'w-full px-3 py-2 pr-10 text-sm rounded-lg border bg-background',
+              'placeholder:text-muted-foreground',
+              'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
+              'transition-colors',
+              confirmError ? 'border-destructive focus:ring-destructive' : 'border-input'
+            )}
+          />
+          <button
+            type="button"
+            onClick={() => setShowConfirm((v) => !v)}
+            aria-label={t(showConfirm ? 'reset_password.hide_password' : 'reset_password.show_password')}
+            className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary rounded-r-lg"
+          >
+            {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+        {confirmError && <p id="confirm_password_error" className="text-xs text-destructive" role="alert">{confirmError}</p>}
       </div>
 
       <button
