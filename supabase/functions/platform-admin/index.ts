@@ -1796,6 +1796,7 @@ async function handleProvision(ctx: EdgeRequestContext, rawBody: unknown): Promi
         staff_invited: resourcesOutcome.staffInvited,
         additional_branches_created: resourcesOutcome.additionalBranchesCreated,
         slots_generated: resourcesOutcome.slotsGenerated,
+        warnings: [...configOutcome.warnings, ...resourcesOutcome.warnings],
       };
       logger.info('platform-admin.provision.business_setup_completed', {
         correlation_id: ctx.correlationId, org_id: orgId, ...businessSetupSummary,
@@ -2176,7 +2177,7 @@ async function handleApproveTrialRequest(ctx: EdgeRequestContext, id: string): P
     branch_created: result.branchCreated, priced_lesson_types: result.pricedLessonTypes,
     vehicles_created: result.vehiclesCreated, instructors_created: result.instructorsCreated,
     staff_invited: result.staffInvited, additional_branches_created: result.additionalBranchesCreated,
-    slots_generated: result.slotsGenerated,
+    slots_generated: result.slotsGenerated, provisioning_warnings: result.provisioningWarnings,
   });
 }
 

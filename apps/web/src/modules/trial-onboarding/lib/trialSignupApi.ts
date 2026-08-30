@@ -40,10 +40,26 @@ export function startTrial(input: StartTrialInput): Promise<StartTrialResult> {
   return call('/', { method: 'POST', body: JSON.stringify(input) });
 }
 
-export interface TrialSession {
+// A session still mid-interview returns interview_answers to resume into;
+// a session past submission (Starta provperiod workflow redesign,
+// 2026-08-30) instead returns its current post-submission status — the
+// applicant's only way to check on a registration by reopening the same
+// emailed link, rather than a dead "link no longer valid" error.
+export interface TrialSessionInProgress {
   driving_school_name: string;
   email: string;
   interview_answers: Record<string, unknown>;
+}
+export interface TrialSessionPostSubmission {
+  status: 'questionnaire_completed' | 'approved' | 'provisioning' | 'provisioning_failed' | 'active';
+  driving_school_name: string;
+  email: string;
+  organization_id: string | null;
+}
+export type TrialSession = TrialSessionInProgress | TrialSessionPostSubmission;
+
+export function isPostSubmissionSession(session: TrialSession): session is TrialSessionPostSubmission {
+  return 'status' in session;
 }
 
 export function getTrialSession(token: string): Promise<TrialSession> {
@@ -54,13 +70,34 @@ export function saveTrialAnswers(token: string, answers: Record<string, unknown>
   return call(`/${token}`, { method: 'PATCH', body: JSON.stringify(answers) });
 }
 
-// Submitting the questionnaire no longer provisions anything (2026-08-08,
-// "remove auto-approval" hardening) — no organization_id/action_link exists
-// yet. Platform Admin must explicitly approve before any of that happens;
-// this just confirms the submission was accepted and is pending review.
-export interface CompleteTrialResult {
-  status: string;
+// The standard case now approves and provisions immediately (Starta
+// provperiod workflow redesign, 2026-08-30) — status 'active' means the
+// trafikskola is created and action_link is a real, ready-to-use link to
+// set a password. A small minority of registrations still fall back to
+// manual review (status 'questionnaire_completed'), same as before.
+export interface CompleteTrialReviewResult {
+  status: 'questionnaire_completed';
   message: string;
+}
+export interface CompleteTrialActiveResult {
+  status: 'active';
+  organization_id: string;
+  action_link: string | null;
+  lesson_types_created: number;
+  package_templates_created: number;
+  branch_created: number;
+  priced_lesson_types: number;
+  vehicles_created: number;
+  instructors_created: number;
+  staff_invited: number;
+  additional_branches_created: number;
+  slots_generated: number;
+  provisioning_warnings: string[];
+}
+export type CompleteTrialResult = CompleteTrialReviewResult | CompleteTrialActiveResult;
+
+export function isActiveResult(result: CompleteTrialResult): result is CompleteTrialActiveResult {
+  return result.status === 'active';
 }
 
 export function completeTrial(token: string): Promise<CompleteTrialResult> {

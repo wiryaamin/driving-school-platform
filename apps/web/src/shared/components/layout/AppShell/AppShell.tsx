@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { Outlet, Link } from 'react-router-dom';
+import { AlertTriangle, CreditCard } from 'lucide-react';
 import { Sidebar } from '../Sidebar/Sidebar.js';
 import { TopBar } from '../TopBar/TopBar.js';
 import { MobileSidebar } from '../Sidebar/MobileSidebar.js';
@@ -8,6 +8,7 @@ import { CommandPalette } from '../../CommandPalette/CommandPalette.js';
 import { Toaster } from '@platform/ui';
 import { useSessionStore } from '@core/store/session.store.js';
 import { getTrialLockState } from '@core/auth/trialLock.js';
+import { usePaymentPilotStatus } from '@shared/hooks/usePaymentPilotStatus.js';
 
 // Dialog/Sheet (packages/ui) render via a Radix Portal into document.body —
 // a DOM sibling of this component, not a descendant — so the `.tenant-shell`
@@ -41,6 +42,31 @@ function TrialGraceBanner() {
   );
 }
 
+// Visible, persistent nudge (Starta provperiod workflow redesign,
+// 2026-08-30, "shared sandbox credentials") that real payment
+// configuration is still Trafikcloud's own pilot account, not the school's
+// — deliberately NOT a checklist or a new onboarding surface (Kom igång
+// stays removed); just a quiet banner reusing the existing Betalningar
+// settings page, that disappears on its own the moment a real Nets or
+// Stripe account is connected there.
+function SandboxCredentialsBanner() {
+  const { data } = usePaymentPilotStatus();
+  if (!data?.isPilot) return null;
+
+  return (
+    <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-200 dark:border-blue-900/50 text-blue-800 dark:text-blue-300 text-sm px-4 py-2">
+      <CreditCard className="w-4 h-4 shrink-0" />
+      <span>
+        Betalningar körs just nu på Trafikclouds testkonto. Koppla ert eget konto i{' '}
+        <Link to="/settings/company" className="font-medium underline hover:no-underline">
+          Inställningar → Företagsuppgifter → Betalningar
+        </Link>{' '}
+        innan skarp drift.
+      </span>
+    </div>
+  );
+}
+
 export function AppShell() {
   useTenantShellBodyClass();
 
@@ -62,6 +88,7 @@ export function AppShell() {
       <div className="flex flex-col min-h-screen md:pl-[280px]">
         <TopBar />
         <TrialGraceBanner />
+        <SandboxCredentialsBanner />
         <main className="flex-1 pt-[52px] overflow-auto">
           {/* p-[15px]/lg:p-[30px] (Listivo design-reference audit, 2026-08-29):
               the source's mobile/desktop container padding, applied on the

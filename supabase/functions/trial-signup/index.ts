@@ -56,7 +56,7 @@ import { logger }              from '../_shared/logger.ts';
 import { enforceIpRateLimit, getClientIp } from '../_shared/rate-limit.ts';
 import { dispatchMessage }     from '../_shared/comm-providers.ts';
 import { verifyEmailHtml, questionnaireEmailHtml, logTrialEvent } from '../_shared/trial-onboarding-lifecycle.ts';
-import type { CompleteAnswers } from '../_shared/trial-provisioning.ts';
+import { provisionTrialOrganization, type CompleteAnswers } from '../_shared/trial-provisioning.ts';
 
 // deno-lint-ignore no-explicit-any
 type DbClient = any;
@@ -65,6 +65,10 @@ const JSON_CT = { 'Content-Type': 'application/json' } as const;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const MAX_PER_EMAIL_PER_HOUR = 3;
 const TOKEN_BYTES = 32;
+// Duplicated from apps/web's businessSetupAnswers.ts — Deno can't import
+// workspace packages, per the established Edge Function convention (see
+// e.g. invite-user/index.ts's INVITABLE_ROLES).
+const ORG_NUMBER_RE = /^\d{6}-\d{4}$/;
 
 function ok<T>(data: T, correlationId: string, status = 200): Response {
   return new Response(JSON.stringify({ data }), { status, headers: { ...JSON_CT, 'X-Correlation-ID': correlationId } });
@@ -358,10 +362,28 @@ const INVALID_REASON_MESSAGE: Record<string, string> = {
 
 // ─── GET /:token — resume ────────────────────────────────────────────────────
 
+const POST_SUBMISSION_STATUSES = ['questionnaire_completed', 'approved', 'provisioning', 'provisioning_failed', 'active'];
+
 async function handleGetSession(token: string, correlationId: string): Promise<Response> {
   const db = createServiceClient();
   const session = await loadSession(db, token);
   if (session) await expireIfPastDue(db, session, correlationId);
+
+  // Reopening the emailed link is the applicant's only way to check on a
+  // registration once it's been submitted — a flat 410 "link no longer
+  // valid" here was a dead end with no way to see current status (Starta
+  // provperiod workflow redesign, 2026-08-30, "post-submission
+  // experience"). Every status from here on is a real, current answer, not
+  // an error — the interview itself is over regardless of outcome.
+  if (session && POST_SUBMISSION_STATUSES.includes(session.status)) {
+    return ok({
+      status: session.status,
+      driving_school_name: session.driving_school_name,
+      email: session.email,
+      organization_id: session.organization_id,
+    }, correlationId);
+  }
+
   const invalid = sessionInvalidReason(session);
   if (invalid) return fail(410, invalid.toUpperCase(), INVALID_REASON_MESSAGE[invalid] ?? 'Länken är inte längre giltig.', correlationId);
   const unverified = requireVerifiedEmail(session, correlationId);
@@ -409,16 +431,70 @@ async function handleSaveAnswers(req: Request, token: string, correlationId: str
   return ok({ saved: true }, correlationId);
 }
 
-// ─── POST /:token/complete — submit the questionnaire for approval ──────────
+// ─── Standard auto-approval risk assessment ─────────────────────────────────
 //
-// Validates and marks the session questionnaire_completed. Does NOT create
-// an organization, tenant user, or external integration — provisioning only
-// runs when Platform Admin explicitly approves (POST /platform-admin/
-// trial-requests/:id/approve → _shared/trial-provisioning.ts's
-// provisionTrialOrganization, 2026-08-08 "remove auto-approval" hardening).
-// Resubmitting from provisioning_failed (after correcting something a
-// previous provisioning attempt rejected) is allowed — it just lands back
-// here, awaiting a fresh approval.
+// Starta provperiod workflow redesign (2026-08-30): the normal, low-risk
+// trafikskola registration no longer waits on a human — it's approved and
+// provisioned in this same request, using the exact same
+// provisionTrialOrganization() Platform Admin's own manual approve action
+// calls (not a second provisioning path). Only registrations that trip one
+// of these conservative, evidence-based signals still fall back to the
+// pre-existing manual-review queue. Deliberately narrow — no scoring model,
+// no external fraud service, just structural checks against data already
+// collected: malformed/duplicate organization numbers, a pattern of prior
+// abandoned/rejected attempts from the same email, and business figures
+// clearly outside a normal trafikskola's range. Honeypot and rate-limiting
+// are already fully enforced upstream in handleStart — a request that
+// reaches this point never triggered either, so there's nothing to re-check
+// here.
+interface TrialRiskAssessment { needsReview: boolean; reasons: string[] }
+
+async function assessTrialRisk(db: DbClient, email: string, answers: CompleteAnswers): Promise<TrialRiskAssessment> {
+  const reasons: string[] = [];
+
+  const orgNumber = (answers.org_number ?? '').trim();
+  if (orgNumber) {
+    // Defense-in-depth — the wizard already validates this client-side, but
+    // a direct API call bypasses that entirely.
+    if (!ORG_NUMBER_RE.test(orgNumber)) reasons.push('invalid_org_number_format');
+    const { data: existingOrg } = await db.from('organizations').select('id').eq('org_number', orgNumber).maybeSingle();
+    if (existingOrg) reasons.push('org_number_already_registered');
+  }
+
+  // A pattern of prior rejected/cancelled/failed attempts from this exact
+  // email is worth a human look — a single abandoned attempt is normal
+  // (someone got busy and re-registered later), a repeated pattern is not.
+  const { count: priorAttempts } = await db
+    .from('tenant_trial_sessions').select('id', { count: 'exact', head: true })
+    .eq('email', email).in('status', ['rejected', 'cancelled', 'provisioning_failed']);
+  if ((priorAttempts ?? 0) >= 2) reasons.push('repeated_prior_attempts');
+
+  // Generous sanity bounds on the Swedish driving-lesson market, wide enough
+  // to never flag a genuine school's real pricing — only clearly nonsensical
+  // values (a placeholder, a typo with an extra digit).
+  const price = Number(answers.standard_lesson_price_sek);
+  if (!Number.isFinite(price) || price < 50 || price > 5000) reasons.push('lesson_price_out_of_range');
+
+  // A trial declaring an implausibly large operation on day one reads more
+  // like test/abuse traffic than a real new customer.
+  if ((answers.vehicles?.length ?? 0) > 25) reasons.push('unusually_large_vehicle_count');
+  if ((answers.instructor_entries?.length ?? 0) > 25) reasons.push('unusually_large_instructor_count');
+
+  return { needsReview: reasons.length > 0, reasons };
+}
+
+// ─── POST /:token/complete — submit the questionnaire ───────────────────────
+//
+// Validates, then either auto-approves and provisions immediately (the
+// standard case — see assessTrialRisk above) or falls back to the
+// pre-existing manual Platform Admin review queue for the small minority of
+// registrations that trip a risk signal. Either way, provisioning (when it
+// runs) is the exact same _shared/trial-provisioning.ts implementation
+// Platform Admin's own POST /platform-admin/trial-requests/:id/approve
+// calls — one provisioning system, two ways to reach the same approval
+// step. Resubmitting from provisioning_failed (after a transient failure,
+// or after Trafikcloud corrects something) is allowed — it just re-runs
+// this same logic.
 
 async function handleComplete(token: string, correlationId: string): Promise<Response> {
   const db = createServiceClient();
@@ -435,17 +511,75 @@ async function handleComplete(token: string, correlationId: string): Promise<Res
     return fail(422, 'VALIDATION_ERROR', 'Välj minst en behörighet ni utbildar för.', correlationId);
   }
 
+  const risk = await assessTrialRisk(db, session!.email, answers);
+
   await db.from('tenant_trial_sessions').update({ status: 'questionnaire_completed' }).eq('id', session!.id);
   await logTrialEvent(db, {
     sessionId: session!.id, email: session!.email, drivingSchoolName: session!.driving_school_name,
     eventType: 'questionnaire_completed', actorType: 'applicant',
+    metadata: risk.needsReview ? { flagged_for_review: true, risk_reasons: risk.reasons } : undefined,
   });
 
-  logger.info('trial-signup.questionnaire_submitted', { correlation_id: correlationId, session_id: session!.id });
+  if (risk.needsReview) {
+    logger.info('trial-signup.flagged_for_review', { correlation_id: correlationId, session_id: session!.id, reasons: risk.reasons });
+    return ok({
+      status: 'questionnaire_completed',
+      message: 'Tack! Er registrering granskas manuellt av Trafikcloud — det gäller ett litet antal registreringar. Ni får ett mail så snart er trafikskola är redo att användas. Ni kan öppna den här länken igen för att se aktuell status.',
+    } satisfies CompleteTrialReviewResult, correlationId, 200);
+  }
+
+  // ── Standard case: approve and provision immediately, no human in the loop ──
+  await logTrialEvent(db, {
+    sessionId: session!.id, email: session!.email, drivingSchoolName: session!.driving_school_name,
+    eventType: 'approved', actorType: 'system',
+  });
+  await db.from('tenant_trial_sessions').update({ status: 'approved' }).eq('id', session!.id);
+
+  const result = await provisionTrialOrganization(
+    db,
+    { id: session!.id, email: session!.email, driving_school_name: session!.driving_school_name, interview_answers: answers as unknown as Record<string, unknown> },
+    correlationId,
+  );
+
+  if (!result.ok) {
+    // provisionTrialOrganization already rolled back everything it created
+    // and left the session in provisioning_failed — Platform Admin can
+    // retry via the existing approve action (TRIAL_APPROVABLE_STATUSES
+    // already includes provisioning_failed), so this degrades to exactly
+    // the pre-existing manual-review path rather than a dead end.
+    logger.error('trial-signup.auto_provisioning_failed', {
+      correlation_id: correlationId, session_id: session!.id, code: result.code, error: result.message,
+    });
+    return ok({
+      status: 'questionnaire_completed',
+      message: 'Tack! Vi kunde inte slutföra konfigurationen automatiskt just nu — Trafikcloud tittar på det manuellt. Ni får ett mail så snart er trafikskola är redo att användas.',
+    } satisfies CompleteTrialReviewResult, correlationId, 200);
+  }
+
+  logger.info('trial-signup.auto_provisioned', { correlation_id: correlationId, session_id: session!.id, organization_id: result.organizationId });
 
   return ok({
-    status: 'questionnaire_completed',
-    message: 'Tack! Er ansökan är inskickad och granskas nu av Trafikcloud. Ni får ett mail så snart er trafikskola är godkänd och redo att användas.',
-  } satisfies { status: string; message: string }, correlationId, 200);
+    status: 'active',
+    organization_id: result.organizationId,
+    action_link: result.actionLink,
+    lesson_types_created: result.lessonTypesCreated,
+    package_templates_created: result.packageTemplatesCreated,
+    branch_created: result.branchCreated,
+    priced_lesson_types: result.pricedLessonTypes,
+    vehicles_created: result.vehiclesCreated,
+    instructors_created: result.instructorsCreated,
+    staff_invited: result.staffInvited,
+    additional_branches_created: result.additionalBranchesCreated,
+    slots_generated: result.slotsGenerated,
+    provisioning_warnings: result.provisioningWarnings,
+  } satisfies CompleteTrialActiveResult, correlationId, 200);
+}
+
+interface CompleteTrialReviewResult { status: 'questionnaire_completed'; message: string }
+interface CompleteTrialActiveResult {
+  status: 'active'; organization_id: string; action_link: string | null;
+  lesson_types_created: number; package_templates_created: number; branch_created: number; priced_lesson_types: number;
+  vehicles_created: number; instructors_created: number; staff_invited: number;
+  additional_branches_created: number; slots_generated: number; provisioning_warnings: string[];
 }
 

@@ -174,12 +174,30 @@ function TrialRequestDetailDialog({ id, onClose }: { id: string | null; onClose:
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Historik</h3>
               <ul className="space-y-2">
-                {data.events.map(e => (
-                  <li key={e.id} className="text-xs border-l-2 border-border pl-3 py-0.5">
-                    <span className="font-medium text-foreground">{humanizeIdentifier(e.event_type)}</span>
-                    <span className="text-muted-foreground"> — {formatDate(e.created_at)} — {e.actor_type}{e.actor_email ? ` (${e.actor_email})` : ''}</span>
-                  </li>
-                ))}
+                {data.events.map(e => {
+                  const warnings = Array.isArray(e.metadata?.['warnings']) ? e.metadata['warnings'] as string[] : [];
+                  const riskReasons = Array.isArray(e.metadata?.['risk_reasons']) ? e.metadata['risk_reasons'] as string[] : [];
+                  return (
+                    <li key={e.id} className="text-xs border-l-2 border-border pl-3 py-0.5">
+                      <span className="font-medium text-foreground">{humanizeIdentifier(e.event_type)}</span>
+                      <span className="text-muted-foreground"> — {formatDate(e.created_at)} — {e.actor_type}{e.actor_email ? ` (${e.actor_email})` : ''}</span>
+                      {/* Non-fatal best-effort provisioning gaps (Starta provperiod
+                          workflow redesign, 2026-08-30) — "make provisioning
+                          warnings visible to Platform Admin" without a separate
+                          screen, reusing this existing timeline. */}
+                      {warnings.length > 0 && (
+                        <ul className="mt-1 ml-3 list-disc space-y-0.5 text-amber-700 dark:text-amber-400">
+                          {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      )}
+                      {riskReasons.length > 0 && (
+                        <ul className="mt-1 ml-3 list-disc space-y-0.5 text-muted-foreground">
+                          {riskReasons.map((r, i) => <li key={i}>{humanizeIdentifier(r)}</li>)}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
                 {data.events.length === 0 && <li className="text-xs text-muted-foreground">Ingen historik ännu.</li>}
               </ul>
             </div>

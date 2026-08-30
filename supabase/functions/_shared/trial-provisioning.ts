@@ -183,6 +183,10 @@ export type ProvisionResult =
       lessonTypesCreated: number; packageTemplatesCreated: number; branchCreated: number; pricedLessonTypes: number;
       vehiclesCreated: number; instructorsCreated: number; staffInvited: number;
       additionalBranchesCreated: number; slotsGenerated: number;
+      /** Non-fatal best-effort failures — the organization is still active
+       * and usable, but these specific resources didn't get created. Never
+       * empty-vs-undefined ambiguity: always an array, empty when clean. */
+      provisioningWarnings: string[];
     }
   | { ok: false; code: string; message: string; status: number };
 
@@ -426,7 +430,6 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
   }
 
   await db.from('tenant_trial_sessions').update({ status: 'active', completed_at: new Date().toISOString(), admin_user_id: userId }).eq('id', session.id);
-  await evt('provisioning_completed', { organization_id: orgId, admin_user_id: userId });
 
   // ── Steps E1-E5: canonical business resources ─────────────────────────────
   // Vehicles, instructors (+ availability), additional staff invites,
@@ -439,6 +442,16 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
     vehiclesCreated, instructorsCreated, staffInvited,
     additionalBranchesCreated: branchesCreated, primaryBranchFallbackCreated, slotsGenerated,
   } = resourcesOutcome;
+  const provisioningWarnings = [...configOutcome.warnings, ...resourcesOutcome.warnings];
+  // Moved here (was logged right after org+admin creation, before Steps
+  // E1-E5 even ran) so this single audit-trail entry can carry the full
+  // picture — including which best-effort resources didn't get created —
+  // rather than a second, easily-missed event. Visible in Platform Admin's
+  // existing Trial Requests detail timeline with zero new UI needed.
+  await evt('provisioning_completed', {
+    organization_id: orgId, admin_user_id: userId,
+    warnings: provisioningWarnings.length > 0 ? provisioningWarnings : undefined,
+  });
 
   // Email #3 — real "create your password" email.
   if (actionLink) {
@@ -485,5 +498,6 @@ export async function provisionTrialOrganization(db: DbClient, session: TrialPro
     branchCreated: configOutcome.branchCreated + primaryBranchFallbackCreated,
     pricedLessonTypes, vehiclesCreated, instructorsCreated, staffInvited,
     additionalBranchesCreated: branchesCreated, slotsGenerated,
+    provisioningWarnings,
   };
 }

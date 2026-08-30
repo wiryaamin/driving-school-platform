@@ -98,6 +98,13 @@ export interface CompleteAnswers {
 export interface BusinessConfigurationOutcome {
   ok: boolean;
   validationWarnings: string[];
+  /** Non-fatal best-effort failures (a channel/pilot-credential copy/pricing
+   * row that didn't apply) — distinct from validationWarnings, which can
+   * trigger a full rollback in trial-provisioning.ts. These never block
+   * activation; they're recorded so Platform Admin (and, in a simplified
+   * form, the tenant) can see exactly what didn't get configured (Starta
+   * provperiod workflow redesign, 2026-08-30, "provisioning warnings"). */
+  warnings: string[];
   lessonTypesCreated: number; packageTemplatesCreated: number; branchCreated: number; pricedLessonTypes: number;
   failure?: { code: string; message: string; status: number };
 }
@@ -109,6 +116,8 @@ export interface BusinessResourcesOutcome {
    * by provisionBusinessConfiguration's pipeline, when the tenant declared >1 branch. */
   primaryBranchFallbackCreated: number;
   slotsGenerated: number;
+  /** Same non-fatal-warning contract as BusinessConfigurationOutcome.warnings. */
+  warnings: string[];
 }
 
 function computeVatPeriod(frequency: string, today: Date): { start: string; end: string } {
@@ -145,6 +154,7 @@ export async function provisionBusinessConfiguration(
   db: DbClient, orgId: string, answers: CompleteAnswers, opts: { correlationId: string },
 ): Promise<BusinessConfigurationOutcome> {
   const { correlationId } = opts;
+  const warnings: string[] = [];
 
   // ── Step B: communication channel activation ─────────────────────────────
   if (answers.channels) {
@@ -197,6 +207,7 @@ export async function provisionBusinessConfiguration(
       const { error: paymentErr } = await db.from('organizations').update({ settings: { ...current, ...paymentUpdate } }).eq('id', orgId);
       if (paymentErr) {
         logger.warn('business-setup-provisioning.payment_pilot_default_failed', { correlation_id: correlationId, error: paymentErr.message });
+        warnings.push('Testbetalning (kort) kunde inte aktiveras automatiskt.');
       }
     }
   }
@@ -215,6 +226,7 @@ export async function provisionBusinessConfiguration(
       );
       if (roaringErr) {
         logger.warn('business-setup-provisioning.roaring_pilot_default_failed', { correlation_id: correlationId, error: roaringErr.message });
+        warnings.push('Personnummerslagning (Roaring) kunde inte aktiveras automatiskt.');
       }
     }
   }
@@ -231,7 +243,7 @@ export async function provisionBusinessConfiguration(
   const pipelineResult = await runFullPipeline(db, orgId, raw, known, new Date().toISOString());
   if (!pipelineResult.ok) {
     return {
-      ok: false, validationWarnings: [],
+      ok: false, validationWarnings: [], warnings,
       lessonTypesCreated: 0, packageTemplatesCreated: 0, branchCreated: 0, pricedLessonTypes: 0,
       failure: { code: 'CONFIGURATION_FAILED', message: pipelineResult.message, status: pipelineResult.kind === 'validation' ? 422 : 500 },
     };
@@ -245,6 +257,7 @@ export async function provisionBusinessConfiguration(
       .from('lesson_types').update({ pricing_sek: priceSek }).eq('organization_id', orgId).is('pricing_sek', null).select('id');
     if (priceErr) {
       logger.warn('business-setup-provisioning.pricing_apply_failed', { correlation_id: correlationId, error: priceErr.message });
+      warnings.push('Priset kunde inte sättas på lektionstyperna.');
     } else {
       pricedLessonTypes = pricedRows?.length ?? 0;
     }
@@ -260,6 +273,7 @@ export async function provisionBusinessConfiguration(
         .eq('organization_id', orgId).eq('code', `driving_${cat.toLowerCase()}`);
       if (durationErr) {
         logger.warn('business-setup-provisioning.duration_apply_failed', { correlation_id: correlationId, category: cat, error: durationErr.message });
+        warnings.push(`Lektionslängden för ${cat} kunde inte sättas.`);
       }
     }
   }
@@ -270,6 +284,7 @@ export async function provisionBusinessConfiguration(
   const { error: vatErr } = await db.rpc('create_vat_period', { p_org_id: orgId, p_period_start: vatPeriodRange.start, p_period_end: vatPeriodRange.end, p_frequency: vatFrequency });
   if (vatErr && !vatErr.message?.includes('VAT_PERIOD_DUPLICATE')) {
     logger.warn('business-setup-provisioning.vat_period_failed', { correlation_id: correlationId, error: vatErr.message });
+    warnings.push('Momsperioden kunde inte skapas automatiskt.');
   }
 
   // ── Validation Engine — non-fatal here; caller decides ────────────────────
@@ -278,7 +293,7 @@ export async function provisionBusinessConfiguration(
   if (!Array.isArray(answers.licence_categories) || answers.licence_categories.length === 0) validationWarnings.push('Ingen behörighet vald.');
 
   return {
-    ok: true, validationWarnings,
+    ok: true, validationWarnings, warnings,
     lessonTypesCreated: pipelineResult.provisioning.executed.lesson_types?.created ?? 0,
     packageTemplatesCreated: pipelineResult.provisioning.executed.package_templates?.created ?? 0,
     branchCreated: pipelineResult.provisioning.executed.branch?.created ?? 0,
@@ -293,10 +308,13 @@ export async function provisionBusinessResources(
   opts: { userId: string; correlationId: string; actorEmail?: string | null; appOrigin?: string },
 ): Promise<BusinessResourcesOutcome> {
   const { userId, correlationId, actorEmail = null, appOrigin = Deno.env.get('APP_URL') ?? 'http://localhost:5173' } = opts;
+  const warnings: string[] = [];
 
   // ── Step E1: real vehicles ─────────────────────────────────────────────────
   let vehiclesCreated = 0;
   if (Array.isArray(answers.vehicles) && answers.vehicles.length > 0) {
+    const vehicleRowsSkipped = answers.vehicles.filter((v) => !(v.registration_number?.trim() && v.make?.trim() && v.model?.trim())).length;
+    if (vehicleRowsSkipped > 0) warnings.push(`${vehicleRowsSkipped} fordon saknade obligatoriska uppgifter och lades inte till.`);
     const vehicleRows = answers.vehicles
       .filter((v) => v.registration_number?.trim() && v.make?.trim() && v.model?.trim())
       .map((v) => ({
@@ -311,6 +329,7 @@ export async function provisionBusinessResources(
       const { data: insertedVehicles, error: vehicleErr } = await db.from('vehicles').insert(vehicleRows).select('id');
       if (vehicleErr) {
         logger.warn('business-setup-provisioning.vehicles_failed', { correlation_id: correlationId, error: vehicleErr.message });
+        warnings.push(`${vehicleRows.length} fordon kunde inte läggas till.`);
       } else {
         vehiclesCreated = insertedVehicles?.length ?? 0;
       }
@@ -330,6 +349,7 @@ export async function provisionBusinessResources(
       }, userId);
       if (!result.ok) {
         logger.warn('business-setup-provisioning.instructor_create_failed', { correlation_id: correlationId, code: result.code, error: result.message });
+        warnings.push(`Instruktören ${entry.first_name.trim()} ${entry.last_name.trim()} kunde inte läggas till (${result.message}).`);
         continue;
       }
       instructorsCreated += 1;
@@ -339,6 +359,7 @@ export async function provisionBusinessResources(
         const seedResult = await seedInstructorAvailabilityRules(db, orgId, instructorId, { weekdays, startTime: answers.working_hours_start, endTime: answers.working_hours_end });
         if (!seedResult.ok) {
           logger.warn('business-setup-provisioning.instructor_availability_seed_failed', { correlation_id: correlationId, error: seedResult.error });
+          warnings.push(`Schema kunde inte skapas automatiskt för ${entry.first_name.trim()} ${entry.last_name.trim()}.`);
         }
       }
     }
@@ -361,6 +382,7 @@ export async function provisionBusinessResources(
       }, { actorId: userId, actorEmail, correlationId, appOrigin });
       if (!result.ok) {
         logger.warn('business-setup-provisioning.staff_invite_failed', { correlation_id: correlationId, role, code: result.code, error: result.message });
+        warnings.push(`${entry.first_name.trim()} ${entry.last_name.trim()} kunde inte bjudas in (${result.message}).`);
         continue;
       }
       staffInvited += 1;
@@ -399,6 +421,7 @@ export async function provisionBusinessResources(
       });
       if (primaryBranchErr) {
         logger.warn('business-setup-provisioning.primary_branch_failed', { correlation_id: correlationId, error: primaryBranchErr.message });
+        warnings.push('Er första filial kunde inte skapas automatiskt.');
       } else {
         primaryBranchFallbackCreated = 1;
       }
@@ -415,6 +438,7 @@ export async function provisionBusinessResources(
       const { data: insertedBranches, error: branchErr } = await db.from('organization_locations').insert(branchRows).select('id');
       if (branchErr) {
         logger.warn('business-setup-provisioning.branch_entries_failed', { correlation_id: correlationId, error: branchErr.message });
+        warnings.push(`${branchRows.length} filialer kunde inte läggas till.`);
       } else {
         branchesCreated += insertedBranches?.length ?? 0;
       }
@@ -429,6 +453,7 @@ export async function provisionBusinessResources(
     const { data: genResult, error: genErr } = await db.rpc('generate_slots_for_organization', { p_organization_id: orgId, p_lesson_type_id: null, p_start_date: todayIso, p_end_date: rangeEndIso });
     if (genErr) {
       logger.warn('business-setup-provisioning.slot_generation_failed', { correlation_id: correlationId, error: genErr.message });
+      warnings.push('Bokningsbara pass kunde inte genereras automatiskt.');
     } else {
       const row = (Array.isArray(genResult) ? genResult[0] : genResult) as { slots_created?: number } | undefined;
       slotsGenerated = row?.slots_created ?? 0;
@@ -440,5 +465,6 @@ export async function provisionBusinessResources(
     additionalBranchesCreated: branchesCreated,
     primaryBranchFallbackCreated,
     slotsGenerated,
+    warnings,
   };
 }

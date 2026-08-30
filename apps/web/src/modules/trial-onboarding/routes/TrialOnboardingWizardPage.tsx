@@ -6,16 +6,17 @@ import { cn } from '@/lib/utils.js';
 import {
   LICENCE_CATEGORY_OPTIONS, TEACHING_LANGUAGE_OPTIONS, PAYMENT_METHOD_OPTIONS,
   EMPTY_ANSWERS, normalizeAnswers, resizeArray,
-  newVehicleEntry, newInstructorEntry, newStaffEntry, newBranchEntry,
+  newVehicleEntry, newInstructorEntry, newStaffEntry,
   EMAIL_RE, POSTAL_RE, ORG_NUMBER_RE,
-  type Answers, type VehicleEntry, type InstructorEntry, type StaffEntry, type BranchEntry,
+  type Answers, type VehicleEntry, type InstructorEntry, type StaffEntry,
 } from '../lib/businessSetupAnswers.js';
 import {
-  Field, Pill, VehicleEntryCard, InstructorEntryCard, StaffEntryCard, BranchEntryCard,
+  Field, Pill, VehicleEntryCard, InstructorEntryCard, StaffEntryCard,
 } from '../components/BusinessSetupFieldKit.js';
 import {
   getTrialSession, saveTrialAnswers, completeTrial, TrialSignupError,
-  type CompleteTrialResult,
+  isPostSubmissionSession, isActiveResult,
+  type CompleteTrialResult, type TrialSessionPostSubmission,
 } from '../lib/trialSignupApi.js';
 
 // ─── Answers shape — mirrors CompleteAnswers in ──────────────────────────────
@@ -43,7 +44,133 @@ function WarningNote({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 px-3 py-2.5">
       <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
-      <p className="text-xs text-amber-800 dark:text-amber-400">{children}</p>
+      <div className="text-xs text-amber-800 dark:text-amber-400">{children}</div>
+    </div>
+  );
+}
+
+// ─── Post-submission / completion screens ────────────────────────────────────
+
+const POST_SUBMISSION_COPY: Record<TrialSessionPostSubmission['status'], { title: string; body: string; icon: 'ok' | 'wait' | 'warn' }> = {
+  questionnaire_completed: {
+    title: 'Er registrering granskas',
+    body: 'Trafikcloud granskar er registrering manuellt just nu — det gäller ett litet antal registreringar. Ni får ett mail så snart er trafikskola är redo att användas.',
+    icon: 'wait',
+  },
+  approved: {
+    title: 'Er trafikskola konfigureras',
+    body: 'Er registrering är godkänd och konfigureras just nu automatiskt. Det tar normalt bara någon minut — kolla er e-post om en liten stund.',
+    icon: 'wait',
+  },
+  provisioning: {
+    title: 'Er trafikskola konfigureras',
+    body: 'Konfigurationen pågår just nu. Det tar normalt bara någon minut — kolla er e-post om en liten stund.',
+    icon: 'wait',
+  },
+  provisioning_failed: {
+    title: 'Vi tittar på er registrering',
+    body: 'Något gick fel i den automatiska konfigurationen. Trafikcloud har fått en avisering och löser det manuellt — ni får ett mail så snart er trafikskola är redo.',
+    icon: 'warn',
+  },
+  active: {
+    title: 'Er trafikskola är redo',
+    body: 'Om ni inte redan skapat ert lösenord — kolla er e-post efter mailet "Skapa ert lösenord" för att komma igång.',
+    icon: 'ok',
+  },
+};
+
+// Reopening the emailed link after submission lands here instead of the
+// interview — a real, current status instead of a dead "link no longer
+// valid" error (Starta provperiod workflow redesign, 2026-08-30).
+function PostSubmissionScreen({ session }: { session: TrialSessionPostSubmission }) {
+  const copy = POST_SUBMISSION_COPY[session.status];
+  const Icon = copy.icon === 'ok' ? CheckCircle2 : copy.icon === 'warn' ? AlertTriangle : Loader2;
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-lg w-full rounded-xl border border-primary/30 bg-primary/5 p-8 space-y-4 text-center">
+        <Icon className={cn('w-10 h-10 mx-auto', copy.icon === 'warn' ? 'text-amber-600' : 'text-primary', copy.icon === 'wait' && 'animate-spin')} />
+        <h1 className="text-lg font-semibold text-foreground">{copy.title}</h1>
+        <p className="text-sm text-foreground">{copy.body}</p>
+        <p className="text-xs text-muted-foreground pt-2">
+          Kontakta <a href="mailto:support@trafikcloud.se" className="text-primary hover:underline">support@trafikcloud.se</a> om ni har frågor.
+        </p>
+      </div>
+      <Toaster />
+    </div>
+  );
+}
+
+// Shown immediately after a successful POST /:token/complete this session —
+// either the standard case (status 'active': provisioned automatically,
+// right now, no human involved) or the review-fallback case, which reuses
+// PostSubmissionScreen's copy so both paths a user could land on read
+// consistently.
+function CompletionScreen({ result, schoolName }: { result: CompleteTrialResult; schoolName: string }) {
+  if (!isActiveResult(result)) {
+    const copy = POST_SUBMISSION_COPY.questionnaire_completed;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="max-w-lg w-full rounded-xl border border-primary/30 bg-primary/5 p-8 space-y-4 text-center">
+          <Loader2 className="w-10 h-10 text-primary mx-auto animate-spin" />
+          <h1 className="text-lg font-semibold text-foreground">{copy.title}</h1>
+          <p className="text-sm text-foreground">{result.message}</p>
+          <p className="text-xs text-muted-foreground pt-2">
+            Ni kan öppna länken från mailet igen när som helst för att se aktuell status.
+          </p>
+        </div>
+        <Toaster />
+      </div>
+    );
+  }
+
+  const summaryItems = [
+    { label: 'Lektionstyper', value: result.lesson_types_created },
+    { label: 'Prissatta lektionstyper', value: result.priced_lesson_types },
+    { label: 'Filialer', value: result.branch_created + result.additional_branches_created },
+    { label: 'Fordon', value: result.vehicles_created },
+    { label: 'Instruktörer', value: result.instructors_created },
+    { label: 'Bokningsbara pass', value: result.slots_generated },
+  ].filter((item) => item.value > 0);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="max-w-lg w-full rounded-xl border border-primary/30 bg-primary/5 p-8 space-y-5 text-center">
+        <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">{schoolName} är skapad</h1>
+          <p className="text-sm text-foreground mt-1">Er trafikskola har konfigurerats automatiskt — inget godkännande krävdes.</p>
+        </div>
+
+        {summaryItems.length > 0 && (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-left text-sm bg-background/60 rounded-lg p-4">
+            {summaryItems.map((item) => (
+              <div key={item.label} className="flex justify-between">
+                <dt className="text-muted-foreground">{item.label}</dt>
+                <dd className="font-medium text-foreground">{item.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+
+        {result.provisioning_warnings.length > 0 && (
+          <WarningNote>
+            <p>Allt fungerar, men detta kunde inte läggas till automatiskt — lägg till det när ni vill under Inställningar:</p>
+            <ul className="list-disc ml-4 mt-1 space-y-0.5">
+              {result.provisioning_warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </WarningNote>
+        )}
+
+        {result.action_link ? (
+          <Button size="lg" className="w-full" onClick={() => { window.location.href = result.action_link!; }}>
+            Skapa ert lösenord och kom igång <ArrowRight className="w-4 h-4 ml-1.5" />
+          </Button>
+        ) : (
+          <p className="text-sm text-muted-foreground">Vi har skickat ett mail med en länk för att skapa ert lösenord.</p>
+        )}
+        <p className="text-xs text-muted-foreground">Vi har även skickat länken till er e-post ifall ni behöver den igen.</p>
+      </div>
+      <Toaster />
     </div>
   );
 }
@@ -59,6 +186,11 @@ export function TrialOnboardingWizardPage() {
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [result, setResult] = useState<CompleteTrialResult | null>(null);
+  // Populated when reopening an emailed link for a session that's already
+  // past the interview (under review, provisioning, or already active) —
+  // renders a status screen instead of the interview form (Starta
+  // provperiod workflow redesign, 2026-08-30, "post-submission experience").
+  const [postSubmission, setPostSubmission] = useState<TrialSessionPostSubmission | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof Answers, string>>>({});
   // Arrived here straight from GET /:token/verify-email's redirect — the
   // agreed architecture (see this module's own header docblock) is Send
@@ -75,6 +207,11 @@ export function TrialOnboardingWizardPage() {
     getTrialSession(token)
       .then((session) => {
         setSchoolName(session.driving_school_name);
+        if (isPostSubmissionSession(session)) {
+          setPostSubmission(session);
+          setLoading(false);
+          return;
+        }
         const raw = session.interview_answers as Partial<Answers>;
         setAnswers(normalizeAnswers({ ...raw, legal_name: (raw.legal_name as string) || session.driving_school_name }));
         setLoading(false);
@@ -127,9 +264,6 @@ export function TrialOnboardingWizardPage() {
   function updateReceptionistEntry(idx: number, patch: Partial<StaffEntry>) {
     setAnswers((prev) => ({ ...prev, receptionist_entries: prev.receptionist_entries.map((v, i) => (i === idx ? { ...v, ...patch } : v)) }));
   }
-  function updateBranchEntry(idx: number, patch: Partial<BranchEntry>) {
-    setAnswers((prev) => ({ ...prev, branch_entries: prev.branch_entries.map((v, i) => (i === idx ? { ...v, ...patch } : v)) }));
-  }
   function setVehicleCount(n: number) {
     setAnswers((prev) => {
       const count = Math.max(0, n);
@@ -155,20 +289,16 @@ export function TrialOnboardingWizardPage() {
     });
   }
   function setBranchCount(n: number) {
-    setAnswers((prev) => {
-      const count = Math.max(1, n);
-      return { ...prev, branches: count, branch_entries: resizeArray(prev.branch_entries, Math.max(0, count - 1), newBranchEntry) };
-    });
+    // Only the count itself is collected during trial signup (Starta
+    // provperiod workflow redesign, 2026-08-30, "branches") — additional
+    // branches' actual details are entered later under Inställningar →
+    // Platser, not here, so branch_entries deliberately stays empty rather
+    // than being resized to match. answers.branches is still saved and
+    // surfaced on the review step as a simple heads-up count.
+    setAnswers((prev) => ({ ...prev, branches: Math.max(1, n) }));
   }
 
   function arrayValidationError(s: number): string | null {
-    if (s === 1) {
-      for (const b of answers.branch_entries) {
-        if (!b.name.trim() || !b.address_line1.trim() || !b.city.trim() || !POSTAL_RE.test(b.postal_code.trim())) {
-          return 'Fyll i namn, adress, postnummer och ort för alla filialer.';
-        }
-      }
-    }
     if (s === 4) {
       for (const v of answers.vehicles) {
         if (!v.registration_number.trim() || !v.make.trim() || !v.model.trim() || !v.registration_expires_at || !v.insurance_expires_at) {
@@ -257,22 +387,11 @@ export function TrialOnboardingWizardPage() {
       </div>
     );
   }
+  if (postSubmission) {
+    return <PostSubmissionScreen session={postSubmission} />;
+  }
   if (result) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="max-w-lg w-full rounded-xl border border-primary/30 bg-primary/5 p-8 space-y-4 text-center">
-          <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
-          <h1 className="text-lg font-semibold text-foreground">Er ansökan är inskickad</h1>
-          <p className="text-sm text-foreground">
-            Tack! Er verksamhetsintervju är genomförd och granskas nu av Trafikcloud.
-          </p>
-          <p className="text-sm text-muted-foreground pt-2">
-            Ni får ett mail så snart er trafikskola är godkänd och redo att användas — inget mer krävs från er just nu.
-          </p>
-        </div>
-        <Toaster />
-      </div>
-    );
+    return <CompletionScreen result={result} schoolName={schoolName} />;
   }
   if (showVerifiedIntro) {
     return (
@@ -293,11 +412,18 @@ export function TrialOnboardingWizardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/30 py-10 px-4">
+    <div className="min-h-screen bg-muted/30 py-10 px-4 pb-24 sm:pb-10">
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="text-center space-y-1">
           <p className="text-sm font-semibold text-primary">Trafikcloud</p>
           <h1 className="text-xl font-semibold text-foreground">Låt oss sätta upp {schoolName}</h1>
+        </div>
+
+        {/* Sticky on mobile (Starta provperiod workflow redesign,
+            2026-08-30, "mobile") — stays visible while scrolling a long
+            step instead of only showing at the very top of the page;
+            sm: and up reverts to the original static layout. */}
+        <div className="sticky sm:static top-0 z-10 -mx-4 sm:mx-0 px-4 sm:px-0 py-2 sm:py-0 bg-muted/95 sm:bg-transparent backdrop-blur sm:backdrop-blur-none text-center space-y-1">
           <p className="text-sm text-muted-foreground">Steg {step + 1} av {TOTAL_STEPS}</p>
           <div className="h-1.5 rounded-full bg-muted overflow-hidden max-w-sm mx-auto">
             <div className="h-full bg-primary transition-all" style={{ width: `${((step + 1) / TOTAL_STEPS) * 100}%` }} />
@@ -345,23 +471,15 @@ export function TrialOnboardingWizardPage() {
           {step === 1 && (
             <>
               <h2 className="text-sm font-semibold text-foreground">Filialer</h2>
-              <p className="text-sm text-muted-foreground">Hur många filialer driver ni?</p>
+              <p className="text-sm text-muted-foreground">Er första filial skapas automatiskt med adressen ni angav i förra steget. Kommer ni ha fler?</p>
               <div className="flex gap-2">
-                <Pill active={answers.branches === 1} onClick={() => setBranchCount(1)}>En filial</Pill>
-                <Pill active={answers.branches > 1} onClick={() => setBranchCount(Math.max(2, answers.branches))}>Flera filialer</Pill>
+                <Pill active={answers.branches === 1} onClick={() => setBranchCount(1)}>Bara en filial</Pill>
+                <Pill active={answers.branches > 1} onClick={() => setBranchCount(2)}>Fler filialer</Pill>
               </div>
               {answers.branches > 1 && (
-                <>
-                  <Field label="Ungefär hur många?">
-                    <Input type="number" min={2} value={answers.branches} onChange={(e) => setBranchCount(Math.max(2, Number(e.target.value) || 2))} className="max-w-[120px]" />
-                  </Field>
-                  <p className="text-xs text-muted-foreground">Er första filial använder adressen ni angav i steg 1. Fyll i uppgifterna för resten nedan — de skapas automatiskt precis som under Inställningar → Filialer.</p>
-                  <div className="space-y-3">
-                    {answers.branch_entries.map((entry, idx) => (
-                      <BranchEntryCard key={idx} index={idx} entry={entry} onChange={(patch) => updateBranchEntry(idx, patch)} />
-                    ))}
-                  </div>
-                </>
+                <p className="text-xs text-muted-foreground">
+                  Inga problem — lägg till dem när ni vill under Inställningar → Platser. Ingen anledning att fylla i det nu; kom igång med er första filial så länge.
+                </p>
               )}
             </>
           )}
@@ -527,14 +645,7 @@ export function TrialOnboardingWizardPage() {
           {step === 8 && (
             <>
               <h2 className="text-sm font-semibold text-foreground">Ekonomi</h2>
-              <p className="text-xs text-muted-foreground">Moms sätts till 25% (standard för körlektioner). Ändra i Inställningar → Företagsuppgifter om annat gäller er verksamhet.</p>
-              <Field label="Momsperiod">
-                <div className="flex gap-2">
-                  <Pill active={answers.vat_period === 'monthly'} onClick={() => set('vat_period', 'monthly')}>Månadsvis</Pill>
-                  <Pill active={answers.vat_period === 'quarterly'} onClick={() => set('vat_period', 'quarterly')}>Kvartalsvis</Pill>
-                  <Pill active={answers.vat_period === 'yearly'} onClick={() => set('vat_period', 'yearly')}>Årsvis</Pill>
-                </div>
-              </Field>
+              <p className="text-xs text-muted-foreground">Moms sätts till 25% (standard för körlektioner) och er momsperiod sätts till kvartalsvis — det vanligaste för mindre trafikskolor. Ändra i Inställningar → Ekonomi om annat gäller er verksamhet.</p>
               <Field label="Betalsätt">
                 <div className="flex flex-wrap gap-2">
                   {PAYMENT_METHOD_OPTIONS.map((opt) => (
@@ -560,18 +671,23 @@ export function TrialOnboardingWizardPage() {
                 <div className="flex justify-between"><dt className="text-muted-foreground">Övrig personal</dt><dd className="font-medium text-foreground">{answers.admin_entries.length + answers.receptionist_entries.length}</dd></div>
               </dl>
               <p className="text-sm text-muted-foreground pt-2">
-                När ni skickar in ansökan granskas den av Trafikcloud. Så snart den är godkänd konfigureras allt automatiskt utifrån era svar — lektionstyper (med pris), schema för öppettider, momsperiod, paketmallar, {answers.branches > 1 ? 'alla era filialer' : 'er första filial'}, {answers.vehicles.length} fordon och {answers.instructor_entries.length} instruktörer (med bokningsbara pass för de kommande två veckorna) — precis som om ni byggt det manuellt i systemet. Ni får ett mail så snart det är klart.
+                När ni klickar nedan konfigureras allt automatiskt utifrån era svar — lektionstyper (med pris), schema för öppettider, momsperiod, paketmallar, er första filial, {answers.vehicles.length} fordon och {answers.instructor_entries.length} instruktörer (med bokningsbara pass för de kommande två veckorna) — precis som om ni byggt det manuellt i systemet. De allra flesta trafikskolor är igång direkt, utan väntetid.
               </p>
               <Button size="lg" className="w-full" disabled={completing} onClick={handleComplete}>
                 {completing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {completing ? 'Skickar in ansökan...' : 'Skicka in ansökan'}
+                {completing ? 'Skapar er trafikskola...' : 'Skapa min trafikskola'}
               </Button>
             </>
           )}
         </div>
 
+        {/* Fixed to the viewport bottom on mobile only (Starta provperiod
+            workflow redesign, 2026-08-30, "mobile") — steps with several
+            repeating entry cards (vehicles, instructors) previously forced
+            scrolling all the way down to find Nästa. sm: and up reverts to
+            the original static, inline layout — desktop is unchanged. */}
         {step < TOTAL_STEPS - 1 && (
-          <div className="flex justify-between">
+          <div className="fixed sm:static inset-x-0 sm:inset-x-auto bottom-0 z-10 flex justify-between gap-3 bg-background sm:bg-transparent border-t sm:border-0 border-border px-4 sm:px-0 py-3 sm:py-0 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] sm:shadow-none max-w-2xl mx-auto sm:mx-0">
             <Button variant="outline" onClick={goBack} disabled={step === 0}><ArrowLeft className="w-4 h-4 mr-1.5" /> Tillbaka</Button>
             <Button onClick={goNext} disabled={saving}>
               {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
@@ -580,7 +696,7 @@ export function TrialOnboardingWizardPage() {
           </div>
         )}
         {step === TOTAL_STEPS - 1 && (
-          <div className="flex justify-start">
+          <div className="fixed sm:static inset-x-0 sm:inset-x-auto bottom-0 z-10 flex justify-start bg-background sm:bg-transparent border-t sm:border-0 border-border px-4 sm:px-0 py-3 sm:py-0 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] sm:shadow-none max-w-2xl mx-auto sm:mx-0">
             <Button variant="outline" onClick={goBack}><ArrowLeft className="w-4 h-4 mr-1.5" /> Tillbaka</Button>
           </div>
         )}
