@@ -446,6 +446,12 @@ export function useDeleteAvailabilityRule() {
   });
 }
 
+// Generalized beyond just is_active (Starta provperiod-adjacent live-testing
+// fix, 2026-08-30) — the "Veckovisa tillgänglighetsregler" table had no way
+// to change an existing rule's Lektionstid (slot_duration_minutes) at all
+// once created, only activate/deactivate/delete it. Both fields go through
+// the same single-row update; callers pass whichever one(s) they're
+// changing.
 export function useUpdateAvailabilityRule() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -453,15 +459,20 @@ export function useUpdateAvailabilityRule() {
       ruleId,
       instructorId: _instructorId,
       isActive,
+      slotDurationMinutes,
     }: {
       ruleId: string;
       instructorId: string;
-      isActive: boolean;
+      isActive?: boolean;
+      slotDurationMinutes?: number;
     }) => {
+      const update: Record<string, unknown> = {};
+      if (isActive !== undefined) update['is_active'] = isActive;
+      if (slotDurationMinutes !== undefined) update['slot_duration_minutes'] = slotDurationMinutes;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await (supabase as unknown as any)
         .from('instructor_availability_rules')
-        .update({ is_active: isActive })
+        .update(update)
         .eq('id', ruleId);
       if (error) throw new Error(error.message);
     },

@@ -459,7 +459,7 @@ function AvailabilityRulesSection({
   const [newEnd,           setNewEnd]           = useState('17:00');
   const [newEffectiveFrom, setNewEffectiveFrom] = useState(today);
   const [newEffectiveUntil,setNewEffectiveUntil]= useState('');
-  const [newDuration,      setNewDuration]      = useState('60');
+  const [newDuration,      setNewDuration]      = useState('40');
   const [newNotes,         setNewNotes]         = useState('');
 
   const { data: rules = [], isLoading } = useInstructorAvailabilityRules(instructorId);
@@ -495,7 +495,7 @@ function AvailabilityRulesSection({
           setNewEnd('17:00');
           setNewEffectiveFrom(today);
           setNewEffectiveUntil('');
-          setNewDuration('60');
+          setNewDuration('40');
           setNewNotes('');
         },
       },
@@ -528,7 +528,23 @@ function AvailabilityRulesSection({
                   <td className="py-2 pr-4 font-medium">{DAY_NAMES_SV[rule.day_of_week]}</td>
                   <td className="py-2 pr-4">{rule.start_time.slice(0, 5)}</td>
                   <td className="py-2 pr-4">{rule.end_time.slice(0, 5)}</td>
-                  <td className="py-2 pr-4">{rule.slot_duration_minutes} min</td>
+                  <td className="py-2 pr-4">
+                    <select
+                      value={rule.slot_duration_minutes}
+                      onChange={(e) => toggleMutation.mutate({
+                        ruleId: rule.id, instructorId, slotDurationMinutes: parseInt(e.target.value),
+                      })}
+                      disabled={toggleMutation.isPending}
+                      aria-label="Lektionstid (minuter)"
+                      className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none disabled:opacity-50"
+                    >
+                      <option value="30">30 min</option>
+                      <option value="40">40 min</option>
+                      <option value="45">45 min</option>
+                      <option value="60">60 min</option>
+                      <option value="90">90 min</option>
+                    </select>
+                  </td>
                   <td className="py-2 pr-4">{rule.effective_from}</td>
                   <td className="py-2 pr-4">
                     <span className={cn(
@@ -614,6 +630,7 @@ function AvailabilityRulesSection({
                 className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none"
               >
                 <option value="30">30 min</option>
+                <option value="40">40 min</option>
                 <option value="45">45 min</option>
                 <option value="60">60 min</option>
                 <option value="90">90 min</option>
@@ -1660,11 +1677,22 @@ function useInstructorPerformance(instructorId: string, days = 90) {
       const slots = slotsRaw as Array<{ id: string; max_bookings: number; current_bookings: number; status: string }> | null;
       if (error) throw new Error(error.message);
 
-      const { data: bookings, error: bErr } = await supabase
-        .from('lesson_bookings')
-        .select('id, student_id, status, attendance_status, performance_rating')
-        .in('slot_id', (slots ?? []).map(s => s.id));
-      if (bErr) throw new Error(bErr.message);
+      const slotIds = (slots ?? []).map(s => s.id);
+      // A new instructor with no slots yet (e.g. one just created, before any
+      // schedule is generated) has an empty slotIds array here — .in() with
+      // an empty list sends slot_id=in.() over the wire, which Postgres
+      // rejects outright as invalid syntax (400 Bad Request). The real
+      // answer for "bookings against zero slots" is always zero, so skip the
+      // query entirely instead.
+      let bookings: unknown[] = [];
+      if (slotIds.length > 0) {
+        const { data, error: bErr } = await supabase
+          .from('lesson_bookings')
+          .select('id, student_id, status, attendance_status, performance_rating')
+          .in('slot_id', slotIds);
+        if (bErr) throw new Error(bErr.message);
+        bookings = data ?? [];
+      }
 
       const rows = (bookings ?? []) as Array<{
         id: string; student_id: string; status: string;

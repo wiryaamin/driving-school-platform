@@ -111,10 +111,14 @@ export async function createInstructorRecord(
 
 // Working-hours slot cadence used everywhere an instructor's recurring
 // availability is auto-seeded from a simple start/end range — matches
-// InstructorForm.tsx's Arbetstider section exactly (45-min lessons, 15-min
-// buffer, back-to-back on the hour).
-export const WORKING_HOURS_SLOT_DURATION_MIN = 45;
-export const WORKING_HOURS_SLOT_BUFFER_MIN = 15;
+// InstructorForm.tsx's Arbetstider section exactly (40-min lessons, 20-min
+// buffer, back-to-back on the hour — duration + buffer = 60 is the
+// invariant generate_slots_for_rule's v_slot_step relies on to land slots
+// exactly on the hour; 40 replaces the previous 45-min default so it
+// matches the platform's own standard lesson length everywhere else,
+// 2026-08-30).
+export const WORKING_HOURS_SLOT_DURATION_MIN = 40;
+export const WORKING_HOURS_SLOT_BUFFER_MIN = 20;
 
 /**
  * Seeds `instructor_availability_rules` for a working-day range, mirroring

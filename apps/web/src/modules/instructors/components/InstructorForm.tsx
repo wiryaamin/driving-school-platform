@@ -138,9 +138,12 @@ const WORKING_DAYS = [
 ] as const;
 
 // duration + buffer = 60 → generated slots land exactly on the hour
-// (08:00-08:45, 09:00-09:45, ...) — see generate_slots_for_rule's v_slot_step.
-const WORKING_HOURS_SLOT_DURATION_MIN = 45;
-const WORKING_HOURS_SLOT_BUFFER_MIN   = 15;
+// (08:00-08:40, 09:00-09:40, ...) — see generate_slots_for_rule's
+// v_slot_step. 40/20 replaces the previous 45/15 split so the default
+// matches the platform's own standard lesson length (Ekonomi →
+// Lektionstyper's own 40-minute default) everywhere else, 2026-08-30.
+const WORKING_HOURS_SLOT_DURATION_MIN = 40;
+const WORKING_HOURS_SLOT_BUFFER_MIN   = 20;
 
 export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: InstructorFormProps) {
   const isEdit = instructor != null;
