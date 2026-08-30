@@ -114,6 +114,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const state = useSessionStore.getState();
           // No established session yet — INITIAL_SESSION or SIGNED_IN will handle it.
           if (!state.user) return;
+          // Keeping state.organization unconditionally used to leave a stale,
+          // truthy org object in the store after an account went from active
+          // to org-less mid-session (disabled, offboarded, ...) — every other
+          // field here is freshly re-derived from claims, but this one
+          // wasn't, so anything reading `organization` directly (rather than
+          // the always-fresh user.organization_id) kept seeing the old
+          // organization. Null it out the moment claims say there isn't one
+          // anymore; still reused as-is when an org genuinely is present,
+          // since display fields (name, subscription tier) don't need a
+          // full re-fetch on every refresh. Found via a real account stuck
+          // in exactly this state during live testing, 2026-08-30.
           setSession({
             id:                   session.user.id,
             email:                session.user.email ?? '',
@@ -125,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             subscription_tier:    claims.subscription_tier,
             is_platform_admin:    claims.is_platform_admin,
             ...(claims.impersonator_id ? { impersonator_id: claims.impersonator_id } : {}),
-          }, state.profile, state.organization);
+          }, state.profile, claims.organization_id ? state.organization : null);
           return;
         }
 

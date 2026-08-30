@@ -56,10 +56,19 @@ export function ProtectedRoute({
   // — a reload, a bookmark, or an already-open tab landing straight on a
   // protected route never passes back through it, so the empty-claims user
   // still reached the full tenant shell with every widget's query 403ing.
-  // This is the check that actually holds regardless of how the route was
-  // reached. Confirmed via a real account stuck in exactly this state
-  // during live testing, 2026-08-30.
-  if (!user?.is_platform_admin && !organization) {
+  //
+  // Checked against user.organization_id, NOT the separate `organization`
+  // display object — AuthProvider's TOKEN_REFRESHED handler reuses the
+  // previous `organization` unchanged on every refresh (it only re-derives
+  // role/permissions/organization_id from the fresh claims), so an
+  // already-open tab whose account went active → disabled mid-session keeps
+  // a stale, truthy `organization` long after the real claims went empty.
+  // user.organization_id is rebuilt from the current JWT on every single
+  // sync (initial, refresh, or otherwise) and is never stale. Confirmed via
+  // a real account stuck in exactly this state during live testing,
+  // 2026-08-30 — the first version of this check (against `organization`)
+  // still let it through for that reason.
+  if (!user?.is_platform_admin && !user?.organization_id) {
     return <Navigate to="/403?reason=no_organization" replace />;
   }
 
