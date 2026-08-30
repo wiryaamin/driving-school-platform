@@ -224,9 +224,24 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
     .from('students')
     .select(LIST_COLUMNS, { count: 'exact' })
     .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null)
     .order(safeSortBy, { ascending: sort_dir === 'asc' })
     .range(from, to);
+
+  // Archiving (handleArchive below) soft-deletes the row — deleted_at is set
+  // alongside status: 'archived' specifically so reactivation (handleUpdate's
+  // isReactivating path) has something to clear. An unconditional
+  // deleted_at IS NULL filter here defeated that entirely: a request for
+  // status=archived (the "Arkiverade" view) always matched zero rows, since
+  // every archived student is, by definition, also soft-deleted — making an
+  // archived customer permanently unreachable from the UI with no way back
+  // except direct database access, discovered via a real accidental
+  // archive during live testing, 2026-08-31. Every other status value is
+  // never soft-deleted, so the filter stays in place for them.
+  if (status === 'archived') {
+    q = q.not('deleted_at', 'is', null);
+  } else {
+    q = q.is('deleted_at', null);
+  }
 
   if (status !== undefined)                q = q.eq('status', status);
   if (instructor_id !== undefined)         q = q.eq('assigned_instructor_id', instructor_id);
