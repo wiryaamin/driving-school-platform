@@ -23,11 +23,17 @@ Each developer works on a separate feature branch, created from
 `feature/platform-managed-integrations` (never from `main`, never from the
 freeze branch/tag).
 
-A dedicated starting branch already exists for the incoming colleague:
+**No developer branch exists yet.** A branch for the incoming colleague will
+be created FROM the current tip of `feature/platform-managed-integrations`
+only after collaboration protection/readiness (this document, plus the
+manual GitHub branch-protection settings below) is confirmed complete. An
+earlier `feature/colleague-development` branch was created prematurely
+(before this documentation existed) and has been deleted — it contained no
+unique work, since it was cut from an intermediate point on the same
+integration branch. The real starting branch will be cut fresh once
+readiness is confirmed.
 
-feature/colleague-development
-
-Example naming for further work:
+Example naming for future developer branches:
 
 feature/colleague-<description>
 
