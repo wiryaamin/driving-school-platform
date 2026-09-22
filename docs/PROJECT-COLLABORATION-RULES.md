@@ -78,9 +78,14 @@ thing as production deployment access.
 ## Default branch warning
 
 The repository's GitHub default branch is `main`, and it is currently
-**202 commits behind** `feature/platform-managed-integrations` (last updated
+**204 commits behind** `feature/platform-managed-integrations` (last updated
 2026-06-15). A plain `git clone` or a PR opened against the GitHub default
-will land on this stale branch.
+will land on this stale branch. A change of the GitHub default branch to
+`feature/platform-managed-integrations` was attempted as part of collaboration
+readiness work but could not be carried out — no authenticated GitHub admin
+access (no `gh` CLI, no GitHub API token) has been available in any session
+so far. This remains a manual action for whoever holds GitHub admin rights
+on the repository (GitHub → Settings → General → Default branch).
 
 NEW DEVELOPERS MUST START FROM
 feature/platform-managed-integrations
