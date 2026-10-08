@@ -2282,6 +2282,14 @@ function KundkortTab({
   const allCompanies = corporateData?.data ?? [];
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
   const allInstructors = instructorsData?.data ?? [];
+  // Instructors whose employment has ended are not offered for a new choice,
+  // but the currently saved one stays listed (marked) so the select never
+  // silently shows a different value than what is stored.
+  const todayIso = new Date().toLocaleDateString('sv-SE');
+  const hasLeft = (i: { employment_ended_at: string | null }) => i.employment_ended_at !== null && i.employment_ended_at < todayIso;
+  const favInstructorOptions = allInstructors.filter((i) => !hasLeft(i) || i.id === student.assigned_instructor_id);
+  const savedFavInstructorId = student.assigned_instructor_id ?? '';
+  useEffect(() => { setFavInstructorId(savedFavInstructorId); }, [savedFavInstructorId]);
   const nextLesson   = upcomingBookings.data?.data?.[0];
   const nextDateStr  = nextLesson ? new Date(nextLesson.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : '';
   const nextTimeStr  = nextLesson ? `${formatTime(nextLesson.starts_at)} – ${formatTime(nextLesson.ends_at)}` : '';
@@ -2632,7 +2640,7 @@ function KundkortTab({
             <div className="flex flex-col">
               <EkSubTitle title="Favoritlärare" />
               <p className="text-xs text-muted-foreground -mt-1 mb-2">
-                Den valda läraren blir automatiskt förvald när eleven gör en via elevbokning.
+                Läraren som är kopplad till eleven. Visas som elevens lärare i elevportalen och ger läraren tillgång till eleven i lärarvyn.
               </p>
               <EkLabel htmlFor="favoritlarare">Välj favoritlärare</EkLabel>
               <div className="flex gap-2">
@@ -2643,9 +2651,9 @@ function KundkortTab({
                   className={cn(ekInputClass, 'flex-1 min-w-0')}
                 >
                   <option value="">Ingen favoritlärare</option>
-                  {allInstructors.map((i) => (
+                  {favInstructorOptions.map((i) => (
                     <option key={i.id} value={i.id}>
-                      {i.first_name} {i.last_name}
+                      {i.first_name} {i.last_name}{hasLeft(i) ? ' (slutat)' : ''}
                     </option>
                   ))}
                 </select>
@@ -2653,10 +2661,13 @@ function KundkortTab({
                   onClick={() => {
                     updateInstructor.mutate(
                       { id: student.id, input: { assigned_instructor_id: favInstructorId || null } },
-                      { onSuccess: () => toast({ title: 'Favoritlärare sparad' }) },
+                      {
+                        onSuccess: () => toast({ title: favInstructorId ? 'Favoritlärare sparad' : 'Favoritlärare borttagen' }),
+                        onError: (e) => toast({ title: 'Kunde inte spara favoritlärare', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+                      },
                     );
                   }}
-                  disabled={updateInstructor.isPending}
+                  disabled={favInstructorId === savedFavInstructorId || updateInstructor.isPending}
                 >
                   {updateInstructor.isPending ? 'Sparar…' : 'Spara'}
                 </EkButton>

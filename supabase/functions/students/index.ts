@@ -65,7 +65,8 @@ const CreateStudentSchema = z.object({
   status:                  z.enum(STUDENT_STATUSES).optional(),
   enrolled_at:             z.string().datetime({ offset: true }).optional(),
   enrollment_location_id:  z.string().uuid().optional(),
-  assigned_instructor_id:  z.string().uuid().optional(),
+  // nullable: clearing the favourite instructor (Elevkort "Ingen favoritlärare") sends null.
+  assigned_instructor_id:  z.string().uuid().nullable().optional(),
   target_licence_category: z.string().max(10).optional(),
   permit_stage:            z.enum(PERMIT_STAGES).optional(),
   notes:                   z.string().max(5000).nullable().optional(),
@@ -293,6 +294,21 @@ async function handleList(req: Request, ctx: EdgeRequestContext): Promise<Respon
   return pagedResp(ctx, rows, count ?? 0, page, per_page);
 }
 
+// assigned_instructor_id is only FK-checked by the database, which accepts an
+// instructor from any organisation. Verify ownership explicitly (service client
+// + org filter, so a caller without instructor read access isn't falsely refused).
+async function assignedInstructorInvalid(ctx: EdgeRequestContext, instructorId: string | null | undefined): Promise<boolean> {
+  if (instructorId === undefined || instructorId === null) return false;
+  const { data } = await (createServiceClient() as any)
+    .from('instructors')
+    .select('id')
+    .eq('id', instructorId)
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .maybeSingle();
+  return data === null;
+}
+
 async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Response> {
   const guard = requirePerm(ctx, 'students:student:create');
   if (guard) return guard;
@@ -310,6 +326,10 @@ async function handleCreate(req: Request, ctx: EdgeRequestContext): Promise<Resp
   }
 
   const dto = parsed.data;
+
+  if (await assignedInstructorInvalid(ctx, dto.assigned_instructor_id)) {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Instructor not found in this organisation');
+  }
 
   // Duplicate detection must not depend on the client supplying a hash —
   // compute it server-side from the same (date_of_birth, personnummer_last4)
@@ -888,6 +908,10 @@ async function handleUpdate(req: Request, ctx: EdgeRequestContext, id: string): 
   }
 
   const dto = parsed.data;
+
+  if (await assignedInstructorInvalid(ctx, dto.assigned_instructor_id)) {
+    return errorResp(ctx, 422, 'VALIDATION_ERROR', 'Instructor not found in this organisation');
+  }
 
   // Same server-side hash recomputation as handleCreate — only when this
   // update actually supplies both source fields together.
