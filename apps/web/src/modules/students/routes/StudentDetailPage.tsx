@@ -51,6 +51,7 @@ import {
   type Guardian,
 } from '@modules/guardian-portal/index.js';
 import { cn } from '@/lib/utils.js';
+import { parsePastedDate, formatTypedDate } from '../lib/parsePastedDate.js';
 import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -152,42 +153,6 @@ function TabBar<T extends string>({
   );
 }
 
-function FieldInput({
-  label,
-  value,
-  onChange,
-  type = 'text',
-  placeholder,
-  readOnly,
-  fullWidth,
-}: {
-  label: string;
-  value: string;
-  onChange?: (v: string) => void;
-  type?: string;
-  placeholder?: string;
-  readOnly?: boolean;
-  fullWidth?: boolean;
-}) {
-  return (
-    <div className={cn('space-y-1', fullWidth && 'col-span-2')}>
-      <label className="text-xs text-muted-foreground">{label}</label>
-      <input
-        type={type}
-        value={value}
-        readOnly={readOnly}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-        className={cn(
-          'w-full h-8 px-2.5 text-sm rounded border border-input bg-background',
-          'focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary',
-          readOnly && 'bg-muted/30 cursor-default text-muted-foreground'
-        )}
-      />
-    </div>
-  );
-}
-
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -271,8 +236,353 @@ function BlueBtn({
   );
 }
 
-function SectionDivider() {
-  return <div className="border-t border-border my-4" />;
+// ─── Elevkort primitives ──────────────────────────────────────────────────────
+// Scoped to the student header + Elevkort tab so the other detail tabs, which
+// share GreenBtn/SectionHeading/TabBar above, keep their current look.
+
+const ekInputClass =
+  'w-full h-9 px-3 text-sm rounded-md border border-input bg-card text-foreground ' +
+  'placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-ring ' +
+  'disabled:cursor-not-allowed disabled:opacity-60';
+
+const ekTextareaClass =
+  'w-full px-3 py-2 text-sm rounded-md border border-input bg-card text-foreground resize-none ' +
+  'placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-ring';
+
+const ekLinkClass =
+  'font-medium text-foreground underline decoration-border underline-offset-4 ' +
+  'hover:decoration-foreground transition-colors';
+
+function EkCard({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <section className={cn('bg-card border border-border rounded-lg p-5', className)}>
+      {children}
+    </section>
+  );
+}
+
+function EkCardTitle({ title, action }: { title: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 mb-4">
+      <h2 className="text-[15px] font-semibold text-foreground">{title}</h2>
+      {action}
+    </div>
+  );
+}
+
+function EkSubTitle({ title, action }: { title: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 mb-3">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      {action}
+    </div>
+  );
+}
+
+function EkEyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function EkLabel({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
+  return (
+    <label htmlFor={htmlFor} className="block text-xs font-medium text-foreground-secondary mb-1.5">
+      {children}
+    </label>
+  );
+}
+
+function EkField({
+  label, value, onChange, type = 'text', placeholder, readOnly, className,
+}: {
+  label: string;
+  value: string;
+  onChange?: (v: string) => void;
+  type?: string;
+  placeholder?: string;
+  readOnly?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <EkLabel>{label}</EkLabel>
+      <input
+        type={type}
+        value={value}
+        readOnly={readOnly}
+        placeholder={placeholder}
+        onChange={(e) => onChange?.(e.target.value)}
+        className={cn(ekInputClass, readOnly && 'bg-muted/40 text-muted-foreground cursor-default')}
+      />
+    </div>
+  );
+}
+
+// Text-first date field: typing auto-formats to ÅÅÅÅ-MM-DD, pasted text is
+// parsed by parsePastedDate (Cmd+V / Ctrl+V both fire the same paste event),
+// and the native calendar is available on demand rather than forced.
+function EkDateInput({
+  id, label, value, onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (iso: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  const [hint, setHint] = useState<string | null>(null);
+  const pickerRef = useRef<HTMLInputElement>(null);
+  // The parent only ever receives a complete valid date or ''. Re-sync from
+  // the prop only when it changed externally, so in-progress typing survives.
+  const lastEmitted = useRef(value);
+
+  useEffect(() => {
+    if (value !== lastEmitted.current) { lastEmitted.current = value; setText(value); }
+  }, [value]);
+
+  function emit(next: string) {
+    if (next === lastEmitted.current) return;
+    lastEmitted.current = next;
+    onChange(next);
+  }
+
+  function commit(next: string) {
+    setText(next);
+    setHint(null);
+    emit(next);
+  }
+
+  function handleTyping(raw: string) {
+    const formatted = formatTypedDate(raw);
+    setText(formatted);
+    setHint(null);
+    if (formatted.length === 10) {
+      const iso = parsePastedDate(formatted);
+      if (iso) emit(iso);
+      else { emit(''); setHint('Ogiltigt datum — ange ÅÅÅÅ-MM-DD.'); }
+    } else {
+      emit('');
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const pasted = e.clipboardData.getData('text');
+    const iso = parsePastedDate(pasted);
+    e.preventDefault();
+    if (iso) commit(iso);
+    else setHint('Kunde inte tolka det inklistrade datumet. Ange ÅÅÅÅ-MM-DD.');
+  }
+
+  function handleBlur() {
+    if (text === '' || text.length === 10) return;
+    setHint('Ofullständigt datum — ange ÅÅÅÅ-MM-DD.');
+  }
+
+  function openPicker() {
+    const el = pickerRef.current;
+    if (!el) return;
+    try { el.showPicker(); } catch { el.focus(); el.click(); }
+  }
+
+  const hintId = `${id}-hint`;
+  return (
+    <div>
+      <EkLabel htmlFor={id}>{label}</EkLabel>
+      <div className="relative">
+        <input
+          id={id}
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          placeholder="ÅÅÅÅ-MM-DD"
+          value={text}
+          maxLength={10}
+          onChange={(e) => handleTyping(e.target.value)}
+          onPaste={handlePaste}
+          onBlur={handleBlur}
+          aria-invalid={hint ? true : undefined}
+          aria-describedby={hint ? hintId : undefined}
+          className={cn(ekInputClass, 'pr-10 tabular-nums', hint && 'border-destructive focus:border-destructive focus:ring-destructive/20')}
+        />
+        <button
+          type="button"
+          onClick={openPicker}
+          title="Välj i kalender"
+          aria-label="Välj i kalender"
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <Calendar className="w-4 h-4" />
+        </button>
+        <input
+          ref={pickerRef}
+          type="date"
+          tabIndex={-1}
+          aria-hidden="true"
+          value={text.length === 10 && parsePastedDate(text) ? text : ''}
+          onChange={(e) => { if (e.target.value) commit(e.target.value); }}
+          className="absolute right-1 bottom-0 w-7 h-0 opacity-0 pointer-events-none"
+        />
+      </div>
+      {hint && <p id={hintId} className="mt-1 text-xs text-destructive">{hint}</p>}
+    </div>
+  );
+}
+
+function EkDivider() {
+  return <div className="border-t border-border" />;
+}
+
+function EkComingSoon() {
+  return (
+    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+      Kommer snart
+    </span>
+  );
+}
+
+type EkButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
+
+// Unlike GreenBtn, `disabled` here only disables — "Kommer snart" is shown
+// solely via `comingSoon`, for features that genuinely aren't implemented.
+function EkButton({
+  children, onClick, disabled, variant = 'secondary', size = 'md', comingSoon, title, className, type = 'button',
+}: {
+  children: React.ReactNode;
+  onClick?: (() => void) | undefined;
+  disabled?: boolean | undefined;
+  variant?: EkButtonVariant;
+  size?: 'sm' | 'md';
+  comingSoon?: boolean;
+  title?: string | undefined;
+  className?: string | undefined;
+  type?: 'button' | 'submit';
+}) {
+  const button = (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled || comingSoon}
+      title={comingSoon ? 'Denna funktion är under implementation' : title}
+      className={cn(
+        'inline-flex items-center justify-center gap-1.5 rounded-md font-medium transition-colors whitespace-nowrap',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        size === 'md' ? 'h-9 px-4 text-sm' : 'h-8 px-3 text-xs',
+        variant === 'primary'   && 'bg-primary-dark text-white hover:bg-primary-dark/90',
+        variant === 'secondary' && 'border border-border bg-card text-foreground hover:bg-muted',
+        variant === 'danger'    && 'border border-destructive/40 bg-card text-destructive hover:bg-destructive/10',
+        variant === 'ghost'     && 'text-muted-foreground hover:text-foreground hover:bg-muted',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+  if (!comingSoon) return button;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {button}
+      <EkComingSoon />
+    </span>
+  );
+}
+
+function EkIconButton({ title, onClick, children }: { title: string; onClick?: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="w-9 h-9 rounded-md border border-border bg-card flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+    >
+      {children}
+    </button>
+  );
+}
+
+function EkNotice({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'warning' | 'danger' }) {
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2 rounded-md px-3 py-2 text-xs leading-snug',
+        tone === 'danger' ? 'bg-destructive/5 border border-destructive/20 text-destructive' : 'bg-muted/60 text-muted-foreground',
+      )}
+    >
+      <AlertTriangle
+        className={cn(
+          'w-3.5 h-3.5 shrink-0 mt-px',
+          tone === 'neutral' && 'text-muted-foreground',
+          tone === 'warning' && 'text-warning',
+          tone === 'danger' && 'text-destructive',
+        )}
+      />
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function EkSwitch({
+  checked, onToggle, disabled, label,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={onToggle}
+      disabled={disabled}
+      className={cn(
+        'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-50',
+        checked ? 'bg-primary-dark' : 'bg-muted-foreground/30',
+      )}
+    >
+      <span
+        className={cn(
+          'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
+          checked ? 'translate-x-4' : 'translate-x-0',
+        )}
+      />
+    </button>
+  );
+}
+
+function DetailTabBar<T extends string>({
+  tabs, active, onSelect,
+}: {
+  tabs: { key: T; label: string }[];
+  active: T;
+  onSelect: (key: T) => void;
+}) {
+  return (
+    <div role="tablist" className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-card p-1">
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          role="tab"
+          aria-selected={t.key === active}
+          onClick={() => onSelect(t.key)}
+          className={cn(
+            'px-3.5 py-1.5 text-sm rounded-md whitespace-nowrap transition-colors',
+            t.key === active
+              ? 'bg-primary-dark text-white font-medium'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -376,45 +686,69 @@ export function StudentDetailPage() {
   ];
 
   return (
-    <div className="-m-4 md:-m-5">
+    <div className="-m-4 md:-m-5 bg-surface min-h-full">
 
-      {/* ── Header band ───────────────────────────────────────── */}
-      <div className="bg-background border-b border-border px-4 md:px-6 pt-4 pb-0">
+      {/* ── Student header ────────────────────────────────────── */}
+      <div className="px-4 md:px-6 pt-4 md:pt-5 space-y-4">
 
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-1 text-xs text-muted-foreground mb-2 flex-wrap">
-          <Link to="/dashboard" className="hover:text-foreground transition-colors">
-            <Home className="w-3 h-3" />
-          </Link>
-          <ChevronRight className="w-3 h-3" />
-          <Link to="/students" className="hover:text-foreground transition-colors">Kunder</Link>
-          <ChevronRight className="w-3 h-3" />
-          <span className="text-foreground font-medium">{fullName}</span>
-          <ChevronRight className="w-3 h-3" />
-          <span>{TABS.find((t) => t.key === activeTab)?.label}</span>
-        </nav>
+        <div className="bg-card border border-border rounded-lg p-4 md:p-5 flex flex-col gap-4 lg:flex-row lg:items-center">
+          <div className="flex items-start gap-4 flex-1 min-w-0">
+            <div className="w-14 h-14 rounded-full bg-muted border border-border flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 24 24" className="w-8 h-8 text-muted-foreground/50" fill="currentColor" aria-hidden="true">
+                <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              {/* Breadcrumb */}
+              <nav aria-label="Brödsmulor" className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
+                <Link to="/dashboard" className="hover:text-foreground transition-colors" aria-label="Översikt">
+                  <Home className="w-3 h-3" />
+                </Link>
+                <ChevronRight className="w-3 h-3" />
+                <Link to="/students" className="hover:text-foreground transition-colors">Kunder</Link>
+                <ChevronRight className="w-3 h-3" />
+                <span className="text-foreground font-medium truncate">{fullName}</span>
+                <ChevronRight className="w-3 h-3" />
+                <span>{TABS.find((t) => t.key === activeTab)?.label}</span>
+              </nav>
 
-        {/* Name row */}
-        <div className="flex items-center justify-between pb-3">
-          <h1 className="text-base font-semibold text-foreground">{fullName}</h1>
-          <div className="flex items-center gap-2">
-            <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-              <button
-                onClick={() => setEditOpen(true)}
-                className="text-xs text-foreground border border-border rounded px-2.5 py-1 hover:bg-accent/50 transition-colors flex items-center gap-1.5"
-              >
-                <Pencil className="w-3 h-3" />
-                Redigera
-              </button>
-            </PermissionGate>
-            <button className="text-xs text-blue-500 border border-blue-200 rounded px-2.5 py-1 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center gap-1.5">
-              <Pencil className="w-3 h-3" />
+              <h1 className="text-xl md:text-2xl font-semibold text-foreground tracking-tight break-words">{fullName}</h1>
+
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+                <StudentStatusBadge status={student.status} />
+                <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 font-medium text-foreground">
+                  <Car className="w-3.5 h-3.5 text-muted-foreground" />
+                  {formatLicenceCat(student.target_licence_category)}
+                </span>
+                <span>
+                  <span className="font-medium text-foreground-secondary">Kund inskiven:</span> {formatDate(student.enrolled_at)}
+                </span>
+                <span>
+                  <span className="font-medium text-foreground-secondary">Senaste aktivitet:</span> {formatDateTime(student.updated_at)}
+                </span>
+                <button className={cn(ekLinkClass, 'text-xs')}>Användarvillkor</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <EkIconButton title="Kopiera kundinfo"><Copy className="w-4 h-4" /></EkIconButton>
+            <EkIconButton title="Bevakningar"><Bell className="w-4 h-4" /></EkIconButton>
+            <EkIconButton title="Snabblänkar"><ChevronRight className="w-4 h-4" /></EkIconButton>
+            <EkButton variant="secondary">
+              <MessageSquare className="w-3.5 h-3.5" />
               Ge feedback
-            </button>
+            </EkButton>
+            <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+              <EkButton variant="primary" onClick={() => setEditOpen(true)}>
+                <Pencil className="w-3.5 h-3.5" />
+                Redigera
+              </EkButton>
+            </PermissionGate>
           </div>
         </div>
 
-        <TabBar tabs={TABS} active={activeTab} onSelect={setActiveTab} />
+        <DetailTabBar tabs={TABS} active={activeTab} onSelect={setActiveTab} />
       </div>
 
       {/* ── Tab content ───────────────────────────────────────── */}
@@ -728,13 +1062,13 @@ function TagsCard({ studentId }: { studentId: string }) {
   const available   = (orgTags.data ?? []).filter((t) => !assignedIds.has(t.id));
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <div className="flex items-center justify-between mb-2">
-        <SectionHeading title="Taggar" />
+    <EkCard className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <EkEyebrow>Taggar</EkEyebrow>
         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
           <button
             onClick={() => setManagerOpen(true)}
-            className="text-[10px] text-primary hover:underline"
+            className={cn(ekLinkClass, 'text-xs')}
           >
             Hantera taggar
           </button>
@@ -742,13 +1076,13 @@ function TagsCard({ studentId }: { studentId: string }) {
       </div>
 
       {assigned.isLoading ? (
-        <div className="h-5 w-24 bg-muted rounded animate-pulse mb-2" />
+        <div className="h-6 w-28 bg-muted rounded animate-pulse" />
       ) : (assigned.data ?? []).length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 mb-2">
+        <div className="flex flex-wrap gap-1.5">
           {(assigned.data ?? []).map((tag) => (
             <span
               key={tag.id}
-              className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800/50"
+              className="inline-flex items-center gap-1.5 text-xs font-medium pl-2 pr-1 py-0.5 rounded-md border border-border bg-muted/50 text-foreground"
             >
               {tag.color && (
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tag.color }} />
@@ -760,23 +1094,25 @@ function TagsCard({ studentId }: { studentId: string }) {
                     onError: (e) => toast({ title: 'Kunde inte ta bort tagg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
                   })}
                   disabled={removeMut.isPending}
-                  className="ml-0.5 w-3.5 h-3.5 flex items-center justify-center rounded-full hover:bg-blue-200 dark:hover:bg-blue-700 transition-colors"
+                  className="w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
                   title="Ta bort tagg"
+                  aria-label={`Ta bort taggen ${tag.name}`}
                 >
-                  <X className="w-2.5 h-2.5" />
+                  <X className="w-3 h-3" />
                 </button>
               </PermissionGate>
             </span>
           ))}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground mb-2">Inga taggar tillagda.</p>
+        <p className="text-sm text-muted-foreground">Inga taggar tillagda.</p>
       )}
 
       <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
         {available.length > 0 && (
           <select
             value=""
+            aria-label="Lägg till tagg"
             onChange={(e) => {
               const tagId = e.target.value;
               if (!tagId) return;
@@ -785,7 +1121,7 @@ function TagsCard({ studentId }: { studentId: string }) {
               });
             }}
             disabled={assignMut.isPending}
-            className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+            className={ekInputClass}
           >
             <option value="">Lägg till tagg…</option>
             {available.map((t) => (
@@ -797,7 +1133,7 @@ function TagsCard({ studentId }: { studentId: string }) {
         {!orgTags.isLoading && orgTags.data?.length === 0 && (
           <button
             onClick={() => setManagerOpen(true)}
-            className="text-xs text-primary hover:underline"
+            className={cn(ekLinkClass, 'text-sm self-start')}
           >
             + Skapa första taggen
           </button>
@@ -805,7 +1141,7 @@ function TagsCard({ studentId }: { studentId: string }) {
       </PermissionGate>
 
       <TagManagerDialog open={managerOpen} onClose={() => setManagerOpen(false)} />
-    </div>
+    </EkCard>
   );
 }
 
@@ -851,36 +1187,36 @@ function PasswordResetCard({
   }
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <SectionHeading title="Generera ny inloggningslänk" />
-      <p className="text-xs text-muted-foreground mb-3">
+    <div className="space-y-3">
+      <EkSubTitle title="Generera ny inloggningslänk" />
+      <p className="text-xs text-muted-foreground -mt-1">
         Systemet genererar en ny elevportallänk och skickar den till eleven via e-post eller SMS.
       </p>
-      <div className="flex gap-2">
-        <button
+      <div className="grid grid-cols-2 gap-2">
+        <EkButton
+          size="sm"
           onClick={() => void handleSend('sms')}
           disabled={!phone || sending !== null}
           title={!phone ? 'Inget mobilnummer registrerat' : undefined}
-          className="flex-1 py-2 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
         >
-          {sending === 'sms' ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
+          {sending === 'sms' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MessageSquare className="w-3.5 h-3.5" />}
           {sending === 'sms' ? 'Skickar…' : 'Skicka SMS'}
-        </button>
-        <button
+        </EkButton>
+        <EkButton
+          size="sm"
           onClick={() => void handleSend('email')}
           disabled={!email || sending !== null}
           title={!email ? 'Ingen e-postadress registrerad' : undefined}
-          className="flex-1 py-2 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
         >
-          {sending === 'email' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+          {sending === 'email' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
           {sending === 'email' ? 'Skickar…' : 'Skicka e-post'}
-        </button>
+        </EkButton>
       </div>
       {!phone && (
-        <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Inget mobilnummer — SMS kan inte levereras.</p>
+        <EkNotice tone="warning">Inget mobilnummer — SMS kan inte levereras.</EkNotice>
       )}
       {!email && (
-        <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Ingen e-postadress — e-post kan inte levereras.</p>
+        <EkNotice tone="warning">Ingen e-postadress — e-post kan inte levereras.</EkNotice>
       )}
     </div>
   );
@@ -908,47 +1244,33 @@ function PortalInviteCard({ studentId, studentName }: { studentId: string; stude
   }
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Link2 className="w-3.5 h-3.5 text-blue-500" />
-        <SectionHeading title="Elevportal" />
-      </div>
-      <p className="text-xs text-muted-foreground mb-3">
+    <div className="space-y-3">
+      <EkSubTitle title="Elevportal" />
+      <p className="text-xs text-muted-foreground -mt-1">
         Generera en inloggningslänk som {studentName.split(' ')[0]} kan använda för att boka lektioner och se sin framsteg.
       </p>
 
       {portalUrl ? (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 p-2 bg-muted/40 rounded border border-border">
-            <p className="text-[10px] text-muted-foreground font-mono truncate flex-1">{portalUrl}</p>
+          <div className="px-3 py-2 bg-muted/50 rounded-md border border-border">
+            <p className="text-[11px] text-muted-foreground font-mono truncate">{portalUrl}</p>
           </div>
-          <button
-            onClick={handleCopy}
-            className="w-full py-1.5 text-xs font-medium rounded border border-blue-200 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center justify-center gap-1.5"
-          >
-            {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          <EkButton variant="primary" size="sm" onClick={handleCopy} className="w-full">
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
             {copied ? 'Kopierat!' : 'Kopiera länk'}
-          </button>
-          <button
-            onClick={handleGenerate}
-            disabled={generate.isPending}
-            className="w-full py-1.5 text-xs font-medium rounded border border-border text-muted-foreground hover:bg-accent transition-colors"
-          >
+          </EkButton>
+          <EkButton size="sm" onClick={handleGenerate} disabled={generate.isPending} className="w-full">
             Generera ny länk
-          </button>
+          </EkButton>
         </div>
       ) : (
-        <button
-          onClick={handleGenerate}
-          disabled={generate.isPending}
-          className="w-full py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
-        >
-          {generate.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Link2 className="w-3 h-3" />}
+        <EkButton variant="primary" size="sm" onClick={handleGenerate} disabled={generate.isPending} className="w-full">
+          {generate.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
           {generate.isPending ? 'Genererar...' : 'Skicka portal-länk'}
-        </button>
+        </EkButton>
       )}
       {generate.isError && (
-        <p className="text-[10px] text-red-500 mt-1">Kunde inte generera länk. Försök igen.</p>
+        <p className="text-xs text-destructive">Kunde inte generera länk. Försök igen.</p>
       )}
     </div>
   );
@@ -996,12 +1318,12 @@ function GuardianNotifyDialog({
   }
 
   return (
-    <div className="mt-2 border border-primary/20 bg-primary/5 rounded-lg p-3 space-y-2.5">
+    <div className="mt-2 border border-border bg-muted/40 rounded-md p-3 space-y-2.5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold text-foreground">
           Skicka till {guardian.first_name} {guardian.last_name}
         </p>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground" aria-label="Stäng">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -1014,10 +1336,10 @@ function GuardianNotifyDialog({
             onClick={() => setChannel(ch)}
             disabled={ch === 'sms' && !guardian.phone}
             className={cn(
-              'px-2.5 py-1 text-[10px] font-semibold rounded-full border transition-colors',
+              'px-3 py-1 text-xs font-medium rounded-md border transition-colors',
               channel === ch
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-background text-muted-foreground border-border hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed',
+                ? 'bg-primary-dark text-white border-primary-dark'
+                : 'bg-card text-muted-foreground border-border hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed',
             )}
           >
             {ch === 'email' ? 'E-post' : 'SMS'}
@@ -1029,40 +1351,35 @@ function GuardianNotifyDialog({
       {channel === 'email' && (
         <input
           placeholder="Ämne (valfritt)"
+          aria-label="Ämne"
           value={subject}
           onChange={e => setSubject(e.target.value)}
-          className="w-full h-7 px-2.5 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground"
+          className={ekInputClass}
         />
       )}
 
       {/* Recipient preview */}
-      <p className="text-[10px] text-muted-foreground truncate">
-        Till: {recipientAddress || <span className="text-red-500">Saknas</span>}
+      <p className="text-xs text-muted-foreground truncate">
+        Till: {recipientAddress || <span className="text-destructive">Saknas</span>}
       </p>
 
       {/* Body */}
       <textarea
         placeholder="Meddelande..."
+        aria-label="Meddelande"
         value={body}
         onChange={e => setBody(e.target.value)}
         rows={3}
-        className="w-full px-2.5 py-2 text-xs rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none placeholder:text-muted-foreground"
+        className={ekTextareaClass}
       />
 
       <div className="flex gap-2">
-        <button
-          onClick={handleSend}
-          disabled={!canSend || sendMsg.isPending}
-          className="flex-1 py-1.5 text-xs font-semibold rounded bg-primary text-primary-foreground disabled:opacity-50 transition-opacity"
-        >
+        <EkButton variant="primary" size="sm" onClick={handleSend} disabled={!canSend || sendMsg.isPending} className="flex-1">
           {sendMsg.isPending ? 'Skickar...' : 'Skicka'}
-        </button>
-        <button
-          onClick={onClose}
-          className="px-3 py-1.5 text-xs text-muted-foreground border border-border rounded hover:bg-accent transition-colors"
-        >
+        </EkButton>
+        <EkButton size="sm" onClick={onClose}>
           Avbryt
-        </button>
+        </EkButton>
       </div>
     </div>
   );
@@ -1226,163 +1543,149 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
 
   const list = guardians.data ?? [];
 
+  const relationSelect = (value: string, onChange: (v: string) => void, id: string) => (
+    <div>
+      <EkLabel htmlFor={id}>Relation</EkLabel>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={ekInputClass}>
+        <option value="">Välj relation</option>
+        <option value="Förälder">Förälder</option>
+        <option value="Vårdnadshavare">Vårdnadshavare</option>
+        <option value="Syskon">Syskon</option>
+        <option value="Annan">Annan</option>
+      </select>
+    </div>
+  );
+
   return (
     <div>
-      <SectionHeading title="Föräldraskollen – insyn i elevens utveckling" />
-      <p className="text-xs text-muted-foreground mb-3">
+      <EkSubTitle title="Föräldraskollen – insyn i elevens utveckling" />
+      <p className="text-xs text-muted-foreground -mt-1 mb-3">
         Ge en förälder eller annan nära person möjligheten att följa elevens framsteg, bokningar och resultat i realtid via en säker portal.
       </p>
 
       {/* Existing guardians */}
       {guardians.isLoading ? (
-        <div className="h-8 w-32 bg-muted rounded animate-pulse mb-3" />
+        <div className="h-10 w-full bg-muted rounded-md animate-pulse mb-3" />
       ) : list.length > 0 ? (
         <div className="space-y-2 mb-3">
           {list.map((g) => {
             const url = generatedUrls[g.id];
             return (
-              <div key={g.id} className="border border-border rounded-lg p-3 space-y-2">
+              <div key={g.id} className="border border-border rounded-md p-3 space-y-2">
                 {editId === g.id ? (
                   /* ── Edit form ── */
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-foreground">Redigera vårdnadshavare</p>
-                      <button onClick={resetEdit} className="text-muted-foreground hover:text-foreground">
-                        <X className="w-3.5 h-3.5" />
+                      <p className="text-sm font-semibold text-foreground">Redigera vårdnadshavare</p>
+                      <button onClick={resetEdit} className="text-muted-foreground hover:text-foreground" aria-label="Stäng">
+                        <X className="w-4 h-4" />
                       </button>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <FieldInput label="Förnamn *" value={editFirstName} onChange={setEditFirstName} placeholder="Förnamn" />
-                      <FieldInput label="Efternamn *" value={editLastName} onChange={setEditLastName} placeholder="Efternamn" />
-                      <FieldInput label="E-post *" value={editEmail} onChange={setEditEmail} type="email" placeholder="email@example.com" fullWidth />
-                      <FieldInput label="Telefon" value={editPhone} onChange={setEditPhone} type="tel" placeholder="+46 70 000 00 00" />
-                      <div className="space-y-1">
-                        <label className="text-xs text-muted-foreground">Relation</label>
-                        <select
-                          value={editRelation}
-                          onChange={(e) => setEditRelation(e.target.value)}
-                          className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="">Välj relation</option>
-                          <option value="Förälder">Förälder</option>
-                          <option value="Vårdnadshavare">Vårdnadshavare</option>
-                          <option value="Syskon">Syskon</option>
-                          <option value="Annan">Annan</option>
-                        </select>
-                      </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <EkField label="Förnamn *" value={editFirstName} onChange={setEditFirstName} placeholder="Förnamn" />
+                      <EkField label="Efternamn *" value={editLastName} onChange={setEditLastName} placeholder="Efternamn" />
+                      <EkField label="E-post *" value={editEmail} onChange={setEditEmail} type="email" placeholder="email@example.com" className="sm:col-span-2" />
+                      <EkField label="Telefon" value={editPhone} onChange={setEditPhone} type="tel" placeholder="+46 70 000 00 00" />
+                      {relationSelect(editRelation, setEditRelation, `edit-relation-${g.id}`)}
                     </div>
                     <div className="flex items-center gap-2">
                       <input type="checkbox" id={`edit-canpay-${g.id}`} checked={editCanPay} onChange={(e) => setEditCanPay(e.target.checked)} className="rounded" />
-                      <label htmlFor={`edit-canpay-${g.id}`} className="text-xs text-muted-foreground cursor-pointer">Kan se ekonomiinformation</label>
+                      <label htmlFor={`edit-canpay-${g.id}`} className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomiinformation</label>
                     </div>
-                    <div className="flex gap-2 pt-1">
-                      <GreenBtn
+                    <div className="flex gap-2">
+                      <EkButton
+                        variant="primary"
                         onClick={handleUpdate}
                         disabled={!editFirstName.trim() || !editLastName.trim() || !editEmail.trim() || updateMut.isPending}
                       >
                         {updateMut.isPending ? 'Sparar...' : 'Spara ändringar'}
-                      </GreenBtn>
-                      <button
-                        onClick={resetEdit}
-                        className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded transition-colors"
-                      >
-                        Avbryt
-                      </button>
+                      </EkButton>
+                      <EkButton onClick={resetEdit}>Avbryt</EkButton>
                     </div>
                   </div>
                 ) : (
                   /* ── View mode ── */
                   <>
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-foreground">{g.first_name} {g.last_name}</p>
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-xs text-muted-foreground break-words">
                           {g.email}{g.phone ? ` · ${g.phone}` : ''}{g.relation ? ` · ${g.relation}` : ''}
-                          {g.can_pay && <span className="ml-1 text-green-600 font-semibold">· Betalning</span>}
+                          {g.can_pay && <span className="ml-1 font-medium text-foreground-secondary">· Betalning</span>}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                         {invitedId === g.id ? (
-                          <span className="px-2.5 py-1 text-[10px] font-medium rounded bg-green-50 text-green-700 border border-green-200 flex items-center gap-1">
-                            <Check className="w-3 h-3" />
+                          <span className="h-8 px-3 text-xs font-medium rounded-md border border-border bg-muted text-foreground inline-flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" />
                             Skickad!
                           </span>
                         ) : (
-                          <button
+                          <EkButton
+                            size="sm"
                             onClick={() => handleInviteAndNotify(g)}
                             disabled={tokenMut.isPending || sendMessage.isPending}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center gap-1"
                             title="Generera länk och skicka e-postinbjudan"
                           >
-                            <Mail className="w-3 h-3" />
+                            <Mail className="w-3.5 h-3.5" />
                             Bjud in
-                          </button>
+                          </EkButton>
                         )}
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-                          <button
+                          <EkButton
+                            size="sm"
+                            variant="ghost"
                             onClick={() => setNotifyId(notifyId === g.id ? null : g.id)}
-                            className={cn(
-                              'px-2.5 py-1 text-[10px] font-medium rounded transition-colors flex items-center gap-1',
-                              notifyId === g.id
-                                ? 'bg-primary/10 text-primary border border-primary/30'
-                                : 'bg-muted text-muted-foreground hover:bg-accent',
-                            )}
                             title="Skicka meddelande"
+                            className={notifyId === g.id ? 'bg-muted text-foreground' : undefined}
                           >
-                            <Mail className="w-3 h-3" />
+                            <Mail className="w-3.5 h-3.5" />
                             Notifiera
-                          </button>
+                          </EkButton>
                         </PermissionGate>
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-                          <button
+                          <EkButton
+                            size="sm"
+                            variant="ghost"
                             onClick={() => handleGenerateToken(g)}
                             disabled={tokenMut.isPending}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-action text-action-foreground hover:bg-action-hover disabled:opacity-50 transition-colors flex items-center gap-1"
                             title="Generera portallänk (manuell kopiering)"
                           >
-                            <Link2 className="w-3 h-3" />
+                            <Link2 className="w-3.5 h-3.5" />
                             Länk
-                          </button>
+                          </EkButton>
                         </PermissionGate>
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-                          <button
-                            onClick={() => handleEditOpen(g)}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors flex items-center gap-1"
-                            title="Redigera"
-                          >
-                            <Pencil className="w-3 h-3" />
+                          <EkButton size="sm" variant="ghost" onClick={() => handleEditOpen(g)} title="Redigera">
+                            <Pencil className="w-3.5 h-3.5" />
                             Redigera
-                          </button>
+                          </EkButton>
                         </PermissionGate>
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
                           <button
                             onClick={() => handleDelete(g)}
                             disabled={deleteMut.isPending}
-                            className="w-6 h-6 flex items-center justify-center rounded text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40 transition-colors"
+                            className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40 transition-colors"
                             title="Ta bort"
+                            aria-label={`Ta bort ${g.first_name} ${g.last_name}`}
                           >
-                            <X className="w-3.5 h-3.5" />
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </PermissionGate>
                       </div>
                     </div>
                     {confirmDeleteId === g.id && (
-                      <div className="flex items-center justify-between gap-2 bg-red-50 dark:bg-red-950/20 rounded p-2 border border-red-100 dark:border-red-900/50">
-                        <p className="text-xs text-red-700 dark:text-red-400">Ta bort {g.first_name} {g.last_name}?</p>
+                      <div className="flex flex-wrap items-center justify-between gap-2 bg-destructive/5 rounded-md p-2.5 border border-destructive/20">
+                        <p className="text-xs text-destructive">Ta bort {g.first_name} {g.last_name}?</p>
                         <div className="flex gap-1.5">
                           <button
                             onClick={() => handleDeleteConfirmed(g)}
                             disabled={deleteMut.isPending}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                            className="h-8 px-3 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50 transition-colors"
                           >
                             {deleteMut.isPending ? 'Tar bort...' : 'Ta bort'}
                           </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="px-2.5 py-1 text-[10px] font-medium rounded border border-border text-muted-foreground hover:bg-accent transition-colors"
-                          >
-                            Avbryt
-                          </button>
+                          <EkButton size="sm" onClick={() => setConfirmDeleteId(null)}>Avbryt</EkButton>
                         </div>
                       </div>
                     )}
@@ -1393,13 +1696,13 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                       />
                     )}
                     {url && (
-                      <div className="flex items-center gap-2 bg-muted/40 rounded px-2 py-1.5">
-                        <p className="text-[10px] font-mono text-muted-foreground truncate flex-1">{url}</p>
+                      <div className="flex items-center gap-2 bg-muted/50 rounded-md px-3 py-2">
+                        <p className="text-[11px] font-mono text-muted-foreground truncate flex-1">{url}</p>
                         <button
                           onClick={() => handleCopy(g.id, url)}
-                          className="shrink-0 text-[10px] font-medium text-blue-600 hover:underline flex items-center gap-1"
+                          className="shrink-0 text-xs font-medium text-foreground hover:underline flex items-center gap-1"
                         >
-                          {copiedId === g.id ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === g.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                           {copiedId === g.id ? 'Kopierat' : 'Kopiera'}
                         </button>
                       </div>
@@ -1411,61 +1714,41 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
           })}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground mb-3">Inga vårdnadshavare tillagda.</p>
+        <p className="text-sm text-muted-foreground mb-3">Inga vårdnadshavare tillagda.</p>
       )}
 
       {/* Add form */}
       {showForm ? (
-        <div className="border border-border rounded-lg p-3 space-y-2.5">
-          <p className="text-xs font-semibold text-foreground">Ny vårdnadshavare</p>
-          <div className="grid grid-cols-2 gap-2">
-            <FieldInput label="Förnamn *" value={firstName} onChange={setFirstName} placeholder="Förnamn" />
-            <FieldInput label="Efternamn *" value={lastName} onChange={setLastName} placeholder="Efternamn" />
-            <FieldInput label="E-post *" value={email} onChange={setEmail} type="email" placeholder="email@example.com" fullWidth />
-            <FieldInput label="Telefon" value={phone} onChange={setPhone} type="tel" placeholder="+46 70 000 00 00" />
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Relation</label>
-              <select
-                value={relation}
-                onChange={(e) => setRelation(e.target.value)}
-                className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="">Välj relation</option>
-                <option value="Förälder">Förälder</option>
-                <option value="Vårdnadshavare">Vårdnadshavare</option>
-                <option value="Syskon">Syskon</option>
-                <option value="Annan">Annan</option>
-              </select>
-            </div>
+        <div className="border border-border rounded-md p-3 space-y-3">
+          <p className="text-sm font-semibold text-foreground">Ny vårdnadshavare</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <EkField label="Förnamn *" value={firstName} onChange={setFirstName} placeholder="Förnamn" />
+            <EkField label="Efternamn *" value={lastName} onChange={setLastName} placeholder="Efternamn" />
+            <EkField label="E-post *" value={email} onChange={setEmail} type="email" placeholder="email@example.com" className="sm:col-span-2" />
+            <EkField label="Telefon" value={phone} onChange={setPhone} type="tel" placeholder="+46 70 000 00 00" />
+            {relationSelect(relation, setRelation, 'guardian-relation')}
           </div>
           <div className="flex items-center gap-2">
             <input type="checkbox" id="guardian-canpay" checked={canPay} onChange={(e) => setCanPay(e.target.checked)} className="rounded" />
-            <label htmlFor="guardian-canpay" className="text-xs text-muted-foreground cursor-pointer">Kan se ekonomiinformation</label>
+            <label htmlFor="guardian-canpay" className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomiinformation</label>
           </div>
-          <div className="flex gap-2 pt-1">
-            <GreenBtn
+          <div className="flex gap-2">
+            <EkButton
+              variant="primary"
               onClick={handleCreate}
               disabled={!firstName.trim() || !lastName.trim() || !email.trim() || createMut.isPending}
             >
               {createMut.isPending ? 'Lägger till...' : 'Lägg till'}
-            </GreenBtn>
-            <button
-              onClick={resetForm}
-              className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded transition-colors"
-            >
-              Avbryt
-            </button>
+            </EkButton>
+            <EkButton onClick={resetForm}>Avbryt</EkButton>
           </div>
         </div>
       ) : (
         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
-          >
-            <Plus className="w-3.5 h-3.5" />
+          <EkButton onClick={() => setShowForm(true)}>
+            <Plus className="w-4 h-4" />
             Lägg till vårdnadshavare
-          </button>
+          </EkButton>
         </PermissionGate>
       )}
     </div>
@@ -1503,6 +1786,7 @@ function KundkortTab({
 }) {
   const [internalNotes,       setInternalNotes]       = useState(false);
   const [korkortsGrupp,       setKorkortsGrupp]       = useState('');
+  const [korkortsDatum,       setKorkortsDatum]       = useState('');
   const [favInstructorId,     setFavInstructorId]     = useState(student.assigned_instructor_id ?? '');
   const [cancelTarget,        setCancelTarget]        = useState<{ bookingId: string; slotId: string; slotLabel: string; slotStartsAt: string } | null>(null);
   const [rescheduleTarget,    setRescheduleTarget]    = useState<{ bookingId: string; slotId: string } | null>(null);
@@ -1617,368 +1901,416 @@ function KundkortTab({
   const nextTerminal = !nextLesson || nextLesson.status === 'completed' || nextLesson.status === 'no_show' || nextLesson.status === 'cancelled';
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+    <div className="space-y-5">
 
-      {/* ── Left column ─────────────────────────────────────── */}
-      <div className="space-y-0">
+      {/* ── Summary row ─────────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
 
-        {/* Profile section */}
-        <div className="bg-card border border-border rounded-lg p-4 space-y-4">
-
-          {/* Avatar + personnummer row */}
-          <div className="flex items-start gap-4">
-            <div className="w-14 h-14 rounded-full bg-muted border-2 border-border flex items-center justify-center shrink-0">
-              <svg viewBox="0 0 24 24" className="w-8 h-8 text-muted-foreground/40" fill="currentColor">
-                <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
-              </svg>
+        {/* Nästa lektion */}
+        <EkCard className="flex flex-col gap-2">
+          <EkEyebrow>Nästa lektion</EkEyebrow>
+          {nextLesson ? (
+            <div className="space-y-2">
+              <div>
+                <p className="text-sm font-semibold text-foreground capitalize">{nextDateStr}</p>
+                <p className="text-xs text-muted-foreground tabular-nums">{nextTimeStr}</p>
+              </div>
+              <BookingStatusBadge status={nextLesson.status} />
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {!nextTerminal && (
+                  <>
+                    <EkButton
+                      size="sm"
+                      onClick={() => setRescheduleTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id })}
+                    >
+                      Boka om
+                    </EkButton>
+                    <EkButton
+                      size="sm"
+                      variant="danger"
+                      onClick={() => setCancelTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id, slotLabel: `${nextDateStr} ${nextTimeStr}`, slotStartsAt: nextLesson.starts_at })}
+                    >
+                      Avboka
+                    </EkButton>
+                  </>
+                )}
+                <Link
+                  to={`/scheduling?date=${nextLesson.starts_at.slice(0, 10)}`}
+                  className={cn(ekLinkClass, 'text-xs inline-flex items-center gap-1')}
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  Visa i schema
+                </Link>
+              </div>
             </div>
-            <div className="flex-1 min-w-0 space-y-2">
+          ) : upcomingBookings.isLoading ? (
+            <div className="space-y-2">
+              <div className="h-4 w-40 bg-muted rounded animate-pulse" />
+              <div className="h-3 w-24 bg-muted rounded animate-pulse" />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Inga kommande bokningar.</p>
+          )}
+        </EkCard>
+
+        {/* Utbildningsstatus */}
+        <TrainingStatusCard student={student} />
+
+        {/* Taggar */}
+        <TagsCard studentId={student.id} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+
+      {/* ── Main column ─────────────────────────────────────── */}
+      <div className="space-y-5 min-w-0">
+
+        {/* Personuppgifter */}
+        <EkCard>
+          <EkCardTitle title="Personuppgifter" />
+          <div className="space-y-5">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Personnummer */}
-              <div className="space-y-0.5">
+              <div className="space-y-1">
+                <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
+                  <EkLabel>Personnummer</EkLabel>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono font-medium text-foreground">{pnr}</span>
+                    {pnr !== '—' && <CopyBtn text={pnr} />}
+                    <EkButton size="sm">
+                      <Search className="w-3.5 h-3.5" />
+                      Sök
+                    </EkButton>
+                  </div>
+                </PermissionGate>
                 {age && (
                   <p className="text-xs text-muted-foreground">{age}</p>
                 )}
-                <PermissionGate permission={Permissions.STUDENTS_PII_READ}>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-mono font-medium">{pnr}</span>
-                  {pnr !== '—' && <CopyBtn text={pnr} />}
-                  <button className="text-xs text-blue-600 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors">
-                    Sök
-                  </button>
-                </div>
-                </PermissionGate>
               </div>
               {/* E-post placeholder */}
-              <div>
-                <label className="text-xs text-muted-foreground">Teoricentralen e-post</label>
-                <input
-                  type="text"
-                  placeholder="Loggar in med personnummer eller Mobilt BankId"
-                  readOnly
-                  className="w-full h-7 px-2 text-xs rounded border border-input bg-muted/20 text-muted-foreground mt-0.5"
-                />
-              </div>
+              <EkField
+                label="Teoricentralen e-post"
+                value=""
+                placeholder="Loggar in med personnummer eller Mobilt BankId"
+                readOnly
+              />
             </div>
-          </div>
 
-          <SectionDivider />
-
-          {/* Editable contact fields */}
-          <div className="grid grid-cols-2 gap-3">
-            <FieldInput label="Förnamn"     value={form.first_name}    onChange={(v) => setField('first_name', v)} />
-            <FieldInput label="Efternamn"   value={form.last_name}     onChange={(v) => setField('last_name', v)} />
-            <FieldInput label="E-post"      value={form.email}         onChange={(v) => setField('email', v)} type="email" />
-            <FieldInput label="Telefonnummer" value={form.phone}       onChange={(v) => setField('phone', v)} type="tel" />
-            <FieldInput label="Adress"      value={form.address_line1} onChange={(v) => setField('address_line1', v)} fullWidth />
-            <FieldInput label="Postnummer"  value={form.postal_code}   onChange={(v) => setField('postal_code', v)} />
-            <FieldInput label="Stad"        value={form.city}          onChange={(v) => setField('city', v)} />
-          </div>
-
-          {/* Metadata row */}
-          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground pt-1">
-            <div>
-              <span className="font-medium text-foreground">Kund inskiven: </span>
-              {formatDate(student.enrolled_at)}
+            {/* Editable contact fields */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <EkField label="Förnamn"       value={form.first_name}    onChange={(v) => setField('first_name', v)} />
+              <EkField label="Efternamn"     value={form.last_name}     onChange={(v) => setField('last_name', v)} />
+              <EkField label="E-post"        value={form.email}         onChange={(v) => setField('email', v)} type="email" />
+              <EkField label="Telefonnummer" value={form.phone}         onChange={(v) => setField('phone', v)} type="tel" />
+              <EkField label="Adress"        value={form.address_line1} onChange={(v) => setField('address_line1', v)} className="sm:col-span-2" />
+              <EkField label="Postnummer"    value={form.postal_code}   onChange={(v) => setField('postal_code', v)} />
+              <EkField label="Stad"          value={form.city}          onChange={(v) => setField('city', v)} />
             </div>
-            <div>
-              <span className="font-medium text-foreground">Senaste aktivitet: </span>
-              {formatDateTime(student.updated_at)}
-            </div>
-            <button className="text-blue-500 hover:underline">Användarvilkar</button>
-          </div>
 
-          <SectionDivider />
-
-          {/* Utbildningsbehörighet */}
-          <div>
-            <SectionHeading title="Utbildningsbehörighet" />
-            <div className="flex items-center gap-2 mb-3">
-              <Car className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-medium">{formatLicenceCat(student.target_licence_category)}</span>
-              <StudentStatusBadge status={student.status} />
-            </div>
             <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-              <GreenBtn onClick={onSave} disabled={saving}>
-                {saving ? 'Sparar...' : 'Spara'}
-              </GreenBtn>
+              <div className="flex justify-end">
+                <EkButton variant="primary" onClick={onSave} disabled={saving}>
+                  {saving ? 'Sparar...' : 'Spara'}
+                </EkButton>
+              </div>
             </PermissionGate>
           </div>
+        </EkCard>
 
-          <SectionDivider />
+        {/* Behörighet & dokument */}
+        <EkCard>
+          <EkCardTitle title="Behörighet & dokument" />
+          <div className="space-y-5">
 
-          {/* Körkortstillstånd */}
-          <div>
-            <SectionHeading title="Körkortstillstånd" />
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Välj grupp</label>
-                <select
-                  value={korkortsGrupp}
-                  onChange={(e) => setKorkortsGrupp(e.target.value)}
-                  className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">Ingen grupp</option>
-                  <option value="grupp1">Grupp 1 – AM, A1, A2, A, B, BE</option>
-                  <option value="grupp2">Grupp 2 – C, CE, D, DE</option>
-                </select>
-              </div>
-              <FieldInput label="Välj utgångsdatum" value="" placeholder="YYYY-MM-DD" type="date" />
-            </div>
-            <div className="space-y-1 mb-3">
-              <label className="text-xs text-muted-foreground">Anteckning</label>
-              <textarea
-                rows={2}
-                className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <GreenBtn disabled>Spara</GreenBtn>
-              <button className="px-3 py-1.5 text-sm font-medium rounded border border-blue-300 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50 transition-colors flex items-center gap-1.5">
-                Trafikverket
-                <ExternalLink className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-
-          <SectionDivider />
-
-          {/* Legitimation */}
-          <div>
-            <SectionHeading title="Legitimation" />
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">Välj legitimation</label>
-                <select className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary">
-                  <option value="">Välj legitimation</option>
-                  <option value="korkort">Körkort</option>
-                  <option value="pass">Pass</option>
-                  <option value="nationellt_id">Nationellt ID-kort</option>
-                  <option value="personnummer">Personnummer</option>
-                </select>
-              </div>
-              <FieldInput label="Välj utgångsdatum" value="" placeholder="YYYY-MM-DD" type="date" />
-            </div>
-            <div className="space-y-1 mb-3">
-              <label className="text-xs text-muted-foreground">Anteckning</label>
-              <textarea
-                rows={2}
-                className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
-              />
-            </div>
-            <GreenBtn disabled>Spara</GreenBtn>
-          </div>
-
-          <SectionDivider />
-
-          {/* Företagskopplingar */}
-          <div>
-            <SectionHeading title="Företagskopplingar" />
-            {student.corporate_customer_id && (
-              <p className="text-xs text-muted-foreground mb-2">
-                Kopplad: <span className="font-medium text-foreground">
-                  {allCompanies.find(c => c.id === student.corporate_customer_id)?.company_name ?? '…'}
+            {/* Utbildningsbehörighet */}
+            <div>
+              <EkSubTitle title="Utbildningsbehörighet" />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-sm font-medium text-foreground">
+                  <Car className="w-4 h-4 text-muted-foreground" />
+                  {formatLicenceCat(student.target_licence_category)}
                 </span>
+                <StudentStatusBadge status={student.status} />
+              </div>
+            </div>
+
+            <EkDivider />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Körkortstillstånd */}
+              <div className="space-y-3">
+                <EkSubTitle
+                  title="Körkortstillstånd"
+                  action={
+                    <EkButton size="sm">
+                      Trafikverket
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </EkButton>
+                  }
+                />
+                <div>
+                  <EkLabel htmlFor="korkort-grupp">Välj grupp</EkLabel>
+                  <select
+                    id="korkort-grupp"
+                    value={korkortsGrupp}
+                    onChange={(e) => setKorkortsGrupp(e.target.value)}
+                    className={ekInputClass}
+                  >
+                    <option value="">Ingen grupp</option>
+                    <option value="grupp1">Grupp 1 – AM, A1, A2, A, B, BE</option>
+                    <option value="grupp2">Grupp 2 – C, CE, D, DE</option>
+                  </select>
+                </div>
+                <EkDateInput
+                  id="korkort-utgangsdatum"
+                  label="Välj utgångsdatum"
+                  value={korkortsDatum}
+                  onChange={setKorkortsDatum}
+                />
+                <div>
+                  <EkLabel htmlFor="korkort-anteckning">Anteckning</EkLabel>
+                  <textarea id="korkort-anteckning" rows={2} className={ekTextareaClass} />
+                </div>
+                <EkButton comingSoon>Spara</EkButton>
+              </div>
+
+              {/* Legitimation */}
+              <div className="space-y-3">
+                <EkSubTitle title="Legitimation" />
+                <div>
+                  <EkLabel htmlFor="legitimation-typ">Välj legitimation</EkLabel>
+                  <select id="legitimation-typ" className={ekInputClass}>
+                    <option value="">Välj legitimation</option>
+                    <option value="korkort">Körkort</option>
+                    <option value="pass">Pass</option>
+                    <option value="nationellt_id">Nationellt ID-kort</option>
+                    <option value="personnummer">Personnummer</option>
+                  </select>
+                </div>
+                <EkField label="Välj utgångsdatum" value="" placeholder="YYYY-MM-DD" type="date" />
+                <div>
+                  <EkLabel htmlFor="legitimation-anteckning">Anteckning</EkLabel>
+                  <textarea id="legitimation-anteckning" rows={2} className={ekTextareaClass} />
+                </div>
+                <EkButton comingSoon>Spara</EkButton>
+              </div>
+            </div>
+          </div>
+        </EkCard>
+
+        {/* Examinationsmoment */}
+        <EkCard>
+          <EkCardTitle title="Examinationsmoment" />
+          <div className="overflow-x-auto -mx-1 px-1">
+            <table className="w-full text-sm min-w-[420px]">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Moment</th>
+                  <th className="text-left py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Datum</th>
+                  <th className="text-right py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Åtgärder</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(
+                  [
+                    { key: 'risk1_completed_at'    as MilestoneKey, label: 'Risk 1',     value: student.risk1_completed_at },
+                    { key: 'risk2_completed_at'    as MilestoneKey, label: 'Risk 2',     value: student.risk2_completed_at },
+                    { key: 'theory_passed_at'      as MilestoneKey, label: 'Teoriprov',  value: student.theory_passed_at },
+                    { key: 'practical_passed_at'   as MilestoneKey, label: 'Uppkörning', value: student.practical_passed_at },
+                  ] as { key: MilestoneKey; label: string; value: string | null }[]
+                ).map(({ key, label, value }) => (
+                  <tr key={key} className="border-b border-border/60 last:border-0">
+                    <td className="py-3 pr-4 font-medium text-foreground">{label}</td>
+                    <td className="py-3 pr-4">
+                      {value ? (
+                        <span className="text-foreground tabular-nums">{formatDate(value)}</span>
+                      ) : (
+                        <span className="text-muted-foreground">Ej genomfört</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-right">
+                      {editingMilestone === key ? (
+                        <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                          <input
+                            type="date"
+                            aria-label={`Datum för ${label}`}
+                            value={milestoneDate}
+                            onChange={(e) => setMilestoneDate(e.target.value)}
+                            className={cn(ekInputClass, 'h-8 w-auto')}
+                          />
+                          <EkButton size="sm" variant="primary" onClick={() => void saveMilestone()} disabled={savingMilestone}>
+                            {savingMilestone ? '...' : 'Spara'}
+                          </EkButton>
+                          <EkButton size="sm" variant="ghost" onClick={() => setEditingMilestone(null)}>
+                            Avbryt
+                          </EkButton>
+                        </div>
+                      ) : (
+                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                          <button
+                            onClick={() => startEditMilestone(key, value)}
+                            className={cn(ekLinkClass, 'text-sm')}
+                          >
+                            {value ? 'Redigera' : 'Registrera'}
+                          </button>
+                        </PermissionGate>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </EkCard>
+
+        {/* Anhöriga & vårdnadshavare */}
+        <EkCard>
+          <EkCardTitle title="Anhöriga & vårdnadshavare" />
+          <div className="space-y-5">
+
+            {/* Anhöriga */}
+            <div>
+              <EkSubTitle title="Anhöriga personer" />
+              <p className="text-xs text-muted-foreground -mt-1 mb-3">
+                Registrera anhöriga som ska kontaktas i nödsituationer eller ta emot bokningsbekräftelser.
               </p>
-            )}
-            <div className="flex items-end gap-2">
-              <div className="flex-1 space-y-1">
-                <label className="text-xs text-muted-foreground">Välj företag att koppla</label>
+
+              {/* Existing contacts list */}
+              {(emgContacts.data ?? []).length > 0 && (
+                <div className="space-y-2 mb-4">
+                  {(emgContacts.data ?? []).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between border border-border rounded-md px-3 py-2 text-sm gap-2">
+                      <div className="min-w-0">
+                        <span className="font-medium text-foreground">{c.full_name}</span>
+                        {c.is_primary && (
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-foreground-secondary bg-muted px-1.5 py-0.5 rounded">Primär</span>
+                        )}
+                        <div className="text-xs text-muted-foreground truncate">{c.phone}{c.email ? ` · ${c.email}` : ''}</div>
+                      </div>
+                      <button
+                        onClick={() => deleteEmg.mutate(c.id)}
+                        disabled={deleteEmg.isPending}
+                        className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40 transition-colors"
+                        title="Ta bort"
+                        aria-label={`Ta bort ${c.full_name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add form */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
+                <EkField
+                  label="Namn *"
+                  value={emgName}
+                  onChange={setEmgName}
+                  placeholder="För- och efternamn"
+                  className="sm:col-span-2"
+                />
+                <EkField
+                  label="Telefonnummer *"
+                  value={emgPhone}
+                  onChange={setEmgPhone}
+                  placeholder="+46 70 000 00 00"
+                  type="tel"
+                />
+                <EkField
+                  label="E-postadress"
+                  value={emgEmail}
+                  onChange={setEmgEmail}
+                  placeholder="valfritt"
+                  type="email"
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="emgprimary"
+                    checked={emgPrimary}
+                    onChange={(e) => setEmgPrimary(e.target.checked)}
+                    className="rounded"
+                  />
+                  <label htmlFor="emgprimary" className="text-sm text-foreground-secondary cursor-pointer">Primärkontakt</label>
+                </div>
+                <EkButton
+                  variant="primary"
+                  onClick={() => addEmg.mutate()}
+                  disabled={!emgName.trim() || !emgPhone.trim() || addEmg.isPending}
+                >
+                  {addEmg.isPending ? 'Lägger till...' : 'Lägg till'}
+                </EkButton>
+              </div>
+            </div>
+
+            <EkDivider />
+
+            {/* Föräldraskollen */}
+            <VardnadshavareCard studentId={student.id} studentName={`${student.first_name} ${student.last_name}`} />
+          </div>
+        </EkCard>
+
+        {/* Företagskopplingar + Favoritlärare */}
+        <EkCard>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            {/* Företagskopplingar */}
+            <div className="flex flex-col">
+              <EkSubTitle title="Företagskopplingar" />
+              {student.corporate_customer_id && (
+                <p className="text-xs text-muted-foreground -mt-1 mb-2">
+                  Kopplad: <span className="font-medium text-foreground">
+                    {allCompanies.find(c => c.id === student.corporate_customer_id)?.company_name ?? '…'}
+                  </span>
+                </p>
+              )}
+              <EkLabel htmlFor="foretag-koppla">Välj företag att koppla</EkLabel>
+              <div className="flex gap-2">
                 <select
+                  id="foretag-koppla"
                   value={linkedCompanyId}
                   onChange={(e) => setLinkedCompanyId(e.target.value)}
-                  className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                  className={cn(ekInputClass, 'flex-1 min-w-0')}
                 >
                   <option value="">- Inget företag -</option>
                   {allCompanies.map((c) => (
                     <option key={c.id} value={c.id}>{c.company_name}</option>
                   ))}
                 </select>
+                <EkButton
+                  disabled={updateCompany.isPending}
+                  onClick={() => {
+                    updateCompany.mutate(
+                      { id: student.id, input: { corporate_customer_id: linkedCompanyId || null } },
+                      {
+                        onSuccess: () => toast({ title: linkedCompanyId ? 'Företag kopplat' : 'Företagskoppling borttagen' }),
+                        onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
+                      }
+                    );
+                  }}
+                >
+                  {updateCompany.isPending ? 'Sparar...' : 'Spara'}
+                </EkButton>
               </div>
-              <GreenBtn
-                disabled={updateCompany.isPending}
-                onClick={() => {
-                  updateCompany.mutate(
-                    { id: student.id, input: { corporate_customer_id: linkedCompanyId || null } },
-                    {
-                      onSuccess: () => toast({ title: linkedCompanyId ? 'Företag kopplat' : 'Företagskoppling borttagen' }),
-                      onError: (e) => toast({ title: 'Kunde inte spara', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
-                    }
-                  );
-                }}
-              >
-                {updateCompany.isPending ? 'Sparar...' : 'Spara'}
-              </GreenBtn>
             </div>
-          </div>
 
-          <SectionDivider />
-
-          {/* Examinationsmoment */}
-          <div>
-            <SectionHeading title="Examinationsmoment" />
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Moment</th>
-                    <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Datum</th>
-                    <th className="text-left py-2 text-xs font-medium text-muted-foreground">Åtgärder</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(
-                    [
-                      { key: 'risk1_completed_at'    as MilestoneKey, label: 'Risk 1',     value: student.risk1_completed_at },
-                      { key: 'risk2_completed_at'    as MilestoneKey, label: 'Risk 2',     value: student.risk2_completed_at },
-                      { key: 'theory_passed_at'      as MilestoneKey, label: 'Teoriprov',  value: student.theory_passed_at },
-                      { key: 'practical_passed_at'   as MilestoneKey, label: 'Uppkörning', value: student.practical_passed_at },
-                    ] as { key: MilestoneKey; label: string; value: string | null }[]
-                  ).map(({ key, label, value }) => (
-                    <tr key={key} className="border-b border-border/50 last:border-0">
-                      <td className="py-2.5 pr-4 text-xs font-medium">{label}</td>
-                      <td className="py-2.5 pr-4 text-xs">
-                        {value ? (
-                          <span className="text-foreground font-medium">{formatDate(value)}</span>
-                        ) : (
-                          <span className="text-muted-foreground/50 italic">Ej genomfört</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 text-xs">
-                        {editingMilestone === key ? (
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <input
-                              type="date"
-                              value={milestoneDate}
-                              onChange={(e) => setMilestoneDate(e.target.value)}
-                              className="h-6 px-1.5 text-xs border border-input rounded bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                            />
-                            <button
-                              onClick={() => void saveMilestone()}
-                              disabled={savingMilestone}
-                              className="h-6 px-2 text-[10px] font-medium text-action-foreground bg-action hover:bg-action-hover rounded disabled:opacity-50 transition-colors"
-                            >
-                              {savingMilestone ? '...' : 'Spara'}
-                            </button>
-                            <button
-                              onClick={() => setEditingMilestone(null)}
-                              className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              Avbryt
-                            </button>
-                          </div>
-                        ) : (
-                          <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-                            <button
-                              onClick={() => startEditMilestone(key, value)}
-                              className="text-blue-500 hover:underline"
-                            >
-                              {value ? 'Redigera' : 'Registrera'}
-                            </button>
-                          </PermissionGate>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <SectionDivider />
-
-          {/* Anhöriga */}
-          <div>
-            <SectionHeading title="Anhöriga personer" />
-            <p className="text-xs text-muted-foreground mb-3">
-              Registrera anhöriga som ska kontaktas i nödsituationer eller ta emot bokningsbekräftelser.
-            </p>
-
-            {/* Existing contacts list */}
-            {(emgContacts.data ?? []).length > 0 && (
-              <div className="space-y-2 mb-4">
-                {(emgContacts.data ?? []).map((c) => (
-                  <div key={c.id} className="flex items-center justify-between bg-muted/40 rounded px-3 py-2 text-xs gap-2">
-                    <div className="min-w-0">
-                      <span className="font-medium text-foreground">{c.full_name}</span>
-                      {c.is_primary && <span className="ml-2 text-[10px] text-primary font-semibold">Primär</span>}
-                      <div className="text-muted-foreground truncate">{c.phone}{c.email ? ` · ${c.email}` : ''}</div>
-                    </div>
-                    <button
-                      onClick={() => deleteEmg.mutate(c.id)}
-                      disabled={deleteEmg.isPending}
-                      className="shrink-0 p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/30 text-red-500 disabled:opacity-40 transition-colors"
-                      title="Ta bort"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Add form */}
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <FieldInput
-                label="Namn *"
-                value={emgName}
-                onChange={setEmgName}
-                placeholder="För- och efternamn"
-                fullWidth
-              />
-              <FieldInput
-                label="Telefonnummer *"
-                value={emgPhone}
-                onChange={setEmgPhone}
-                placeholder="+46 70 000 00 00"
-                type="tel"
-              />
-              <FieldInput
-                label="E-postadress"
-                value={emgEmail}
-                onChange={setEmgEmail}
-                placeholder="valfritt"
-                type="email"
-                fullWidth
-              />
-            </div>
-            <div className="flex items-center gap-2 mb-3">
-              <input
-                type="checkbox"
-                id="emgprimary"
-                checked={emgPrimary}
-                onChange={(e) => setEmgPrimary(e.target.checked)}
-                className="rounded"
-              />
-              <label htmlFor="emgprimary" className="text-xs text-muted-foreground cursor-pointer">Primärkontakt</label>
-            </div>
-            <GreenBtn
-              onClick={() => addEmg.mutate()}
-              disabled={!emgName.trim() || !emgPhone.trim() || addEmg.isPending}
-            >
-              {addEmg.isPending ? 'Lägger till...' : 'Lägg till'}
-            </GreenBtn>
-          </div>
-
-          <SectionDivider />
-
-          {/* Föräldraskollen */}
-          <VardnadshavareCard studentId={student.id} studentName={`${student.first_name} ${student.last_name}`} />
-
-          <SectionDivider />
-
-          {/* Favoritlärare */}
-          <div>
-            <SectionHeading title="Favoritlärare" />
-            <p className="text-xs text-muted-foreground mb-3">
-              Den valda läraren blir automatiskt förvald när eleven gör en via elevbokning.
-            </p>
-            <div className="flex items-end gap-2">
-              <div className="flex-1 space-y-1">
-                <label className="text-xs text-muted-foreground">Välj favoritlärare</label>
+            {/* Favoritlärare */}
+            <div className="flex flex-col">
+              <EkSubTitle title="Favoritlärare" />
+              <p className="text-xs text-muted-foreground -mt-1 mb-2">
+                Den valda läraren blir automatiskt förvald när eleven gör en via elevbokning.
+              </p>
+              <EkLabel htmlFor="favoritlarare">Välj favoritlärare</EkLabel>
+              <div className="flex gap-2">
                 <select
+                  id="favoritlarare"
                   value={favInstructorId}
                   onChange={(e) => setFavInstructorId(e.target.value)}
-                  className="w-full h-8 px-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                  className={cn(ekInputClass, 'flex-1 min-w-0')}
                 >
                   <option value="">Ingen favoritlärare</option>
                   {allInstructors.map((i) => (
@@ -1987,115 +2319,53 @@ function KundkortTab({
                     </option>
                   ))}
                 </select>
+                <EkButton
+                  onClick={() => {
+                    updateInstructor.mutate(
+                      { id: student.id, input: { assigned_instructor_id: favInstructorId || null } },
+                      { onSuccess: () => toast({ title: 'Favoritlärare sparad' }) },
+                    );
+                  }}
+                  disabled={updateInstructor.isPending}
+                >
+                  {updateInstructor.isPending ? 'Sparar…' : 'Spara'}
+                </EkButton>
               </div>
-              <GreenBtn
-                onClick={() => {
-                  updateInstructor.mutate(
-                    { id: student.id, input: { assigned_instructor_id: favInstructorId || null } },
-                    { onSuccess: () => toast({ title: 'Favoritlärare sparad' }) },
-                  );
-                }}
-                disabled={updateInstructor.isPending}
-              >
-                {updateInstructor.isPending ? 'Sparar…' : 'Spara'}
-              </GreenBtn>
             </div>
           </div>
+        </EkCard>
 
-        </div>
       </div>
 
       {/* ── Right column ────────────────────────────────────── */}
-      <div className="space-y-4 lg:sticky lg:top-4">
-
-        {/* Action icon row */}
-        <div className="flex items-center gap-2">
-          <button className="w-8 h-8 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Kopiera kundinfo">
-            <Copy className="w-3.5 h-3.5" />
-          </button>
-          <button className="w-8 h-8 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Bevakningar">
-            <Bell className="w-3.5 h-3.5" />
-          </button>
-          <button className="w-8 h-8 rounded border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Snabblänkar">
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Nästa lektion */}
-        {nextLesson && (
-          <div className="bg-card border border-primary/20 rounded-lg p-4">
-            <SectionHeading title="Nästa lektion" />
-            <div className="space-y-2">
-              <div>
-                <p className="text-xs font-medium text-foreground capitalize">{nextDateStr}</p>
-                <p className="text-[11px] text-muted-foreground">{nextTimeStr}</p>
-              </div>
-              <BookingStatusBadge status={nextLesson.status} />
-              {!nextTerminal && (
-                <div className="flex gap-3 pt-1">
-                  <button
-                    onClick={() => setRescheduleTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id })}
-                    className="text-xs text-blue-600 hover:underline"
-                  >
-                    Boka om
-                  </button>
-                  <button
-                    onClick={() => setCancelTarget({ bookingId: nextLesson.id, slotId: nextLesson.slot_id, slotLabel: `${nextDateStr} ${nextTimeStr}`, slotStartsAt: nextLesson.starts_at })}
-                    className="text-xs text-red-500 hover:underline"
-                  >
-                    Avboka
-                  </button>
-                </div>
-              )}
-              <Link
-                to={`/scheduling?date=${nextLesson.starts_at.slice(0, 10)}`}
-                className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-              >
-                <Calendar className="w-3 h-3" />
-                Visa i schema
-              </Link>
-            </div>
-          </div>
-        )}
-        {!nextLesson && !upcomingBookings.isLoading && (
-          <div className="bg-card border border-border rounded-lg p-4">
-            <SectionHeading title="Nästa lektion" />
-            <p className="text-xs text-muted-foreground">Inga kommande bokningar.</p>
-          </div>
-        )}
-
-        {/* Training status */}
-        <TrainingStatusCard student={student} />
+      <div className="space-y-5">
 
         {/* Anteckningar */}
-        <div className="bg-card border border-border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <SectionHeading title="Anteckningar" />
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Dölj interna</span>
-              <button
-                onClick={() => setInternalNotes(!internalNotes)}
-                className={cn(
-                  'relative w-8 h-4 rounded-full transition-colors',
-                  internalNotes ? 'bg-action' : 'bg-muted'
-                )}
-              >
-                <span className={cn(
-                  'absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform',
-                  internalNotes ? 'translate-x-4' : 'translate-x-0.5'
-                )} />
-              </button>
-            </div>
-          </div>
+        <EkCard>
+          <EkCardTitle
+            title="Anteckningar"
+            action={
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Dölj interna</span>
+                <EkSwitch
+                  checked={internalNotes}
+                  onToggle={() => setInternalNotes(!internalNotes)}
+                  label="Dölj interna"
+                />
+              </div>
+            }
+          />
           <textarea
             rows={4}
             value={form.notes}
             onChange={(e) => setField('notes', e.target.value)}
             placeholder="Skriv en anteckning..."
-            className="w-full px-2.5 py-2 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            aria-label="Anteckning"
+            className={ekTextareaClass}
           />
-          <div className="mt-2 flex justify-end">
-            <GreenBtn
+          <div className="mt-3 flex justify-end">
+            <EkButton
+              variant="primary"
               onClick={() => updateNotes.mutate(
                 { id: student.id, input: { notes: form.notes || null } },
                 { onSuccess: () => toast({ title: 'Anteckning sparad' }) },
@@ -2103,111 +2373,101 @@ function KundkortTab({
               disabled={updateNotes.isPending}
             >
               {updateNotes.isPending ? 'Sparar...' : 'Spara'}
-            </GreenBtn>
+            </EkButton>
           </div>
-        </div>
+        </EkCard>
 
-        {/* Taggar */}
-        <TagsCard studentId={student.id} />
-
-        {/* Generera nytt lösenord */}
-        <PasswordResetCard
-          studentId={student.id}
-          studentName={fullName}
-          email={student.email ?? null}
-          phone={student.phone ?? null}
-        />
-
-        {/* Student portal invite */}
-        <PortalInviteCard studentId={student.id} studentName={fullName} />
+        {/* Elevportal & inloggning */}
+        <EkCard>
+          <EkCardTitle title="Elevportal & inloggning" />
+          <div className="space-y-5">
+            <PortalInviteCard studentId={student.id} studentName={fullName} />
+            <EkDivider />
+            <PasswordResetCard
+              studentId={student.id}
+              studentName={fullName}
+              email={student.email ?? null}
+              phone={student.phone ?? null}
+            />
+          </div>
+        </EkCard>
 
         {/* Notiser & kommunikation */}
-        <div className="bg-card border border-border rounded-lg p-4">
-          <SectionHeading title="Notiser & kommunikation" />
+        <EkCard>
+          <EkCardTitle title="Notiser & kommunikation" />
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs font-medium text-foreground">SMS-påminnelser</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
+              <p className="text-sm font-medium text-foreground">SMS-påminnelser</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
                 Lektionspåminnelser och bokningsbekräftelser
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => updateOptIn.mutate(
+            <EkSwitch
+              checked={student.communication_opt_in_sms}
+              onToggle={() => updateOptIn.mutate(
                 { id: student.id, input: { communication_opt_in_sms: !student.communication_opt_in_sms } },
                 { onSuccess: () => toast({ title: student.communication_opt_in_sms ? 'SMS-notiser inaktiverade' : 'SMS-notiser aktiverade' }) },
               )}
               disabled={updateOptIn.isPending}
-              className={cn(
-                'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-50',
-                student.communication_opt_in_sms ? 'bg-primary' : 'bg-muted',
-              )}
-              role="switch"
-              aria-checked={student.communication_opt_in_sms}
-            >
-              <span className={cn(
-                'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
-                student.communication_opt_in_sms ? 'translate-x-4' : 'translate-x-0',
-              )} />
-            </button>
+              label="SMS-påminnelser"
+            />
           </div>
           {!student.phone && (
-            <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-2">
-              Inget mobilnummer — SMS kan inte levereras.
-            </p>
+            <div className="mt-3">
+              <EkNotice tone="warning">Inget mobilnummer — SMS kan inte levereras.</EkNotice>
+            </div>
           )}
-        </div>
+        </EkCard>
 
-        {/* Aktivera / Återaktivera kund */}
-        {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused' || student.status === 'archived') && (
-          <div className="bg-card border border-border rounded-lg p-4">
-            <SectionHeading title={student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'} />
-            <p className="text-xs text-muted-foreground mb-3">
-              {student.status === 'archived'
-                ? 'Återaktivera kunden för att återuppta undervisning och bokningar.'
-                : 'Sätt kundens status till Aktiv för att kunna boka lektioner och skapa fakturor.'}
-            </p>
-            <button
-              onClick={onActivate}
-              disabled={activating}
-              className="w-full py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-50"
-            >
-              {activating
-                ? 'Aktiverar...'
-                : student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'}
-            </button>
-          </div>
-        )}
-
-        {/* Arkivera kund — hidden when already archived */}
-        {student.status !== 'archived' && (
-          <div className="bg-card border border-border rounded-lg p-4">
-            <SectionHeading title="Arkivera kund" />
-            {student.status === 'active' && (upcomingBookings.data?.data?.length ?? 0) > 0 ? (
-              <div className="space-y-2">
-                <div className="flex items-start gap-2 p-2.5 bg-red-50 dark:bg-red-950/20 rounded border border-red-100 dark:border-red-900/50">
-                  <AlertTriangle className="w-3.5 h-3.5 text-red-500 mt-0.5 shrink-0" />
-                  <div className="text-xs text-red-700 dark:text-red-400 space-y-1">
-                    <p className="font-medium">{fullName} kan inte arkiveras för tillfället av följande anledningar:</p>
-                    <p>• Kunden har kommande bokningar</p>
-                  </div>
-                </div>
-                <button disabled className="w-full py-1.5 text-xs font-medium rounded bg-red-200 text-red-400 cursor-not-allowed">
-                  Arkivera kund
-                </button>
+        {/* Kundstatus: Aktivera / Återaktivera + Arkivera */}
+        <EkCard>
+          <EkCardTitle title="Kundstatus" />
+          <div className="space-y-4">
+            {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused' || student.status === 'archived') && (
+              <div className="space-y-3">
+                <EkSubTitle title={student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'} />
+                <p className="text-xs text-muted-foreground -mt-1">
+                  {student.status === 'archived'
+                    ? 'Återaktivera kunden för att återuppta undervisning och bokningar.'
+                    : 'Sätt kundens status till Aktiv för att kunna boka lektioner och skapa fakturor.'}
+                </p>
+                <EkButton variant="primary" onClick={onActivate} disabled={activating} className="w-full">
+                  {activating
+                    ? 'Aktiverar...'
+                    : student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'}
+                </EkButton>
               </div>
-            ) : (
-              <button
-                onClick={onArchive}
-                disabled={archiving}
-                className="w-full py-1.5 text-xs font-medium rounded bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
-              >
-                {archiving ? 'Arkiverar...' : 'Arkivera kund'}
-              </button>
+            )}
+
+            {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused') && (
+              <EkDivider />
+            )}
+
+            {/* Arkivera kund — hidden when already archived */}
+            {student.status !== 'archived' && (
+              <div className="space-y-3">
+                <EkSubTitle title="Arkivera kund" />
+                {student.status === 'active' && (upcomingBookings.data?.data?.length ?? 0) > 0 ? (
+                  <>
+                    <EkNotice tone="danger">
+                      <p className="font-medium">{fullName} kan inte arkiveras för tillfället av följande anledningar:</p>
+                      <p className="mt-1">• Kunden har kommande bokningar</p>
+                    </EkNotice>
+                    <EkButton variant="danger" disabled className="w-full">
+                      Arkivera kund
+                    </EkButton>
+                  </>
+                ) : (
+                  <EkButton variant="danger" onClick={onArchive} disabled={archiving} className="w-full">
+                    {archiving ? 'Arkiverar...' : 'Arkivera kund'}
+                  </EkButton>
+                )}
+              </div>
             )}
           </div>
-        )}
+        </EkCard>
 
+      </div>
       </div>
 
       <CancelBookingDialog
@@ -2371,14 +2631,17 @@ function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeo
     (student.risk2_completed_at && stageIdx < STAGE_ORDER.indexOf('risk2_completed'));
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <SectionHeading title="Utbildningsstatus" />
+    <EkCard className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <EkEyebrow>Utbildningsstatus</EkEyebrow>
+        <PermitStageBadge stage={student.permit_stage} />
+      </div>
 
       {/* Progress bar */}
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-2">
         <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
           <div
-            className="h-full bg-green-500 rounded-full transition-all"
+            className="h-full bg-primary-dark dark:bg-foreground/70 rounded-full transition-all"
             style={{ width: `${(completedCount / milestones.length) * 100}%` }}
           />
         </div>
@@ -2387,45 +2650,35 @@ function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeo
         </span>
       </div>
 
-      {/* Permit stage */}
-      <div className="mb-3">
-        <PermitStageBadge stage={student.permit_stage} />
-      </div>
-
       {stagePossiblyStale && (
-        <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-2">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
-            Ett genomfört moment är registrerat men permit-stage har inte uppdaterats manuellt — kontrollera om steget behöver ändras.
-          </p>
-        </div>
+        <EkNotice tone="warning">
+          Ett genomfört moment är registrerat men permit-stage har inte uppdaterats manuellt — kontrollera om steget behöver ändras.
+        </EkNotice>
       )}
 
       {/* Milestone rows */}
-      <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
         {milestones.map(({ label, completedAt }) => (
-          <div key={label} className="flex items-center gap-2">
+          <div key={label} className="flex items-center gap-2 min-w-0">
             {completedAt ? (
-              <div className="w-4 h-4 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
-                <Check className="w-2.5 h-2.5 text-green-600 dark:text-green-400" />
+              <div className="w-4 h-4 rounded-full bg-primary-dark dark:bg-foreground/70 flex items-center justify-center shrink-0">
+                <Check className="w-2.5 h-2.5 text-white dark:text-background" />
               </div>
             ) : (
-              <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center shrink-0">
-                <span className="text-[8px] text-muted-foreground font-bold leading-none">—</span>
-              </div>
+              <div className="w-4 h-4 rounded-full border border-border bg-card shrink-0" />
             )}
-            <span className={cn('text-xs flex-1', completedAt ? 'text-foreground font-medium' : 'text-muted-foreground')}>
+            <span className={cn('text-xs truncate', completedAt ? 'text-foreground font-medium' : 'text-muted-foreground')}>
               {label}
             </span>
             {completedAt && (
-              <span className="text-[10px] text-muted-foreground tabular-nums">
+              <span className="ml-auto text-[10px] text-muted-foreground tabular-nums shrink-0">
                 {formatDate(completedAt)}
               </span>
             )}
           </div>
         ))}
       </div>
-    </div>
+    </EkCard>
   );
 }
 
@@ -6099,23 +6352,28 @@ function AnteckningarTab({ studentId }: { studentId: string }) {
 
 function PageSkeleton() {
   return (
-    <div className="-m-4 md:-m-5">
-      <div className="bg-background border-b border-border px-4 md:px-6 pt-4 pb-0">
-        <div className="h-4 w-48 bg-muted rounded animate-pulse mb-3" />
-        <div className="h-5 w-36 bg-muted rounded animate-pulse mb-3" />
-        <div className="flex gap-2 pb-0">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="h-9 w-20 bg-muted rounded animate-pulse" />
-          ))}
-        </div>
-      </div>
-      <div className="px-4 md:px-6 py-5">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-          <div className="space-y-3">
-            {[1, 2, 3, 4, 5].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
+    <div className="-m-4 md:-m-5 bg-surface min-h-full">
+      <div className="px-4 md:px-6 pt-4 md:pt-5 space-y-4">
+        <div className="bg-card border border-border rounded-lg p-4 md:p-5 flex items-center gap-4">
+          <div className="w-14 h-14 rounded-full bg-muted animate-pulse shrink-0" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 w-48 bg-muted rounded animate-pulse" />
+            <div className="h-6 w-56 bg-muted rounded animate-pulse" />
+            <div className="h-3 w-72 max-w-full bg-muted rounded animate-pulse" />
           </div>
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => <div key={i} className="h-24 bg-muted rounded animate-pulse" />)}
+        </div>
+        <div className="h-11 bg-card border border-border rounded-lg animate-pulse" />
+      </div>
+      <div className="px-4 md:px-6 py-5 space-y-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {[1, 2, 3].map((i) => <div key={i} className="h-32 bg-card border border-border rounded-lg animate-pulse" />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-5">
+          <div className="space-y-5">
+            {[1, 2, 3].map((i) => <div key={i} className="h-56 bg-card border border-border rounded-lg animate-pulse" />)}
+          </div>
+          <div className="space-y-5">
+            {[1, 2, 3].map((i) => <div key={i} className="h-36 bg-card border border-border rounded-lg animate-pulse" />)}
           </div>
         </div>
       </div>
