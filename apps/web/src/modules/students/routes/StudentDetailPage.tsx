@@ -1982,7 +1982,7 @@ function KundkortTab({
   // doing. StudentForm.tsx already gates the same query correctly — this
   // was the one caller that didn't.
   const hasCorporateAccess = useFeatureAccess('corporate:customers:manage');
-  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: hasCorporateAccess });
+  const { data: corporateData } = useCorporateList({ per_page: 100, status: 'active' }, { enabled: hasCorporateAccess });
   const allCompanies = corporateData?.data ?? [];
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
 

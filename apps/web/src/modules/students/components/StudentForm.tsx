@@ -295,7 +295,7 @@ export function StudentForm({ open, onOpenChange, student, onSuccess }: StudentF
   const { data: instructorsData } = useInstructorList({ per_page: 100 }, { enabled: open });
   const instructors = instructorsData?.data ?? [];
   const hasCorporateAccess = useFeatureAccess('corporate:customers:manage');
-  const { data: corporateData } = useCorporateList({ per_page: 200, status: 'active' }, { enabled: open && hasCorporateAccess });
+  const { data: corporateData } = useCorporateList({ per_page: 100, status: 'active' }, { enabled: open && hasCorporateAccess });
   const companies = corporateData?.data ?? [];
 
   useEffect(() => {
