@@ -1703,7 +1703,7 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                     </div>
                     <div className="flex items-center gap-2">
                       <input type="checkbox" id={`edit-canpay-${g.id}`} checked={editCanPay} onChange={(e) => setEditCanPay(e.target.checked)} className="rounded" />
-                      <label htmlFor={`edit-canpay-${g.id}`} className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomiinformation</label>
+                      <label htmlFor={`edit-canpay-${g.id}`} className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomi och betala i portalen</label>
                     </div>
                     <div className="flex gap-2">
                       <EkButton
@@ -1734,15 +1734,17 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
                             Skickad!
                           </span>
                         ) : (
-                          <EkButton
-                            size="sm"
-                            onClick={() => handleInviteAndNotify(g)}
-                            disabled={tokenMut.isPending || sendMessage.isPending}
-                            title="Generera länk och skicka e-postinbjudan"
-                          >
-                            <Mail className="w-3.5 h-3.5" />
-                            Bjud in
-                          </EkButton>
+                          <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                            <EkButton
+                              size="sm"
+                              onClick={() => handleInviteAndNotify(g)}
+                              disabled={tokenMut.isPending || sendMessage.isPending}
+                              title="Generera länk och skicka e-postinbjudan"
+                            >
+                              <Mail className="w-3.5 h-3.5" />
+                              Bjud in
+                            </EkButton>
+                          </PermissionGate>
                         )}
                         <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
                           <EkButton
@@ -1843,7 +1845,7 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
           </div>
           <div className="flex items-center gap-2">
             <input type="checkbox" id="guardian-canpay" checked={canPay} onChange={(e) => setCanPay(e.target.checked)} className="rounded" />
-            <label htmlFor="guardian-canpay" className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomiinformation</label>
+            <label htmlFor="guardian-canpay" className="text-sm text-foreground-secondary cursor-pointer">Kan se ekonomi och betala i portalen</label>
           </div>
           <div className="flex gap-2">
             <EkButton

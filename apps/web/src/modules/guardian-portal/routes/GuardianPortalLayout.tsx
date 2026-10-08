@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   getStoredGuardianSession, storeGuardianSession, clearGuardianSession,
-  useGuardianProgress,
+  useGuardianProgress, GUARDIAN_SESSION_ENDED_EVENT,
   type GuardianSession,
 } from '../hooks/useGuardianPortal.js';
 import { cn } from '@/lib/utils.js';
@@ -394,6 +394,17 @@ export function GuardianPortalLayout() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenParam]);
+
+  // A portal request was rejected with 401 (access removed or link expired):
+  // guardianFetch has already cleared the stored session — leave the portal.
+  useEffect(() => {
+    function onEnded() {
+      setSession(null);
+      setLinkError('Din åtkomst till Föräldraskollen har upphört eller länken har gått ut. Kontakta trafikskolan för en ny länk.');
+    }
+    window.addEventListener(GUARDIAN_SESSION_ENDED_EVENT, onEnded);
+    return () => window.removeEventListener(GUARDIAN_SESSION_ENDED_EVENT, onEnded);
+  }, []);
 
   if (validating) return <PortalLoadingScreen />;
   if (linkError)  return <InvalidLinkScreen message={linkError} />;

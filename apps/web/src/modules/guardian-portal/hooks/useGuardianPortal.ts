@@ -40,6 +40,9 @@ export function clearGuardianSession(): void {
   localStorage.removeItem(SESSION_KEY);
 }
 
+/** Fired when the backend rejects the stored token (guardian removed, link revoked or expired). */
+export const GUARDIAN_SESSION_ENDED_EVENT = 'guardian-session-ended';
+
 // ─── Domain types ─────────────────────────────────────────────────────────────
 
 export interface GuardianMe {
@@ -465,6 +468,13 @@ async function guardianFetch<T>(path: string, options?: RequestInit): Promise<T>
   });
 
   const body = await res.json() as Record<string, unknown>;
+  if (res.status === 401) {
+    // The token no longer resolves (guardian removed in the Elevkort, link
+    // revoked or expired) — end the stored session instead of leaving the
+    // portal shell up with every request failing.
+    clearGuardianSession();
+    window.dispatchEvent(new Event(GUARDIAN_SESSION_ENDED_EVENT));
+  }
   if (!res.ok) {
     throw new Error((body['error'] as string | undefined) ?? `Request failed: ${res.status}`);
   }
