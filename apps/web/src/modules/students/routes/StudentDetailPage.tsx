@@ -6,7 +6,7 @@ import {
   Calendar, BookOpen, ClipboardList, FileText, Tag,
   ExternalLink, Settings, ChevronDown, Pencil, Link2, Loader2,
   Upload, Trash2, Download, ShieldCheck, Eye,
-  Pin, PinOff, Lock, Search,
+  Pin, PinOff, Lock, Search, CheckCircle2, Circle,
 } from 'lucide-react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { supabase } from '@core/api/supabase.js';
@@ -1931,7 +1931,10 @@ function KundkortTab({
 
   function startEditMilestone(key: MilestoneKey, currentValue: string | null) {
     setEditingMilestone(key);
-    setMilestoneDate(currentValue?.slice(0, 10) ?? '');
+    setMilestoneDateValid(true);
+    // Local calendar date, not the UTC slice: an automatically stamped
+    // timestamp like 2026-09-14T23:30Z is 15 Sep in Sweden.
+    setMilestoneDate(currentValue ? new Date(currentValue).toLocaleDateString('sv-SE') : '');
   }
 
   const updateOptIn        = useUpdateStudent();
@@ -2202,6 +2205,7 @@ function KundkortTab({
                 <div>
                   <EkLabel htmlFor="korkort-grupp">Välj grupp</EkLabel>
                   <select
+  const [milestoneDateValid, setMilestoneDateValid] = useState(true);
                     id="korkort-grupp"
                     value={korkortsGrupp}
                     onChange={(e) => setKorkortsGrupp(e.target.value)}
@@ -2254,67 +2258,82 @@ function KundkortTab({
 
         {/* Examinationsmoment */}
         <EkCard id="examinationsmoment">
-          <EkCardTitle title="Examinationsmoment" />
-          <div className="overflow-x-auto -mx-1 px-1">
-            <table className="w-full text-sm min-w-[420px]">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Moment</th>
-                  <th className="text-left py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Datum</th>
-                  <th className="text-right py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Åtgärder</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(
-                  [
-                    { key: 'risk1_completed_at'    as MilestoneKey, label: 'Risk 1',     value: student.risk1_completed_at },
-                    { key: 'risk2_completed_at'    as MilestoneKey, label: 'Risk 2',     value: student.risk2_completed_at },
-                    { key: 'theory_passed_at'      as MilestoneKey, label: 'Teoriprov',  value: student.theory_passed_at },
-                    { key: 'practical_passed_at'   as MilestoneKey, label: 'Uppkörning', value: student.practical_passed_at },
-                  ] as { key: MilestoneKey; label: string; value: string | null }[]
-                ).map(({ key, label, value }) => (
-                  <tr key={key} className="border-b border-border/60 last:border-0">
-                    <td className="py-3 pr-4 font-medium text-foreground">{label}</td>
-                    <td className="py-3 pr-4">
-                      {value ? (
-                        <span className="text-foreground tabular-nums">{formatDate(value)}</span>
-                      ) : (
-                        <span className="text-muted-foreground">Ej genomfört</span>
-                      )}
-                    </td>
-                    <td className="py-3 text-right">
-                      {editingMilestone === key ? (
-                        <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
-                          <input
-                            type="date"
-                            aria-label={`Datum för ${label}`}
-                            value={milestoneDate}
-                            onChange={(e) => setMilestoneDate(e.target.value)}
-                            className={cn(ekInputClass, 'h-8 w-auto')}
-                          />
-                          <EkButton size="sm" variant="primary" onClick={() => void saveMilestone()} disabled={savingMilestone}>
-                            {savingMilestone ? '...' : 'Spara'}
-                          </EkButton>
-                          <EkButton size="sm" variant="ghost" onClick={() => setEditingMilestone(null)}>
-                            Avbryt
-                          </EkButton>
+          {(() => {
+            const moments = [
+              { key: 'risk1_completed_at'  as MilestoneKey, label: 'Risk 1',     value: student.risk1_completed_at,  auto: true },
+              { key: 'risk2_completed_at'  as MilestoneKey, label: 'Risk 2',     value: student.risk2_completed_at,  auto: true },
+              { key: 'theory_passed_at'    as MilestoneKey, label: 'Teoriprov',  value: student.theory_passed_at,    auto: false },
+              { key: 'practical_passed_at' as MilestoneKey, label: 'Uppkörning', value: student.practical_passed_at, auto: false },
+            ];
+            const done = moments.filter((m) => m.value).length;
+            return (
+              <>
+                <EkCardTitle
+                  title="Examinationsmoment"
+                  action={<span className="text-xs font-medium text-muted-foreground tabular-nums">{done} av {moments.length} klara</span>}
+                />
+                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden mb-4" aria-hidden="true">
+                  <div className="h-full rounded-full bg-primary-dark transition-all" style={{ width: `${(done / moments.length) * 100}%` }} />
+                </div>
+                <ul className="divide-y divide-border/60">
+                  {moments.map(({ key, label, value, auto }) => (
+                    <li key={key} className="py-3 first:pt-0 last:pb-0">
+                      <div className="flex items-start gap-3">
+                        {value ? (
+                          <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0 text-primary-dark" aria-hidden="true" />
+                        ) : (
+                          <Circle className="w-5 h-5 mt-0.5 shrink-0 text-muted-foreground/50" aria-hidden="true" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                            <p className="text-sm font-medium text-foreground">{label}</p>
+                            {editingMilestone !== key && (
+                              <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                                <button
+                                  onClick={() => startEditMilestone(key, value)}
+                                  className={cn(ekLinkClass, 'text-sm')}
+                                  aria-label={`${value ? 'Redigera' : 'Registrera'} datum för ${label}`}
+                                >
+                                  {value ? 'Redigera' : 'Registrera'}
+                                </button>
+                              </PermissionGate>
+                            )}
+                          </div>
+                          <p className={cn('text-sm tabular-nums', value ? 'text-foreground-secondary' : 'text-muted-foreground')}>
+                            {value ? `Genomfört ${formatDate(value)}` : 'Ej genomfört'}
+                          </p>
+                          {auto && !value && (
+                            <p className="text-xs text-muted-foreground mt-0.5">Registreras automatiskt när en {label}-lektion markeras som genomförd.</p>
+                          )}
+                          {editingMilestone === key && (
+                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end">
+                              <div className="sm:w-56">
+                                <EkDateInput
+                                  id={`milestone-${key}`}
+                                  label={`Datum för ${label}`}
+                                  value={milestoneDate}
+                                  onChange={setMilestoneDate}
+                                  onValidityChange={setMilestoneDateValid}
+                                />
+                              </div>
+                              <div className="flex gap-2">
+                                <EkButton variant="primary" onClick={() => void saveMilestone()} disabled={savingMilestone || !milestoneDateValid}>
+                                  {savingMilestone ? 'Sparar…' : 'Spara'}
+                                </EkButton>
+                                <EkButton variant="ghost" onClick={() => setEditingMilestone(null)}>
+                                  Avbryt
+                                </EkButton>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
-                          <button
-                            onClick={() => startEditMilestone(key, value)}
-                            className={cn(ekLinkClass, 'text-sm')}
-                          >
-                            {value ? 'Redigera' : 'Registrera'}
-                          </button>
-                        </PermissionGate>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            );
+          })()}
         </EkCard>
 
         {/* Anhöriga & vårdnadshavare */}
