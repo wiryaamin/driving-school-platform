@@ -326,12 +326,14 @@ function EkField({
 // parsed by parsePastedDate (Cmd+V / Ctrl+V both fire the same paste event),
 // and the native calendar is available on demand rather than forced.
 function EkDateInput({
-  id, label, value, onChange,
+  id, label, value, onChange, onValidityChange,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (iso: string) => void;
+  /** false while the field holds a partial or impossible date (parent then has ''), so a save can't silently clear the date. */
+  onValidityChange?: ((valid: boolean) => void) | undefined;
 }) {
   const [text, setText] = useState(value);
   const [hint, setHint] = useState<string | null>(null);
@@ -339,6 +341,9 @@ function EkDateInput({
   // The parent only ever receives a complete valid date or ''. Re-sync from
   // the prop only when it changed externally, so in-progress typing survives.
   const lastEmitted = useRef(value);
+
+  const textValid = text === '' || (text.length === 10 && parsePastedDate(text) !== null);
+  useEffect(() => { onValidityChange?.(textValid); }, [textValid, onValidityChange]);
 
   useEffect(() => {
     if (value !== lastEmitted.current) { lastEmitted.current = value; setText(value); }
@@ -1893,8 +1898,10 @@ function KundkortTab({
   upcomingBookings: ReturnType<typeof useStudentUpcomingBookings>;
 }) {
   const [internalNotes,       setInternalNotes]       = useState(false);
-  const [korkortsGrupp,       setKorkortsGrupp]       = useState('');
-  const [korkortsDatum,       setKorkortsDatum]       = useState('');
+  const [korkortsGrupp,       setKorkortsGrupp]       = useState<string>(student.learner_permit_group ?? '');
+  const [korkortsDatum,       setKorkortsDatum]       = useState(student.learner_permit_expires_on ?? '');
+  const [korkortsAnteckning,  setKorkortsAnteckning]  = useState(student.learner_permit_note ?? '');
+  const [korkortsDatumValid,  setKorkortsDatumValid]  = useState(true);
   const [favInstructorId,     setFavInstructorId]     = useState(student.assigned_instructor_id ?? '');
   const [cancelTarget,        setCancelTarget]        = useState<{ bookingId: string; slotId: string; slotLabel: string; slotStartsAt: string } | null>(null);
   const [rescheduleTarget,    setRescheduleTarget]    = useState<{ bookingId: string; slotId: string } | null>(null);
@@ -1931,6 +1938,41 @@ function KundkortTab({
   const updateInstructor   = useUpdateStudent();
   const updateNotes        = useUpdateStudent();
   const updateCompany      = useUpdateStudent();
+  const updatePermit       = useUpdateStudent();
+
+  // Re-sync when the stored values change (after save / refetch).
+  useEffect(() => {
+    setKorkortsGrupp(student.learner_permit_group ?? '');
+    setKorkortsDatum(student.learner_permit_expires_on ?? '');
+    setKorkortsAnteckning(student.learner_permit_note ?? '');
+  }, [student.learner_permit_group, student.learner_permit_expires_on, student.learner_permit_note]);
+
+  const permitDirty =
+    korkortsGrupp !== (student.learner_permit_group ?? '') ||
+    korkortsDatum !== (student.learner_permit_expires_on ?? '') ||
+    korkortsAnteckning.trim() !== (student.learner_permit_note ?? '');
+
+  // Days until the *saved* expiry date; negative = expired.
+  const permitDaysLeft = student.learner_permit_expires_on
+    ? Math.round((new Date(`${student.learner_permit_expires_on}T00:00:00`).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000)
+    : null;
+
+  function savePermit() {
+    updatePermit.mutate(
+      {
+        id: student.id,
+        input: {
+          learner_permit_group:      korkortsGrupp === 'grupp1' || korkortsGrupp === 'grupp2' ? korkortsGrupp : null,
+          learner_permit_expires_on: korkortsDatum || null,
+          learner_permit_note:       korkortsAnteckning.trim() || null,
+        },
+      },
+      {
+        onSuccess: () => toast({ title: 'Körkortstillstånd sparat' }),
+        onError: (e) => toast({ title: 'Kunde inte spara körkortstillstånd', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
   const [linkedCompanyId, setLinkedCompanyId] = useState(student.corporate_customer_id ?? '');
   // Elevkort is the default tab on the single most-visited page in the app —
   // unconditionally querying a starter-tier-gated endpoint here meant every
@@ -2126,9 +2168,9 @@ function KundkortTab({
           </div>
         </EkCard>
 
-        {/* Behörighet & dokument */}
+        {/* Behörighet & körkortstillstånd */}
         <EkCard>
-          <EkCardTitle title="Behörighet & dokument" />
+          <EkCardTitle title="Behörighet & körkortstillstånd" />
           <div className="space-y-5">
 
             {/* Utbildningsbehörighet */}
@@ -2145,18 +2187,18 @@ function KundkortTab({
 
             <EkDivider />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Körkortstillstånd */}
-              <div className="space-y-3">
-                <EkSubTitle
-                  title="Körkortstillstånd"
-                  action={
-                    <EkButton size="sm">
-                      Trafikverket
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </EkButton>
-                  }
-                />
+            {/* Körkortstillstånd */}
+            <div className="space-y-3">
+              <EkSubTitle
+                title="Körkortstillstånd"
+                action={
+                  <EkButton size="sm">
+                    Trafikverket
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </EkButton>
+                }
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <EkLabel htmlFor="korkort-grupp">Välj grupp</EkLabel>
                   <select
@@ -2175,34 +2217,37 @@ function KundkortTab({
                   label="Välj utgångsdatum"
                   value={korkortsDatum}
                   onChange={setKorkortsDatum}
+                  onValidityChange={setKorkortsDatumValid}
                 />
-                <div>
-                  <EkLabel htmlFor="korkort-anteckning">Anteckning</EkLabel>
-                  <textarea id="korkort-anteckning" rows={2} className={ekTextareaClass} />
-                </div>
-                <EkButton comingSoon>Spara</EkButton>
               </div>
-
-              {/* Legitimation */}
-              <div className="space-y-3">
-                <EkSubTitle title="Legitimation" />
-                <div>
-                  <EkLabel htmlFor="legitimation-typ">Välj legitimation</EkLabel>
-                  <select id="legitimation-typ" className={ekInputClass}>
-                    <option value="">Välj legitimation</option>
-                    <option value="korkort">Körkort</option>
-                    <option value="pass">Pass</option>
-                    <option value="nationellt_id">Nationellt ID-kort</option>
-                    <option value="personnummer">Personnummer</option>
-                  </select>
-                </div>
-                <EkField label="Välj utgångsdatum" value="" placeholder="YYYY-MM-DD" type="date" />
-                <div>
-                  <EkLabel htmlFor="legitimation-anteckning">Anteckning</EkLabel>
-                  <textarea id="legitimation-anteckning" rows={2} className={ekTextareaClass} />
-                </div>
-                <EkButton comingSoon>Spara</EkButton>
+              <div>
+                <EkLabel htmlFor="korkort-anteckning">Anteckning</EkLabel>
+                <textarea
+                  id="korkort-anteckning"
+                  rows={2}
+                  maxLength={2000}
+                  value={korkortsAnteckning}
+                  onChange={(e) => setKorkortsAnteckning(e.target.value)}
+                  className={ekTextareaClass}
+                />
               </div>
+              {student.learner_permit_expires_on && permitDaysLeft !== null && (
+                <EkNotice tone={permitDaysLeft < 0 ? 'danger' : permitDaysLeft <= 60 ? 'warning' : 'neutral'}>
+                  {permitDaysLeft < 0
+                    ? `Körkortstillståndet gick ut ${formatDate(`${student.learner_permit_expires_on}T00:00:00`)}.`
+                    : `Sparat: giltigt t.o.m. ${formatDate(`${student.learner_permit_expires_on}T00:00:00`)}`
+                      + (permitDaysLeft <= 60 ? ` – går ut om ${permitDaysLeft} ${permitDaysLeft === 1 ? 'dag' : 'dagar'}.` : '')}
+                </EkNotice>
+              )}
+              <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                <EkButton
+                  variant="primary"
+                  onClick={savePermit}
+                  disabled={!permitDirty || !korkortsDatumValid || updatePermit.isPending}
+                >
+                  {updatePermit.isPending ? 'Sparar…' : 'Spara'}
+                </EkButton>
+              </PermissionGate>
             </div>
           </div>
         </EkCard>

@@ -70,6 +70,15 @@ const CreateStudentSchema = z.object({
   permit_stage:            z.enum(PERMIT_STAGES).optional(),
   notes:                   z.string().max(5000).nullable().optional(),
   corporate_customer_id:   z.string().uuid().nullable().optional(),
+  learner_permit_group:      z.enum(['grupp1', 'grupp2']).nullable().optional(),
+  learner_permit_expires_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    // Reject impossible calendar dates (e.g. 2027-02-30) as 422 instead of a DB error.
+    .refine((s) => {
+      const d = new Date(`${s}T00:00:00Z`);
+      return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+    }, 'Ogiltigt datum')
+    .nullable().optional(),
+  learner_permit_note:       z.string().max(2000).nullable().optional(),
 });
 
 const UpdateStudentSchema = CreateStudentSchema.partial();

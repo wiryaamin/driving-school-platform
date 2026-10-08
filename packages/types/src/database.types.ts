@@ -576,6 +576,9 @@ export interface Database {
           practical_passed_at:          string | null;
           licence_issued_at:            string | null;
           licence_number:               string | null;
+          learner_permit_group:         'grupp1' | 'grupp2' | null;
+          learner_permit_expires_on:    string | null;
+          learner_permit_note:          string | null;
           user_id:                      string | null;
           created_by:                   string | null;
           updated_by:                   string | null;
@@ -622,6 +625,9 @@ export interface Database {
           practical_passed_at?:          string | null;
           licence_issued_at?:            string | null;
           licence_number?:               string | null;
+          learner_permit_group?:         'grupp1' | 'grupp2' | null;
+          learner_permit_expires_on?:    string | null;
+          learner_permit_note?:          string | null;
           user_id?:                      string | null;
           created_by?:                   string | null;
           updated_by?:                   string | null;

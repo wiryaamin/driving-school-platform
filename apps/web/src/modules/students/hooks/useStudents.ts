@@ -39,6 +39,9 @@ export interface CreateStudentFormValues {
   communication_opt_in_sms?: boolean;
   notes?: string | null;
   corporate_customer_id?: string | null | undefined;
+  learner_permit_group?: 'grupp1' | 'grupp2' | null;
+  learner_permit_expires_on?: string | null;
+  learner_permit_note?: string | null;
 }
 
 export type UpdateStudentFormValues = Partial<CreateStudentFormValues>;

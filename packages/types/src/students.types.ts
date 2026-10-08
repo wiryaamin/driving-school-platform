@@ -78,6 +78,10 @@ export interface Student {
   notes: string | null;
   corporate_customer_id: UUID | null;
 
+  learner_permit_group: 'grupp1' | 'grupp2' | null;
+  learner_permit_expires_on: string | null;
+  learner_permit_note: string | null;
+
   user_id: UUID | null;
 
   created_by: UUID | null;
@@ -118,6 +122,9 @@ export interface CreateStudentInput {
   permit_stage?: PermitStage;
   notes?: string | null;
   corporate_customer_id?: string | null;
+  learner_permit_group?: 'grupp1' | 'grupp2' | null;
+  learner_permit_expires_on?: string | null;
+  learner_permit_note?: string | null;
 }
 
 export type UpdateStudentInput = Partial<CreateStudentInput>;
