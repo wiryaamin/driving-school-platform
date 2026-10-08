@@ -4,7 +4,7 @@ import type { StudentStatus, PermitStage } from '@platform/types';
 // ─── Student Status Badge ─────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<StudentStatus, { label: string; className: string }> = {
-  lead:       { label: 'Prospekt',   className: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-900/40' },
+  lead:       { label: 'Ny',         className: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-900/40' },
   onboarding: { label: 'Onboarding', className: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/20 dark:text-violet-400 dark:border-violet-900/40' },
   active:     { label: 'Aktiv',      className: 'bg-green-100 text-green-700 border-transparent dark:bg-green-900/30 dark:text-green-400' },
   paused:     { label: 'Pausad',     className: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-900/40' },
@@ -27,7 +27,7 @@ export function studentStatusLabel(status: StudentStatus): string {
 }
 
 export const STUDENT_STATUS_OPTIONS: { value: StudentStatus; label: string }[] = [
-  { value: 'lead',       label: 'Prospekt' },
+  { value: 'lead',       label: 'Ny' },
   { value: 'onboarding', label: 'Onboarding' },
   { value: 'active',     label: 'Aktiv' },
   { value: 'paused',     label: 'Pausad' },

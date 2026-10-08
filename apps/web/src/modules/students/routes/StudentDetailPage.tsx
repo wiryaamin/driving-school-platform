@@ -32,6 +32,7 @@ import {
   useStudentMilestones, useRecordMilestone,
   type StudentAssessment,
   type PermitMilestoneKey,
+  type PermitStage,
 } from '../hooks/useStudents.js';
 import {
   useStudentNotes, useCreateNote, useUpdateNote, useDeleteNote,
@@ -40,7 +41,7 @@ import {
   type StudentNote,
 } from '../hooks/useStudentNotes.js';
 import { ContractSheet } from '../components/ContractSheet.js';
-import { StudentStatusBadge, PermitStageBadge } from '../components/StudentStatusBadge.js';
+import { StudentStatusBadge, PermitStageBadge, permitStageLabel } from '../components/StudentStatusBadge.js';
 import { StudentTrainingPlanPanel } from '@modules/curriculum/index.js';
 import { StudentForm } from '../components/StudentForm.js';
 import { useGeneratePortalToken } from '@modules/student-portal/index.js';
@@ -253,9 +254,9 @@ const ekLinkClass =
   'font-medium text-foreground underline decoration-border underline-offset-4 ' +
   'hover:decoration-foreground transition-colors';
 
-function EkCard({ children, className }: { children: React.ReactNode; className?: string }) {
+function EkCard({ children, className, id }: { children: React.ReactNode; className?: string; id?: string }) {
   return (
-    <section className={cn('bg-card border border-border rounded-lg p-5', className)}>
+    <section id={id} className={cn('bg-card border border-border rounded-lg p-5 scroll-mt-4', className)}>
       {children}
     </section>
   );
@@ -594,6 +595,7 @@ export function StudentDetailPage() {
   const [activeTab,   setActiveTab]   = useState<DetailTab>('elevkort');
   const [editOpen,    setEditOpen]    = useState(false);
   const [bookingOpen, setBookingOpen] = useState(false);
+  const [termsOpen,   setTermsOpen]   = useState(false);
 
   const { data: student, isLoading, error } = useStudent(id ?? null);
   const upcomingBookings = useStudentUpcomingBookings(student?.id);
@@ -726,7 +728,7 @@ export function StudentDetailPage() {
                 <span>
                   <span className="font-medium text-foreground-secondary">Senaste aktivitet:</span> {formatDateTime(student.updated_at)}
                 </span>
-                <button className={cn(ekLinkClass, 'text-xs')}>Användarvillkor</button>
+                <button onClick={() => setTermsOpen(true)} className={cn(ekLinkClass, 'text-xs')}>Användarvillkor</button>
               </div>
             </div>
           </div>
@@ -831,6 +833,13 @@ export function StudentDetailPage() {
 
       {/* Dialogs */}
       <StudentForm open={editOpen} onOpenChange={setEditOpen} student={student} />
+      <TermsAcceptanceDialog
+        open={termsOpen}
+        onOpenChange={setTermsOpen}
+        studentId={student.id}
+        organizationId={student.organization_id}
+        firstName={student.first_name}
+      />
       <StudentBookingDialog
         open={bookingOpen}
         onClose={() => setBookingOpen(false)}
@@ -838,6 +847,105 @@ export function StudentDetailPage() {
         studentName={fullName}
       />
     </div>
+  );
+}
+
+// ─── Terms acceptance dialog ──────────────────────────────────────────────────
+// Shows whether the student accepted the school's Användarvillkor in the
+// student portal, plus the current terms text. Only the acceptance date is
+// shown: the portal always records terms_version '1.0', so it isn't meaningful.
+
+function TermsAcceptanceDialog({
+  open, onOpenChange, studentId, organizationId, firstName,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  studentId: string;
+  organizationId: string;
+  firstName: string;
+}) {
+  const acceptance = useQuery<{ accepted_at: string } | null>({
+    queryKey: ['student-terms-acceptance', studentId],
+    enabled: open,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_terms_acceptances')
+        .select('accepted_at')
+        .eq('student_id', studentId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data ?? null) as { accepted_at: string } | null;
+    },
+  });
+
+  const terms = useQuery<string>({
+    queryKey: ['org-terms-of-service', organizationId],
+    enabled: open,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('settings')
+        .eq('id', organizationId)
+        .single();
+      if (error) throw new Error(error.message);
+      const settings = (data as { settings?: Record<string, unknown> }).settings ?? {};
+      const legal = (settings['legal'] ?? {}) as { terms_of_service?: string };
+      return legal.terms_of_service ?? '';
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Användarvillkor</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-1">
+          {acceptance.isLoading ? (
+            <div className="h-12 bg-muted rounded-md animate-pulse" />
+          ) : acceptance.isError ? (
+            <EkNotice tone="danger">Kunde inte hämta godkännandestatus.</EkNotice>
+          ) : acceptance.data ? (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+              <Check className="w-4 h-4 text-foreground shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-foreground">Godkända av {firstName}</p>
+                <p className="text-xs text-muted-foreground">{formatDateTime(acceptance.data.accepted_at)}</p>
+              </div>
+            </div>
+          ) : (
+            <EkNotice tone="warning">
+              <p className="font-medium text-foreground">{firstName} har ännu inte godkänt villkoren.</p>
+              <p className="mt-0.5">Villkoren godkänns vid inloggning i elevportalen.</p>
+            </EkNotice>
+          )}
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Skolans användarvillkor</p>
+            {terms.isLoading ? (
+              <div className="h-24 bg-muted rounded-md animate-pulse" />
+            ) : terms.isError ? (
+              <EkNotice tone="danger">Kunde inte hämta villkoren.</EkNotice>
+            ) : terms.data ? (
+              <div className="max-h-64 overflow-y-auto rounded-md border border-border p-3 text-sm text-foreground whitespace-pre-wrap">
+                {terms.data}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Skolan har inte fyllt i några användarvillkor ännu.</p>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Link to="/settings/legal" className={cn(ekLinkClass, 'text-sm self-center')}>
+            Redigera villkor under Inställningar → Juridik
+          </Link>
+          <EkButton onClick={() => onOpenChange(false)}>Stäng</EkButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -2100,7 +2208,7 @@ function KundkortTab({
         </EkCard>
 
         {/* Examinationsmoment */}
-        <EkCard>
+        <EkCard id="examinationsmoment">
           <EkCardTitle title="Examinationsmoment" />
           <div className="overflow-x-auto -mx-1 px-1">
             <table className="w-full text-sm min-w-[420px]">
@@ -2425,8 +2533,7 @@ function KundkortTab({
           <div className="space-y-4">
             {(student.status === 'lead' || student.status === 'onboarding' || student.status === 'paused' || student.status === 'archived') && (
               <div className="space-y-3">
-                <EkSubTitle title={student.status === 'archived' ? 'Återaktivera kund' : 'Aktivera kund'} />
-                <p className="text-xs text-muted-foreground -mt-1">
+                <p className="text-xs text-muted-foreground">
                   {student.status === 'archived'
                     ? 'Återaktivera kunden för att återuppta undervisning och bokningar.'
                     : 'Sätt kundens status till Aktiv för att kunna boka lektioner och skapa fakturor.'}
@@ -2446,7 +2553,6 @@ function KundkortTab({
             {/* Arkivera kund — hidden when already archived */}
             {student.status !== 'archived' && (
               <div className="space-y-3">
-                <EkSubTitle title="Arkivera kund" />
                 {student.status === 'active' && (upcomingBookings.data?.data?.length ?? 0) > 0 ? (
                   <>
                     <EkNotice tone="danger">
@@ -2625,17 +2731,89 @@ function TrainingStatusCard({ student }: { student: NonNullable<ReturnType<typeo
   // invent an automatic permit-stage mapping"). This only flags the case
   // where the two have visibly diverged, using stage names that already
   // exist 1:1 with these timestamps — it never changes permit_stage itself.
-  const stageIdx = stageIndex(student.permit_stage);
+  const updateStage = useUpdateStudent();
+  const [editing, setEditing] = useState(false);
+  // The saved stage from the PATCH response, shown until the refetched
+  // student catches up — otherwise the badge (and the editor's preselect)
+  // lags behind the "uppdaterat" toast.
+  const [savedStage, setSavedStage] = useState<PermitStage | null>(null);
+  useEffect(() => { setSavedStage(null); }, [student.permit_stage]);
+  const currentStage = savedStage ?? student.permit_stage;
+  const [draftStage, setDraftStage] = useState<PermitStage>(currentStage);
+
+  const stageIdx = stageIndex(currentStage);
   const stagePossiblyStale =
     (student.risk1_completed_at && stageIdx < STAGE_ORDER.indexOf('risk1_completed')) ||
     (student.risk2_completed_at && stageIdx < STAGE_ORDER.indexOf('risk2_completed'));
+
+  function startEdit() {
+    setDraftStage(currentStage);
+    setEditing(true);
+  }
+
+  function saveStage() {
+    if (draftStage === currentStage) { setEditing(false); return; }
+    updateStage.mutate(
+      { id: student.id, input: { permit_stage: draftStage } },
+      {
+        onSuccess: (updated) => {
+          setSavedStage(updated.permit_stage);
+          toast({ title: 'Utbildningssteg uppdaterat' });
+          setEditing(false);
+        },
+        onError: (e) => toast({ title: 'Kunde inte spara utbildningssteg', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
 
   return (
     <EkCard className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <EkEyebrow>Utbildningsstatus</EkEyebrow>
-        <PermitStageBadge stage={student.permit_stage} />
+        {!editing && (
+          <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+            <button onClick={startEdit} className={cn(ekLinkClass, 'text-xs inline-flex items-center gap-1')}>
+              <Pencil className="w-3 h-3" />
+              Ändra
+            </button>
+          </PermissionGate>
+        )}
       </div>
+
+      {editing ? (
+        <div className="space-y-2">
+          <EkLabel htmlFor="utbildningssteg">Utbildningssteg</EkLabel>
+          <select
+            id="utbildningssteg"
+            value={draftStage}
+            onChange={(e) => setDraftStage(e.target.value as PermitStage)}
+            disabled={updateStage.isPending}
+            className={ekInputClass}
+          >
+            {STAGE_ORDER.map((s) => (
+              <option key={s} value={s}>{permitStageLabel(s)}</option>
+            ))}
+          </select>
+          <div className="flex flex-wrap items-center gap-2">
+            <EkButton size="sm" variant="primary" onClick={saveStage} disabled={updateStage.isPending}>
+              {updateStage.isPending ? 'Sparar...' : 'Spara'}
+            </EkButton>
+            <EkButton size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={updateStage.isPending}>
+              Avbryt
+            </EkButton>
+          </div>
+          <button
+            onClick={() => document.getElementById('examinationsmoment')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className={cn(ekLinkClass, 'text-xs')}
+          >
+            Ändra datum för moment under Examinationsmoment →
+          </button>
+        </div>
+      ) : (
+        <div>
+          <PermitStageBadge stage={currentStage} />
+        </div>
+      )}
 
       {/* Progress bar */}
       <div className="flex items-center gap-2">
@@ -4299,7 +4477,7 @@ const TIMELINE_MILESTONE_SV: Record<string, string> = {
 };
 
 const STUDENT_STATUS_SV: Record<string, string> = {
-  lead:       'Prospekt',
+  lead:       'Ny',
   onboarding: 'Onboarding',
   active:     'Aktiv',
   paused:     'Pausad',

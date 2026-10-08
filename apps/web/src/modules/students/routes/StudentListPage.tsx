@@ -632,13 +632,18 @@ export function StudentListPage() {
   const isFilterTab = activeTab === 'filter';
   const currentStatusTab = STATUS_TABS.find((t) => t.key === activeTab);
 
-  // Build query: use status tab params OR applied filter params
-  const query = isFilterTab
-    ? filterToQuery(appliedFilter)
-    : {
-        ...(currentStatusTab?.status !== undefined ? { status: currentStatusTab.status } : {}),
-        ...(debouncedSearch ? { search: debouncedSearch } : {}),
-      };
+  // Build query: use status tab params OR applied filter params. Newest
+  // students first, requested explicitly rather than relying on the API default.
+  const query = {
+    ...(isFilterTab
+      ? filterToQuery(appliedFilter)
+      : {
+          ...(currentStatusTab?.status !== undefined ? { status: currentStatusTab.status } : {}),
+          ...(debouncedSearch ? { search: debouncedSearch } : {}),
+        }),
+    sort_by:  'created_at' as const,
+    sort_dir: 'desc' as const,
+  };
 
   const { data, isLoading, error, refetch } = useStudentList(query);
 
