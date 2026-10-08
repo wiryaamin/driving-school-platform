@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Home, ChevronRight, Copy, Check, Bell, AlertTriangle,
+  Home, ChevronLeft, ChevronRight, Copy, Check, Bell, AlertTriangle,
   Plus, Mail, MessageSquare, Car, Bus, Truck, X,
   Calendar, BookOpen, ClipboardList, FileText, Tag,
   ExternalLink, Settings, ChevronDown, Pencil, Link2, Loader2,
@@ -9,6 +9,11 @@ import {
   Pin, PinOff, Lock, Search, CheckCircle2, Circle,
 } from 'lucide-react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import {
+  format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval,
+  addMonths, addDays, isSameMonth, getISOWeek,
+} from 'date-fns';
+import { sv } from 'date-fns/locale';
 import { supabase } from '@core/api/supabase.js';
 import { StudentFinancePanel } from '@modules/finance/components/StudentFinancePanel.js';
 import { StudentPackagePanel } from '@modules/packages/index.js';
@@ -322,11 +327,169 @@ function EkField({
   );
 }
 
+// ─── Elevkort calendar ────────────────────────────────────────────────────────
+// Trafikcloud-styled month calendar used by EkDateInput instead of the
+// browser's native date popup (which looks different in every browser and
+// cannot follow the Elevkort design). Monday-first weeks with ISO week
+// numbers, Swedish labels, full keyboard support.
+
+const isoToDate = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1);
+};
+const dateToIso = (d: Date) => format(d, 'yyyy-MM-dd');
+
+function EkCalendar({
+  value, onSelect, onClear, onClose,
+}: {
+  value: string;
+  onSelect: (iso: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const todayIso = dateToIso(new Date());
+  const initial = value || todayIso;
+  const [view, setView]       = useState(() => startOfMonth(isoToDate(initial)));
+  const [focused, setFocused] = useState(initial);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Keep keyboard focus on the focused day as it moves (incl. across months).
+  useEffect(() => {
+    gridRef.current?.querySelector<HTMLButtonElement>(`[data-iso="${focused}"]`)?.focus();
+  }, [focused, view]);
+
+  const days = eachDayOfInterval({
+    start: startOfWeek(startOfMonth(view), { weekStartsOn: 1 }),
+    end:   endOfWeek(endOfMonth(view), { weekStartsOn: 1 }),
+  });
+  const weeks: Date[][] = [];
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+
+  function moveFocus(next: Date) {
+    const iso = dateToIso(next);
+    setFocused(iso);
+    const d = isoToDate(iso);
+    if (!isSameMonth(d, view)) setView(startOfMonth(d));
+  }
+
+  function onGridKeyDown(e: React.KeyboardEvent) {
+    const cur = isoToDate(focused);
+    const map: Record<string, () => Date> = {
+      ArrowLeft:  () => addDays(cur, -1),
+      ArrowRight: () => addDays(cur, 1),
+      ArrowUp:    () => addDays(cur, -7),
+      ArrowDown:  () => addDays(cur, 7),
+      PageUp:     () => addMonths(cur, -1),
+      PageDown:   () => addMonths(cur, 1),
+      Home:       () => startOfWeek(cur, { weekStartsOn: 1 }),
+      End:        () => endOfWeek(cur, { weekStartsOn: 1 }),
+    };
+    const fn = map[e.key];
+    if (fn) { e.preventDefault(); moveFocus(fn()); }
+  }
+
+  const monthTitle = format(view, 'LLLL yyyy', { locale: sv });
+  return (
+    <div
+      role="dialog"
+      aria-label="Välj datum"
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
+      className="absolute left-0 top-full z-50 mt-1.5 w-[19.5rem] max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
+    >
+      <div className="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          onClick={() => setView((v) => addMonths(v, -1))}
+          aria-label="Föregående månad"
+          className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <p className="text-sm font-semibold text-foreground first-letter:uppercase" aria-live="polite">{monthTitle}</p>
+        <button
+          type="button"
+          onClick={() => setView((v) => addMonths(v, 1))}
+          aria-label="Nästa månad"
+          className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div ref={gridRef} role="grid" aria-label={monthTitle} onKeyDown={onGridKeyDown} className="text-center">
+        <div role="row" className="grid grid-cols-[1.75rem_repeat(7,1fr)] mb-1">
+          <span className="text-[10px] font-medium text-muted-foreground/70 leading-7" aria-hidden="true">v.</span>
+          {['mån', 'tis', 'ons', 'tor', 'fre', 'lör', 'sön'].map((d) => (
+            <span key={d} role="columnheader" className="text-[11px] font-medium text-muted-foreground leading-7">{d}</span>
+          ))}
+        </div>
+        {weeks.map((week) => (
+          <div key={dateToIso(week[0]!)} role="row" className="grid grid-cols-[1.75rem_repeat(7,1fr)]">
+            <span className="text-[10px] text-muted-foreground/70 leading-9 tabular-nums" aria-hidden="true">{getISOWeek(week[0]!)}</span>
+            {week.map((d) => {
+              const iso      = dateToIso(d);
+              const selected = iso === value;
+              const today    = iso === todayIso;
+              const inMonth  = isSameMonth(d, view);
+              return (
+                <div key={iso} role="gridcell" className="flex items-center justify-center py-0.5">
+                  <button
+                    type="button"
+                    data-iso={iso}
+                    tabIndex={iso === focused ? 0 : -1}
+                    aria-pressed={selected}
+                    aria-current={today ? 'date' : undefined}
+                    aria-label={format(d, 'EEEE d MMMM yyyy', { locale: sv })}
+                    onClick={() => onSelect(iso)}
+                    className={cn(
+                      'w-8 h-8 rounded-md text-sm tabular-nums transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+                      selected
+                        ? 'bg-primary-dark text-white font-semibold'
+                        : cn(
+                            inMonth ? 'text-foreground' : 'text-muted-foreground/50',
+                            'hover:bg-muted',
+                            today && 'ring-1 ring-inset ring-primary-dark/40 font-semibold',
+                          ),
+                    )}
+                  >
+                    {format(d, 'd')}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-2 pt-2 border-t border-border flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => onSelect(todayIso)}
+          className="h-8 px-2.5 rounded-md text-xs font-medium text-foreground hover:bg-muted transition-colors"
+        >
+          Idag
+        </button>
+        {value && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="h-8 px-2.5 rounded-md text-xs font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            Rensa datum
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Text-first date field: typing auto-formats to ÅÅÅÅ-MM-DD, pasted text is
 // parsed by parsePastedDate (Cmd+V / Ctrl+V both fire the same paste event),
-// and the native calendar is available on demand rather than forced.
+// and a calendar is available on demand rather than forced. By default that
+// is the browser's native picker; calendar="elevkort" opts a field into the
+// Trafikcloud-styled EkCalendar instead (currently only Examinationsmoment).
 function EkDateInput({
-  id, label, value, onChange, onValidityChange,
+  id, label, value, onChange, onValidityChange, calendar = 'native',
 }: {
   id: string;
   label: string;
@@ -334,16 +497,30 @@ function EkDateInput({
   onChange: (iso: string) => void;
   /** false while the field holds a partial or impossible date (parent then has ''), so a save can't silently clear the date. */
   onValidityChange?: ((valid: boolean) => void) | undefined;
+  calendar?: 'native' | 'elevkort';
 }) {
   const [text, setText] = useState(value);
   const [hint, setHint] = useState<string | null>(null);
   const pickerRef = useRef<HTMLInputElement>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef   = useRef<HTMLInputElement>(null);
   // The parent only ever receives a complete valid date or ''. Re-sync from
   // the prop only when it changed externally, so in-progress typing survives.
   const lastEmitted = useRef(value);
 
   const textValid = text === '' || (text.length === 10 && parsePastedDate(text) !== null);
   useEffect(() => { onValidityChange?.(textValid); }, [textValid, onValidityChange]);
+
+  // Close the Elevkort calendar on an outside click.
+  useEffect(() => {
+    if (!calendarOpen) return;
+    function onDown(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setCalendarOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [calendarOpen]);
 
   useEffect(() => {
     if (value !== lastEmitted.current) { lastEmitted.current = value; setText(value); }
@@ -393,12 +570,18 @@ function EkDateInput({
     try { el.showPicker(); } catch { el.focus(); el.click(); }
   }
 
+  function closeCalendar() {
+    setCalendarOpen(false);
+    inputRef.current?.focus();
+  }
+
   const hintId = `${id}-hint`;
   return (
     <div>
       <EkLabel htmlFor={id}>{label}</EkLabel>
-      <div className="relative">
+      <div className="relative" ref={wrapperRef}>
         <input
+          ref={inputRef}
           id={id}
           type="text"
           inputMode="numeric"
@@ -413,24 +596,53 @@ function EkDateInput({
           aria-describedby={hint ? hintId : undefined}
           className={cn(ekInputClass, 'pr-10 tabular-nums', hint && 'border-destructive focus:border-destructive focus:ring-destructive/20')}
         />
-        <button
-          type="button"
-          onClick={openPicker}
-          title="Välj i kalender"
-          aria-label="Välj i kalender"
-          className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        >
-          <Calendar className="w-4 h-4" />
-        </button>
-        <input
-          ref={pickerRef}
-          type="date"
-          tabIndex={-1}
-          aria-hidden="true"
-          value={text.length === 10 && parsePastedDate(text) ? text : ''}
-          onChange={(e) => { if (e.target.value) commit(e.target.value); }}
-          className="absolute right-1 bottom-0 w-7 h-0 opacity-0 pointer-events-none"
-        />
+        {calendar === 'elevkort' ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setCalendarOpen((o) => !o)}
+              title="Välj i kalender"
+              aria-label="Välj i kalender"
+              aria-haspopup="dialog"
+              aria-expanded={calendarOpen}
+              className={cn(
+                'absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded transition-colors',
+                calendarOpen ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+              )}
+            >
+              <Calendar className="w-4 h-4" />
+            </button>
+            {calendarOpen && (
+              <EkCalendar
+                value={textValid && text.length === 10 ? text : ''}
+                onSelect={(iso) => { commit(iso); closeCalendar(); }}
+                onClear={() => { commit(''); closeCalendar(); }}
+                onClose={closeCalendar}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={openPicker}
+              title="Välj i kalender"
+              aria-label="Välj i kalender"
+              className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <Calendar className="w-4 h-4" />
+            </button>
+            <input
+              ref={pickerRef}
+              type="date"
+              tabIndex={-1}
+              aria-hidden="true"
+              value={text.length === 10 && parsePastedDate(text) ? text : ''}
+              onChange={(e) => { if (e.target.value) commit(e.target.value); }}
+              className="absolute right-1 bottom-0 w-7 h-0 opacity-0 pointer-events-none"
+            />
+          </>
+        )}
       </div>
       {hint && <p id={hintId} className="mt-1 text-xs text-destructive">{hint}</p>}
     </div>
@@ -2555,6 +2767,7 @@ function KundkortTab({
                                   value={milestoneDate}
                                   onChange={setMilestoneDate}
                                   onValidityChange={setMilestoneDateValid}
+                                  calendar="elevkort"
                                 />
                               </div>
                               <div className="flex gap-2">
