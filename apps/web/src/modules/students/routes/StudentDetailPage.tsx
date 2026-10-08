@@ -1868,6 +1868,296 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
   );
 }
 
+// ─── Anhöriga (emergency contacts) ────────────────────────────────────────────
+// student_emergency_contacts, read/written directly under its existing RLS
+// (read: students:student:read, write: students:student:update, own org only).
+
+type EmgRelationship = 'parent' | 'guardian' | 'spouse' | 'sibling' | 'other';
+type EmgContact = { id: string; full_name: string; phone: string; email: string | null; relationship: string; is_primary: boolean };
+type EmgDraft = { full_name: string; phone: string; email: string; relationship: EmgRelationship; is_primary: boolean };
+
+const EMG_RELATIONSHIPS: { value: EmgRelationship; label: string }[] = [
+  { value: 'parent',   label: 'Förälder' },
+  { value: 'guardian', label: 'Vårdnadshavare' },
+  { value: 'spouse',   label: 'Partner' },
+  { value: 'sibling',  label: 'Syskon' },
+  { value: 'other',    label: 'Annan' },
+];
+const emgRelationshipLabel = (v: string) => EMG_RELATIONSHIPS.find((r) => r.value === v)?.label ?? 'Annan';
+const EMPTY_EMG_DRAFT: EmgDraft = { full_name: '', phone: '', email: '', relationship: 'parent', is_primary: false };
+
+function emgDraftError(d: EmgDraft): string | null {
+  if (!d.full_name.trim()) return 'Ange namn.';
+  if (d.phone.replace(/\D/g, '').length < 6) return 'Ange ett giltigt telefonnummer.';
+  if (d.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email.trim())) return 'Ange en giltig e-postadress.';
+  return null;
+}
+
+function EmgContactForm({
+  idPrefix, draft, onChange, onSubmit, onCancel, submitLabel, pending,
+}: {
+  idPrefix: string;
+  draft: EmgDraft;
+  onChange: (d: EmgDraft) => void;
+  onSubmit: () => void;
+  onCancel?: (() => void) | undefined;
+  submitLabel: string;
+  pending: boolean;
+}) {
+  const [touched, setTouched] = useState(false);
+  const error = emgDraftError(draft);
+  const set = <K extends keyof EmgDraft>(k: K, v: EmgDraft[K]) => onChange({ ...draft, [k]: v });
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="sm:col-span-2">
+          <EkLabel htmlFor={`${idPrefix}-name`}>Namn *</EkLabel>
+          <input id={`${idPrefix}-name`} value={draft.full_name} onChange={(e) => set('full_name', e.target.value)} placeholder="För- och efternamn" className={ekInputClass} />
+        </div>
+        <div>
+          <EkLabel htmlFor={`${idPrefix}-phone`}>Telefonnummer *</EkLabel>
+          <input id={`${idPrefix}-phone`} type="tel" value={draft.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+46 70 000 00 00" className={ekInputClass} />
+        </div>
+        <div>
+          <EkLabel htmlFor={`${idPrefix}-email`}>E-postadress</EkLabel>
+          <input id={`${idPrefix}-email`} type="email" value={draft.email} onChange={(e) => set('email', e.target.value)} placeholder="valfritt" className={ekInputClass} />
+        </div>
+        <div>
+          <EkLabel htmlFor={`${idPrefix}-relationship`}>Relation</EkLabel>
+          <select id={`${idPrefix}-relationship`} value={draft.relationship} onChange={(e) => set('relationship', e.target.value as EmgRelationship)} className={ekInputClass}>
+            {EMG_RELATIONSHIPS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-2 sm:pt-6">
+          <input type="checkbox" id={`${idPrefix}-primary`} checked={draft.is_primary} onChange={(e) => set('is_primary', e.target.checked)} className="rounded" />
+          <label htmlFor={`${idPrefix}-primary`} className="text-sm text-foreground-secondary cursor-pointer">Primärkontakt</label>
+        </div>
+      </div>
+      {touched && error && <p className="text-xs text-destructive" role="alert">{error}</p>}
+      <div className="flex flex-wrap gap-2">
+        <EkButton
+          variant="primary"
+          onClick={() => { setTouched(true); if (!error) onSubmit(); }}
+          disabled={pending}
+        >
+          {pending ? 'Sparar…' : submitLabel}
+        </EkButton>
+        {onCancel && <EkButton onClick={onCancel}>Avbryt</EkButton>}
+      </div>
+    </div>
+  );
+}
+
+function AnhorigaSection({ studentId, organizationId }: { studentId: string; organizationId: string }) {
+  const queryClient = useQueryClient();
+  const qKey = ['student-emergency-contacts', studentId] as const;
+  const [adding, setAdding]       = useState(false);
+  const [newDraft, setNewDraft]   = useState<EmgDraft>(EMPTY_EMG_DRAFT);
+  const [editId, setEditId]       = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EmgDraft>(EMPTY_EMG_DRAFT);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  const contacts = useQuery<EmgContact[]>({
+    queryKey: qKey,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .select('id, full_name, phone, email, relationship, is_primary')
+        .eq('student_id', studentId)
+        .order('created_at');
+      if (error) throw new Error(error.message);
+      return (data ?? []) as EmgContact[];
+    },
+  });
+
+  // Only one primary contact per student: clear the flag on the others first.
+  async function clearOtherPrimaries(exceptId: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q = (supabase as unknown as any)
+      .from('student_emergency_contacts')
+      .update({ is_primary: false })
+      .eq('student_id', studentId)
+      .eq('is_primary', true);
+    if (exceptId) q = q.neq('id', exceptId);
+    const { error } = await q;
+    if (error) throw new Error(error.message);
+  }
+
+  const toRow = (d: EmgDraft) => ({
+    full_name:    d.full_name.trim(),
+    phone:        d.phone.trim(),
+    email:        d.email.trim() || null,
+    relationship: d.relationship,
+    is_primary:   d.is_primary,
+  });
+
+  const addMut = useMutation({
+    mutationFn: async (d: EmgDraft) => {
+      if (d.is_primary) await clearOtherPrimaries(null);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .insert({ student_id: studentId, organization_id: organizationId, ...toRow(d) });
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qKey });
+      setNewDraft(EMPTY_EMG_DRAFT); setAdding(false);
+      toast({ title: 'Anhörig tillagd' });
+    },
+    onError: (e: Error) => toast({ title: 'Kunde inte lägga till anhörig', description: e.message, variant: 'destructive' }),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: async ({ id, d }: { id: string; d: EmgDraft }) => {
+      if (d.is_primary) await clearOtherPrimaries(id);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .update(toRow(d))
+        .eq('id', id)
+        .select('id');
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) throw new Error('Behörighet saknas eller kontakten finns inte längre.');
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qKey });
+      setEditId(null);
+      toast({ title: 'Anhörig uppdaterad' });
+    },
+    onError: (e: Error) => toast({ title: 'Kunde inte spara anhörig', description: e.message, variant: 'destructive' }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('student_emergency_contacts')
+        .delete()
+        .eq('id', id)
+        .select('id');
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) throw new Error('Behörighet saknas eller kontakten finns inte längre.');
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: qKey });
+      setConfirmId(null);
+      toast({ title: 'Anhörig borttagen' });
+    },
+    onError: (e: Error) => toast({ title: 'Kunde inte ta bort anhörig', description: e.message, variant: 'destructive' }),
+  });
+
+  const list = contacts.data ?? [];
+
+  return (
+    <div>
+      <EkSubTitle title="Anhöriga personer" />
+      <p className="text-xs text-muted-foreground -mt-1 mb-3">
+        Personer som skolan ska kontakta i en nödsituation.
+      </p>
+
+      {contacts.isLoading ? (
+        <div className="h-12 w-full bg-muted rounded-md animate-pulse mb-3" />
+      ) : contacts.isError ? (
+        <div className="mb-3"><EkNotice tone="danger">Kunde inte hämta anhöriga. Ladda om sidan och försök igen.</EkNotice></div>
+      ) : list.length === 0 ? (
+        <p className="text-sm text-muted-foreground mb-3">Inga anhöriga registrerade.</p>
+      ) : (
+        <ul className="space-y-2 mb-3">
+          {list.map((c) => (
+            <li key={c.id} className="border border-border rounded-md p-3">
+              {editId === c.id ? (
+                <EmgContactForm
+                  idPrefix={`emg-edit-${c.id}`}
+                  draft={editDraft}
+                  onChange={setEditDraft}
+                  onSubmit={() => updateMut.mutate({ id: c.id, d: editDraft })}
+                  onCancel={() => setEditId(null)}
+                  submitLabel="Spara ändringar"
+                  pending={updateMut.isPending}
+                />
+              ) : (
+                <>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">
+                        {c.full_name}
+                        {c.is_primary && (
+                          <span className="ml-2 align-middle text-[10px] font-semibold uppercase tracking-wide text-foreground-secondary bg-muted px-1.5 py-0.5 rounded">Primär</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-foreground break-words">
+                        {emgRelationshipLabel(c.relationship)} · {c.phone}{c.email ? ` · ${c.email}` : ''}
+                      </p>
+                    </div>
+                    <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <EkIconButton
+                          title={`Redigera ${c.full_name}`}
+                          onClick={() => {
+                            setEditId(c.id); setConfirmId(null);
+                            setEditDraft({
+                              full_name: c.full_name, phone: c.phone, email: c.email ?? '',
+                              relationship: (EMG_RELATIONSHIPS.some((r) => r.value === c.relationship) ? c.relationship : 'other') as EmgRelationship,
+                              is_primary: c.is_primary,
+                            });
+                          }}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </EkIconButton>
+                        <EkIconButton
+                          title={`Ta bort ${c.full_name}`}
+                          onClick={() => { setConfirmId(c.id); setEditId(null); }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </EkIconButton>
+                      </div>
+                    </PermissionGate>
+                  </div>
+                  {confirmId === c.id && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 bg-destructive/5 rounded-md p-2.5 border border-destructive/20">
+                      <p className="text-xs text-destructive">Ta bort {c.full_name}?</p>
+                      <div className="flex gap-1.5">
+                        <EkButton size="sm" variant="danger" onClick={() => deleteMut.mutate(c.id)} disabled={deleteMut.isPending}>
+                          {deleteMut.isPending ? 'Tar bort…' : 'Ta bort'}
+                        </EkButton>
+                        <EkButton size="sm" onClick={() => setConfirmId(null)}>Avbryt</EkButton>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <PermissionGate permission={Permissions.STUDENTS_UPDATE}>
+        {adding ? (
+          <div className="border border-border rounded-md p-3 space-y-3">
+            <p className="text-sm font-semibold text-foreground">Ny anhörig</p>
+            <EmgContactForm
+              idPrefix="emg-new"
+              draft={newDraft}
+              onChange={setNewDraft}
+              onSubmit={() => addMut.mutate(newDraft)}
+              onCancel={() => { setAdding(false); setNewDraft(EMPTY_EMG_DRAFT); }}
+              submitLabel="Lägg till"
+              pending={addMut.isPending}
+            />
+          </div>
+        ) : (
+          <EkButton onClick={() => setAdding(true)}>
+            <Plus className="w-4 h-4" />
+            Lägg till anhörig
+          </EkButton>
+        )}
+      </PermissionGate>
+    </div>
+  );
+}
+
 // ─── Kundkort tab ─────────────────────────────────────────────────────────────
 
 type FormState = {
@@ -1989,65 +2279,6 @@ function KundkortTab({
   const { data: corporateData } = useCorporateList({ per_page: 100, status: 'active' }, { enabled: hasCorporateAccess });
   const allCompanies = corporateData?.data ?? [];
   const { data: instructorsData } = useInstructorList({ per_page: 100 });
-
-  // ── Emergency contacts ──────────────────────────────────────────────────────
-  type EmgContact = { id: string; full_name: string; phone: string; email: string | null; is_primary: boolean };
-  const [emgName,    setEmgName]    = useState('');
-  const [emgPhone,   setEmgPhone]   = useState('');
-  const [emgEmail,   setEmgEmail]   = useState('');
-  const [emgPrimary, setEmgPrimary] = useState(false);
-
-  const emgQKey = ['student-emergency-contacts', student.id] as const;
-  const emgContacts = useQuery<EmgContact[]>({
-    queryKey: emgQKey,
-    queryFn: async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase as unknown as any)
-        .from('student_emergency_contacts')
-        .select('id, full_name, phone, email, is_primary')
-        .eq('student_id', student.id)
-        .order('created_at');
-      if (error) throw new Error(error.message);
-      return (data ?? []) as EmgContact[];
-    },
-  });
-
-  const addEmg = useMutation({
-    mutationFn: async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase as unknown as any)
-        .from('student_emergency_contacts')
-        .insert({
-          student_id:      student.id,
-          organization_id: student.organization_id,
-          full_name:       emgName.trim(),
-          phone:           emgPhone.trim(),
-          email:           emgEmail.trim() || null,
-          relationship:    'other',
-          is_primary:      emgPrimary,
-        });
-      if (error) throw new Error(error.message);
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: emgQKey });
-      setEmgName(''); setEmgPhone(''); setEmgEmail(''); setEmgPrimary(false);
-      toast({ title: 'Anhörig tillagd' });
-    },
-    onError: (e: Error) => toast({ title: 'Kunde inte lägga till', description: e.message, variant: 'destructive' }),
-  });
-
-  const deleteEmg = useMutation({
-    mutationFn: async (id: string) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase as unknown as any)
-        .from('student_emergency_contacts')
-        .delete()
-        .eq('id', id);
-      if (error) throw new Error(error.message);
-    },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: emgQKey }),
-    onError: (e: Error) => toast({ title: 'Kunde inte ta bort', description: e.message, variant: 'destructive' }),
-  });
   const allInstructors = instructorsData?.data ?? [];
   const nextLesson   = upcomingBookings.data?.data?.[0];
   const nextDateStr  = nextLesson ? new Date(nextLesson.starts_at).toLocaleDateString('sv-SE', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) : '';
@@ -2342,82 +2573,7 @@ function KundkortTab({
           <div className="space-y-5">
 
             {/* Anhöriga */}
-            <div>
-              <EkSubTitle title="Anhöriga personer" />
-              <p className="text-xs text-muted-foreground -mt-1 mb-3">
-                Registrera anhöriga som ska kontaktas i nödsituationer eller ta emot bokningsbekräftelser.
-              </p>
-
-              {/* Existing contacts list */}
-              {(emgContacts.data ?? []).length > 0 && (
-                <div className="space-y-2 mb-4">
-                  {(emgContacts.data ?? []).map((c) => (
-                    <div key={c.id} className="flex items-center justify-between border border-border rounded-md px-3 py-2 text-sm gap-2">
-                      <div className="min-w-0">
-                        <span className="font-medium text-foreground">{c.full_name}</span>
-                        {c.is_primary && (
-                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-foreground-secondary bg-muted px-1.5 py-0.5 rounded">Primär</span>
-                        )}
-                        <div className="text-xs text-muted-foreground truncate">{c.phone}{c.email ? ` · ${c.email}` : ''}</div>
-                      </div>
-                      <button
-                        onClick={() => deleteEmg.mutate(c.id)}
-                        disabled={deleteEmg.isPending}
-                        className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40 transition-colors"
-                        title="Ta bort"
-                        aria-label={`Ta bort ${c.full_name}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Add form */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
-                <EkField
-                  label="Namn *"
-                  value={emgName}
-                  onChange={setEmgName}
-                  placeholder="För- och efternamn"
-                  className="sm:col-span-2"
-                />
-                <EkField
-                  label="Telefonnummer *"
-                  value={emgPhone}
-                  onChange={setEmgPhone}
-                  placeholder="+46 70 000 00 00"
-                  type="tel"
-                />
-                <EkField
-                  label="E-postadress"
-                  value={emgEmail}
-                  onChange={setEmgEmail}
-                  placeholder="valfritt"
-                  type="email"
-                />
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="emgprimary"
-                    checked={emgPrimary}
-                    onChange={(e) => setEmgPrimary(e.target.checked)}
-                    className="rounded"
-                  />
-                  <label htmlFor="emgprimary" className="text-sm text-foreground-secondary cursor-pointer">Primärkontakt</label>
-                </div>
-                <EkButton
-                  variant="primary"
-                  onClick={() => addEmg.mutate()}
-                  disabled={!emgName.trim() || !emgPhone.trim() || addEmg.isPending}
-                >
-                  {addEmg.isPending ? 'Lägger till...' : 'Lägg till'}
-                </EkButton>
-              </div>
-            </div>
+            <AnhorigaSection studentId={student.id} organizationId={student.organization_id} />
 
             <EkDivider />
 
