@@ -1910,6 +1910,7 @@ function KundkortTab({
   const [editingMilestone,  setEditingMilestone]  = useState<MilestoneKey | null>(null);
   const [milestoneDate,     setMilestoneDate]     = useState('');
   const [savingMilestone,   setSavingMilestone]   = useState(false);
+  const [milestoneDateValid, setMilestoneDateValid] = useState(true);
   const queryClient = useQueryClient();
 
   async function saveMilestone() {
@@ -2205,7 +2206,6 @@ function KundkortTab({
                 <div>
                   <EkLabel htmlFor="korkort-grupp">Välj grupp</EkLabel>
                   <select
-  const [milestoneDateValid, setMilestoneDateValid] = useState(true);
                     id="korkort-grupp"
                     value={korkortsGrupp}
                     onChange={(e) => setKorkortsGrupp(e.target.value)}
