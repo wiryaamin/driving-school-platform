@@ -12,6 +12,7 @@ import {
   toast,
 } from '@platform/ui';
 import { useCreateInstructor, useUpdateInstructor, useCreateAvailabilityRulesBatch } from '../hooks/useInstructors.js';
+import { useOrgWorkHours, useGenerateInstructorSchedule } from '../hooks/useWorkSchedule.js';
 import { INSTRUCTOR_STATUS_OPTIONS } from './InstructorStatusBadge.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { logger } from '@platform/utils';
@@ -150,9 +151,11 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   // Arbetstider — instructor-creation-time only (not shown/used on edit).
   // Left blank/unchanged, instructor creation works exactly as before.
-  const [workingDays, setWorkingDays] = useState<number[]>([1, 2, 3, 4, 5]);
-  const [workStart,   setWorkStart]   = useState('08:00');
-  const [workEnd,     setWorkEnd]     = useState('17:00');
+  // Förval = skolans standardarbetstid (Inställningar → Schemainställningar).
+  const orgWorkHours = useOrgWorkHours();
+  const [workingDays, setWorkingDays] = useState<number[]>(orgWorkHours.days);
+  const [workStart,   setWorkStart]   = useState(orgWorkHours.start);
+  const [workEnd,     setWorkEnd]     = useState(orgWorkHours.end);
 
   // AuthUser.organization_id comes straight from the JWT (synchronous, always
   // available once authenticated) — unlike useSession().organization, which is
@@ -168,16 +171,19 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
   const createMutation = useCreateInstructor();
   const updateMutation = useUpdateInstructor();
   const createRulesBatch = useCreateAvailabilityRulesBatch();
+  const generateSchedule = useGenerateInstructorSchedule();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   useEffect(() => {
     if (open) {
       form.reset(isEdit ? instructorToFormFields(instructor) : EMPTY_DEFAULTS);
       setSelectedCategories(isEdit ? (instructor?.teaching_categories ?? []) : []);
-      setWorkingDays([1, 2, 3, 4, 5]);
-      setWorkStart('08:00');
-      setWorkEnd('17:00');
+      setWorkingDays(orgWorkHours.days);
+      setWorkStart(orgWorkHours.start);
+      setWorkEnd(orgWorkHours.end);
     }
+    // orgWorkHours comes from cached org settings; re-seed only when the dialog opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, instructor, isEdit, form]);
 
   function toggleCategory(key: string) {
@@ -207,6 +213,28 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
     createRulesBatch.mutate(
       { instructorId, organizationId: user.organization_id, inputs },
       {
+        // Arbetstiderna sparade → skapa bokningsbara pass direkt för de kommande 4 veckorna.
+        onSuccess: () => {
+          generateSchedule.mutate(
+            { instructorId, weeks: 4 },
+            {
+              onSuccess: (res) => toast({
+                title:       'Schema skapat',
+                description: `${res.created} pass skapades för de kommande 4 veckorna.`,
+              }),
+              onError: (e) => {
+                logger.warn('InstructorForm: failed to generate initial schedule', {
+                  instructorId, error: e instanceof Error ? e.message : String(e),
+                });
+                toast({
+                  title:       'Passen kunde inte skapas automatiskt',
+                  description: 'Arbetstiderna är sparade. Skapa passen under lärarens Schema-flik.',
+                  variant:     'destructive',
+                });
+              },
+            },
+          );
+        },
         onError: (e) => {
           logger.warn('InstructorForm: failed to seed working-hours availability rules', {
             instructorId, error: e instanceof Error ? e.message : String(e),
@@ -452,8 +480,8 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                       Arbetstider
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Skapar automatiskt återkommande 45-minuters tillgänglighet för valda dagar.
-                      Lämna tomt för att hoppa över — kan läggas till senare under lärarens Tillgänglighet.
+                      Förifyllt med skolans standardarbetstid. Läraren får bokningsbara pass (40 min) för
+                      valda dagar de kommande 4 veckorna. Avmarkera alla dagar för att hoppa över.
                     </p>
                   </div>
 
@@ -525,42 +553,6 @@ export function InstructorForm({ open, onOpenChange, instructor, onSuccess }: In
                 </div>
               </div>
 
-              {/* Godkännande/certifiering — internt referens-/certifikatnummer.
-                  Not labeled as an official Transportstyrelsen-issued number:
-                  Transportstyrelsen's actual process ("godkännande som
-                  trafiklärare") was not confirmed to issue a numbered
-                  credential of this shape, so these fields (DB columns
-                  adi_number/adi_valid_until, unchanged for compatibility)
-                  are presented as an optional internal record, not an
-                  official identifier. */}
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={form.control}
-                  name="adi_number"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Godkännande-/certifikatnummer</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Valfritt internt referensnummer" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="adi_valid_until"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Giltigt till</FormLabel>
-                      <FormControl>
-                        <Input type="date" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
             </div>
 
             {/* ── Submit ──────────────────────────────────────────────── */}

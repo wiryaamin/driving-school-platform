@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, X, Plus, User, Copy, Check, ExternalLink, TrendingUp, Users, ChartBar, CheckCircle, XCircle, AlertCircle, Trash2, Car, ArrowLeft } from 'lucide-react';
+import { Loader2, X, Plus, User, Copy, Check, ExternalLink, TrendingUp, Users, ChartBar, CheckCircle, XCircle, AlertCircle, Trash2, Car, ArrowLeft, Mail, MessageSquare } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { cn } from '@/lib/utils.js';
 import { Button, toast } from '@platform/ui';
@@ -8,6 +8,7 @@ import {
   useInstructor, useUpdateInstructor, useArchiveInstructor, useInstructorBookingLogs,
   useInstructorCertifications, useCreateInstructorCertification, useDeleteInstructorCertification,
   useInstructorAvailabilityRules, useCreateAvailabilityRule, useDeleteAvailabilityRule, useUpdateAvailabilityRule,
+  useCreateAvailabilityRulesBatch,
   useInstructorTimeOff, useCreateTimeOff, useUpdateTimeOffStatus,
   useInstructorVehicleAssignments, useAssignVehicle, useUnassignVehicle,
 } from '../hooks/useInstructors.js';
@@ -22,6 +23,12 @@ import { useGenerateInstructorPortalToken } from '@modules/instructor-portal/hoo
 import { formatDateTime, computeCertStatus } from '../lib/instructorUtils.js';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
+import { useSessionStore } from '@core/store/session.store.js';
+import { useSendMessage } from '@modules/communication/hooks/useCommunication.js';
+import { useSendOrgUserPasswordReset, useResendOrgUserInvitation } from '@modules/settings/hooks/useOrgUsers.js';
+import { useOrgWorkHours, useGenerateInstructorSchedule, formatWorkHours } from '../hooks/useWorkSchedule.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,12 +61,32 @@ const TEACHING_CATEGORIES = [
   { key: 'YKB-D',   label: 'YKB-D – Yrkeskompetensbevis för persontransport' },
 ];
 
-const CERT_TYPE_OPTIONS = [
-  { key: 'ADI',                    label: 'ADI – Approved Driving Instructor (brittisk certifiering)' },
-  { key: 'first_aid',              label: 'Första hjälpen' },
-  { key: 'risk_education_teacher', label: 'Riskettan/Risktvåan lärarbehörighet' },
-  { key: 'other',                  label: 'Övrigt' },
+// Svenska intygstyper. 'ADI' är en äldre nyckel som visas som trafiklärarbehörighet
+// för redan sparade intyg men inte erbjuds för nya.
+const CERT_TYPE_OPTIONS: { key: string; label: string; legacy?: boolean }[] = [
+  { key: 'trafiklararbehorighet',  label: 'Trafiklärarbehörighet' },
+  { key: 'risk_education_teacher', label: 'Instruktör riskutbildning (Riskettan/Risktvåan)' },
+  { key: 'ykb_teacher',            label: 'YKB-lärare' },
+  { key: 'first_aid',              label: 'Första hjälpen / HLR' },
+  { key: 'other',                  label: 'Övrigt intyg' },
+  { key: 'ADI',                    label: 'Trafiklärarbehörighet', legacy: true },
 ];
+
+const DEFAULT_CERT_TYPE = 'trafiklararbehorighet';
+
+const CERT_DEFAULT_AUTHORITY: Record<string, string> = {
+  trafiklararbehorighet: 'Transportstyrelsen',
+  ykb_teacher:           'Transportstyrelsen',
+};
+
+function certTypeLabel(key: string): string {
+  return CERT_TYPE_OPTIONS.find((o) => o.key === key)?.label ?? key;
+}
+
+function fmtSvDate(iso: string): string {
+  const d = new Date(iso.length === 10 ? `${iso}T12:00:00` : iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 const LANGUAGE_OPTIONS = [
   'Svenska', 'English', 'Arabic', 'Somali', 'Kurdish',
@@ -76,9 +103,9 @@ const LOG_FILTER_OPTIONS: { label: string; value: InstructorLogFilter }[] = [
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="border border-gray-200 rounded-md bg-white p-5 mb-4">
+    <div className="border border-border rounded-lg bg-card text-card-foreground p-5 mb-4">
       {title && (
-        <h2 className="text-[#1a7dc4] font-semibold text-base mb-4">{title}</h2>
+        <h2 className="text-primary font-semibold text-base mb-4">{title}</h2>
       )}
       {children}
     </div>
@@ -419,9 +446,7 @@ function SchemaTab({
 }) {
   return (
     <>
-      <SectionCard title="Loggar">
-        <p className="text-sm text-gray-400">Denna personal har inga loggar.</p>
-      </SectionCard>
+      <AutoScheduleCard instructorId={instructor.id} organizationId={instructor.organization_id} />
 
       <AvailabilityRulesSection
         instructorId={instructor.id}
@@ -438,6 +463,120 @@ function SchemaTab({
         organizationId={instructor.organization_id}
       />
     </>
+  );
+}
+
+// ─── Automatiskt schema ───────────────────────────────────────────────────────
+
+const AUTO_SLOT_DURATION_MIN = 40;
+const AUTO_SLOT_BUFFER_MIN   = 20;
+
+function summarizeRules(rules: InstructorAvailabilityRule[]): string {
+  const active = rules.filter((r) => r.is_active);
+  if (active.length === 0) return 'Inga arbetstider inlagda';
+  const first = active[0]!;
+  const sameTimes = active.every((r) => r.start_time === first.start_time && r.end_time === first.end_time);
+  if (sameTimes) {
+    return formatWorkHours({ days: [...new Set(active.map((r) => r.day_of_week))], start: first.start_time.slice(0, 5), end: first.end_time.slice(0, 5) });
+  }
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  return [...active]
+    .sort((a, b) => order.indexOf(a.day_of_week) - order.indexOf(b.day_of_week) || a.start_time.localeCompare(b.start_time))
+    .map((r) => `${DAY_NAMES_SV[r.day_of_week]!.slice(0, 3).toLowerCase()} ${r.start_time.slice(0, 5)}–${r.end_time.slice(0, 5)}`)
+    .join(', ');
+}
+
+function AutoScheduleCard({ instructorId, organizationId }: { instructorId: string; organizationId: string }) {
+  const { data: rules = [], isLoading } = useInstructorAvailabilityRules(instructorId);
+  const orgHours    = useOrgWorkHours();
+  const createBatch = useCreateAvailabilityRulesBatch();
+  const generate    = useGenerateInstructorSchedule();
+  const [weeks, setWeeks] = useState(4);
+  const hasRules = rules.some((r) => r.is_active);
+  const busy = createBatch.isPending || generate.isPending;
+
+  function runGenerate() {
+    generate.mutate(
+      { instructorId, weeks },
+      {
+        onSuccess: (res) => toast({
+          title: res.created > 0 ? 'Schema skapat' : 'Schemat är redan klart',
+          description: res.created > 0
+            ? `${res.created} nya pass för de kommande ${weeks} veckorna.${res.conflicts > 0 ? ` ${res.conflicts} tider krockade och hoppades över.` : ''}`
+            : `Alla pass för de kommande ${weeks} veckorna finns redan.`,
+        }),
+        onError: (e) => toast({ title: 'Schemat kunde inte skapas', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  function applyOrgHoursAndGenerate() {
+    if (orgHours.days.length === 0) {
+      toast({ title: 'Skolan har ingen standardarbetstid', description: 'Ställ in den under Inställningar → Schemainställningar.', variant: 'destructive' });
+      return;
+    }
+    createBatch.mutate(
+      {
+        instructorId,
+        organizationId,
+        inputs: orgHours.days.map((day_of_week) => ({
+          day_of_week,
+          start_time:            orgHours.start,
+          end_time:              orgHours.end,
+          slot_duration_minutes: AUTO_SLOT_DURATION_MIN,
+          slot_buffer_minutes:   AUTO_SLOT_BUFFER_MIN,
+        })),
+      },
+      {
+        onSuccess: () => runGenerate(),
+        onError: (e) => toast({ title: 'Arbetstiderna kunde inte sparas', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+      },
+    );
+  }
+
+  return (
+    <SectionCard title="Arbetsschema">
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Laddar…</p>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-sm text-muted-foreground">Arbetstider:</span>
+            <span className="text-sm font-medium text-foreground">{summarizeRules(rules)}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {hasRules
+              ? 'Skapa bokningsbara pass utifrån arbetstiderna. Pass som redan finns och lediga dagar (stängt, ledighet) hoppas över, så det går att köra igen när som helst.'
+              : `Läraren har inga arbetstider ännu. Använd skolans standardarbetstid (${formatWorkHours(orgHours)}) eller lägg till egna tider nedan.`}
+          </p>
+          <PermissionGate permission={Permissions.SCHEDULING_GENERATION_RUN}>
+            <div className="flex flex-wrap items-center gap-2">
+              {hasRules ? (
+                <>
+                  <select
+                    value={weeks}
+                    onChange={(e) => setWeeks(Number(e.target.value))}
+                    className="h-9 text-sm border border-input rounded-md px-2 bg-background"
+                    aria-label="Antal veckor"
+                  >
+                    {[2, 4, 6, 8].map((w) => <option key={w} value={w}>{w} veckor framåt</option>)}
+                  </select>
+                  <Button size="sm" onClick={runGenerate} disabled={busy}>
+                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                    Skapa pass automatiskt
+                  </Button>
+                </>
+              ) : (
+                <Button size="sm" onClick={applyOrgHoursAndGenerate} disabled={busy}>
+                  {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                  Använd skolans arbetstid och skapa schema
+                </Button>
+              )}
+            </div>
+          </PermissionGate>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -1198,33 +1337,57 @@ function CertStatusBadge({ expiresAt }: { expiresAt: string | null }) {
 function CertificationsSection({
   instructorId,
   organizationId,
+  legacyApproval,
 }: {
   instructorId: string;
   organizationId: string;
+  /** Tidigare registrerat godkännandenummer (instructors.adi_number/adi_valid_until) — visas bara om det finns. */
+  legacyApproval?: { number: string | null; validUntil: string | null };
 }) {
   const { data: certs = [], isLoading: certLoading } = useInstructorCertifications(instructorId);
   const createMutation = useCreateInstructorCertification();
   const deleteMutation = useDeleteInstructorCertification();
 
   const [showForm,     setShowForm]     = useState(false);
-  const [certType,     setCertType]     = useState('ADI');
-  const [certAuth,     setCertAuth]     = useState('');
+  const [certType,     setCertType]     = useState(DEFAULT_CERT_TYPE);
+  const [certAuth,     setCertAuth]     = useState(CERT_DEFAULT_AUTHORITY[DEFAULT_CERT_TYPE] ?? '');
   const [certNumber,   setCertNumber]   = useState('');
   const [certIssuedAt, setCertIssuedAt] = useState('');
   const [certExpires,  setCertExpires]  = useState('');
   const [certNotes,    setCertNotes]    = useState('');
 
+  const counts = certs.reduce(
+    (acc, c) => {
+      const st = computeCertStatus(c.expires_at);
+      if (st === 'expired') acc.expired += 1;
+      else if (st === 'expiring_soon') acc.soon += 1;
+      else acc.valid += 1;
+      return acc;
+    },
+    { valid: 0, soon: 0, expired: 0 },
+  );
+
   function resetForm() {
-    setCertType('ADI');
-    setCertAuth('');
+    setCertType(DEFAULT_CERT_TYPE);
+    setCertAuth(CERT_DEFAULT_AUTHORITY[DEFAULT_CERT_TYPE] ?? '');
     setCertNumber('');
     setCertIssuedAt('');
     setCertExpires('');
     setCertNotes('');
   }
 
+  function handleTypeChange(next: string) {
+    // Fyll i utfärdare automatiskt om fältet är tomt eller fortfarande har förra typens förval.
+    if (!certAuth || certAuth === (CERT_DEFAULT_AUTHORITY[certType] ?? '')) {
+      setCertAuth(CERT_DEFAULT_AUTHORITY[next] ?? '');
+    }
+    setCertType(next);
+  }
+
+  const datesInvalid = Boolean(certIssuedAt && certExpires && certExpires < certIssuedAt);
+
   function handleSaveCert() {
-    if (!certIssuedAt) return;
+    if (!certIssuedAt || datesInvalid) return;
     createMutation.mutate(
       {
         instructorId,
@@ -1240,123 +1403,139 @@ function CertificationsSection({
       },
       {
         onSuccess: () => {
+          toast({ title: 'Intyget sparades' });
           setShowForm(false);
           resetForm();
         },
+        onError: (e) => toast({ title: 'Intyget kunde inte sparas', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
       }
     );
   }
 
   function handleDelete(cert: InstructorCertification) {
+    if (!window.confirm(`Ta bort intyget ”${certTypeLabel(cert.certification_type)}”?`)) return;
     deleteMutation.mutate({ certificationId: cert.id, instructorId });
   }
 
+  const inputCls = 'w-full border border-input rounded-md px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40';
+
   return (
     <SectionCard title="Behörighetsintyg">
-      {certLoading ? (
-        <div className="flex items-center justify-center py-4">
-          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-        </div>
-      ) : certs.length === 0 && !showForm ? (
-        <p className="text-sm text-gray-400 mb-3">Inga intyg registrerade.</p>
-      ) : (
-        <div className="space-y-2 mb-4">
-          {certs.map((cert) => (
-            <div key={cert.id} className="border border-gray-200 rounded-md p-3 flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-gray-800">
-                    {CERT_TYPE_OPTIONS.find((o) => o.key === cert.certification_type)?.label ?? cert.certification_type}
-                  </span>
-                  <CertStatusBadge expiresAt={cert.expires_at} />
-                </div>
-                {cert.certificate_number && (
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Nr: {cert.certificate_number}
-                    {cert.issuing_authority ? ` · ${cert.issuing_authority}` : ''}
-                  </p>
-                )}
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Utfärdad: {cert.issued_at}
-                  {cert.expires_at ? ` · Upphör: ${cert.expires_at}` : ' · Ej tidsbegränsat'}
-                </p>
-                {cert.notes && (
-                  <p className="text-xs text-gray-500 mt-0.5 italic">{cert.notes}</p>
-                )}
-              </div>
-              <button
-                onClick={() => handleDelete(cert)}
-                disabled={deleteMutation.isPending}
-                className="text-red-400 hover:text-red-600 shrink-0 p-1 disabled:opacity-50"
-                title="Ta bort intyg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+      <p className="text-sm text-muted-foreground -mt-2 mb-4">
+        Lärarens intyg, t.ex. trafiklärarbehörighet, instruktörsbehörighet för riskutbildning och YKB. Intyg som snart går ut markeras så att de hinner förnyas.
+      </p>
+
+      {certs.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4 text-xs">
+          <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">{counts.valid} giltiga</span>
+          {counts.soon > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{counts.soon} går ut inom 60 dagar</span>}
+          {counts.expired > 0 && <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">{counts.expired} utgångna</span>}
         </div>
       )}
 
+      {certLoading ? (
+        <div className="flex items-center justify-center py-4">
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : certs.length === 0 && !showForm ? (
+        <p className="text-sm text-muted-foreground mb-3">Inga intyg registrerade.</p>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {certs.map((cert) => {
+            const st = computeCertStatus(cert.expires_at);
+            return (
+              <div
+                key={cert.id}
+                className={cn(
+                  'border rounded-lg p-3 flex items-start justify-between gap-3',
+                  st === 'expired' ? 'border-red-300 dark:border-red-900' : st === 'expiring_soon' ? 'border-amber-300 dark:border-amber-800' : 'border-border',
+                )}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-foreground">{certTypeLabel(cert.certification_type)}</span>
+                    <CertStatusBadge expiresAt={cert.expires_at} />
+                  </div>
+                  {(cert.certificate_number || cert.issuing_authority) && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {[cert.certificate_number && `Nr ${cert.certificate_number}`, cert.issuing_authority].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-0.5 tabular-nums">
+                    Utfärdat {fmtSvDate(cert.issued_at)}
+                    {cert.expires_at ? ` · Giltigt till ${fmtSvDate(cert.expires_at)}` : ' · Tillsvidare'}
+                  </p>
+                  {cert.notes && (
+                    <p className="text-xs text-muted-foreground mt-0.5 italic">{cert.notes}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDelete(cert)}
+                  disabled={deleteMutation.isPending}
+                  className="text-muted-foreground hover:text-red-600 shrink-0 p-1 disabled:opacity-50"
+                  title="Ta bort intyg"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {legacyApproval && (legacyApproval.number || legacyApproval.validUntil) && (
+        <p className="text-xs text-muted-foreground mb-3">
+          Tidigare registrerat godkännande: {legacyApproval.number ?? '—'}
+          {legacyApproval.validUntil ? ` (giltigt till ${fmtSvDate(legacyApproval.validUntil)})` : ''}. Lägg gärna in det som ett intyg ovan.
+        </p>
+      )}
+
       {showForm ? (
-        <div className="border border-blue-200 rounded-md p-4 bg-blue-50/60 space-y-3">
-          <p className="text-sm font-semibold text-blue-800 mb-1">Lägg till intyg</p>
+        <div className="border border-border rounded-lg p-4 bg-muted/30 space-y-3">
+          <p className="text-sm font-semibold text-foreground mb-1">Lägg till intyg</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <FieldLabel>Typ</FieldLabel>
-              <select
-                value={certType}
-                onChange={(e) => setCertType(e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
-              >
-                {CERT_TYPE_OPTIONS.map((o) => (
+              <FieldLabel>Typ av intyg</FieldLabel>
+              <select value={certType} onChange={(e) => handleTypeChange(e.target.value)} className={inputCls}>
+                {CERT_TYPE_OPTIONS.filter((o) => !o.legacy).map((o) => (
                   <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
               </select>
             </div>
             <div>
-              <FieldLabel>Utfärdande myndighet</FieldLabel>
+              <FieldLabel>Utfärdat av</FieldLabel>
               <input
                 type="text"
                 value={certAuth}
                 onChange={(e) => setCertAuth(e.target.value)}
                 placeholder="T.ex. Transportstyrelsen"
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                className={inputCls}
               />
             </div>
           </div>
 
           <div>
-            <FieldLabel>Intygnummer</FieldLabel>
+            <FieldLabel>Intygsnummer (valfritt)</FieldLabel>
             <input
               type="text"
               value={certNumber}
               onChange={(e) => setCertNumber(e.target.value)}
-              placeholder="Valfritt referensnummer"
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              className={inputCls}
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <FieldLabel>Utfärdat *</FieldLabel>
-              <input
-                type="date"
-                value={certIssuedAt}
-                onChange={(e) => setCertIssuedAt(e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
-              />
+              <input type="date" value={certIssuedAt} onChange={(e) => setCertIssuedAt(e.target.value)} className={inputCls} />
             </div>
             <div>
-              <FieldLabel>Upphör (lämna tomt om ej tidsbegränsat)</FieldLabel>
-              <input
-                type="date"
-                value={certExpires}
-                onChange={(e) => setCertExpires(e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
-              />
+              <FieldLabel>Giltigt till (tomt = tillsvidare)</FieldLabel>
+              <input type="date" value={certExpires} onChange={(e) => setCertExpires(e.target.value)} className={inputCls} />
             </div>
           </div>
+          {datesInvalid && <p className="text-xs text-red-600">”Giltigt till” kan inte vara före utfärdandedatumet.</p>}
 
           <div>
             <FieldLabel>Anteckningar</FieldLabel>
@@ -1364,32 +1543,24 @@ function CertificationsSection({
               value={certNotes}
               onChange={(e) => setCertNotes(e.target.value)}
               rows={2}
-              placeholder="Valfria anteckningar..."
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              className={cn(inputCls, 'resize-none')}
             />
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
-            <button
-              onClick={() => { setShowForm(false); resetForm(); }}
-              className="border border-gray-300 text-gray-600 rounded-full px-4 py-2 text-sm hover:bg-gray-50"
-            >
+            <Button variant="outline" size="sm" onClick={() => { setShowForm(false); resetForm(); }}>
               Avbryt
-            </button>
-            <button
-              onClick={handleSaveCert}
-              disabled={!certIssuedAt || createMutation.isPending}
-              className="bg-action hover:bg-action-hover disabled:opacity-60 text-action-foreground rounded-full px-5 py-2 text-sm font-semibold flex items-center gap-2"
-            >
-              {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+            </Button>
+            <Button size="sm" onClick={handleSaveCert} disabled={!certIssuedAt || datesInvalid || createMutation.isPending}>
+              {createMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
               Spara intyg
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <button
           onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 text-sm text-blue-500 hover:text-blue-700 font-medium"
+          className="flex items-center gap-2 text-sm text-primary hover:underline font-medium"
         >
           <Plus className="w-4 h-4" />
           Lägg till intyg
@@ -1409,13 +1580,9 @@ function UtbildningTab({
   saving: boolean;
 }) {
   const [selected,     setSelected]     = useState<string[]>(instructor.teaching_categories ?? []);
-  const [adiNumber,    setAdiNumber]    = useState(instructor.adi_number ?? '');
-  const [adiValidUntil, setAdiValidUntil] = useState(instructor.adi_valid_until ?? '');
 
   useEffect(() => {
     setSelected(instructor.teaching_categories ?? []);
-    setAdiNumber(instructor.adi_number ?? '');
-    setAdiValidUntil(instructor.adi_valid_until ?? '');
   }, [instructor]);
 
   function toggle(key: string) {
@@ -1424,16 +1591,14 @@ function UtbildningTab({
     );
   }
 
-  const adiStatus = adiValidUntil ? computeCertStatus(adiValidUntil) : null;
-
   return (
     <>
       {/* Teaching categories */}
       <SectionCard title="">
-        <h2 className="text-[#1a7dc4] font-semibold text-base mb-1">
+        <h2 className="text-primary font-semibold text-base mb-1">
           Utbildningsbehörigheter för {instructor.first_name} {instructor.last_name}
         </h2>
-        <p className="text-sm text-gray-600 mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           Välj vilka utbildningsbehörigheter som {instructor.first_name} {instructor.last_name} kan utbilda på.
         </p>
 
@@ -1457,59 +1622,11 @@ function UtbildningTab({
         />
       </SectionCard>
 
-      {/* Godkännande/certifiering — internt referens-/certifikatnummer, inte
-          ett officiellt Transportstyrelsen-nummer (se InstructorForm.tsx för
-          bakgrund; DB-kolumnerna adi_number/adi_valid_until är oförändrade). */}
-      <SectionCard title="Godkännande / certifiering">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <FieldLabel>Godkännande-/certifikatnummer</FieldLabel>
-            <input
-              type="text"
-              value={adiNumber}
-              onChange={(e) => setAdiNumber(e.target.value)}
-              placeholder="Valfritt internt referensnummer"
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-          </div>
-          <div>
-            <FieldLabel>Giltigt till</FieldLabel>
-            <input
-              type="date"
-              value={adiValidUntil}
-              onChange={(e) => setAdiValidUntil(e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-          </div>
-        </div>
-
-        {adiStatus !== null && (
-          <div className="flex items-center gap-2 mb-3">
-            <CertStatusBadge expiresAt={adiValidUntil} />
-            {adiStatus === 'expired' && (
-              <p className="text-xs text-red-600">Godkännandet/certifieringen har löpt ut. Förnya omedelbart.</p>
-            )}
-            {adiStatus === 'expiring_soon' && (
-              <p className="text-xs text-amber-600">Godkännandet/certifieringen upphör inom 60 dagar.</p>
-            )}
-          </div>
-        )}
-
-        <SaveButton
-          loading={saving}
-          onClick={() =>
-            onSave({
-              adi_number:    adiNumber    || null,
-              adi_valid_until: adiValidUntil || null,
-            })
-          }
-        />
-      </SectionCard>
-
       {/* Certifications */}
       <CertificationsSection
         instructorId={instructor.id}
         organizationId={instructor.organization_id}
+        legacyApproval={{ number: instructor.adi_number ?? null, validUntil: instructor.adi_valid_until ?? null }}
       />
     </>
   );
@@ -1798,13 +1915,21 @@ function PrestandardTab({ instructorId }: { instructorId: string }) {
 function InstallningarTab({
   instructorId,
   instructorName,
+  instructorFirstName,
+  instructorEmail,
+  instructorPhone,
+  instructorUserId,
   onBlock,
   onDelete,
   blocking,
   deleting,
 }: {
-  instructorId:   string;
-  instructorName: string;
+  instructorId:        string;
+  instructorName:      string;
+  instructorFirstName: string;
+  instructorEmail:     string | null;
+  instructorPhone:     string | null;
+  instructorUserId:    string | null;
   onBlock: () => void;
   onDelete: () => void;
   blocking: boolean;
@@ -1814,11 +1939,72 @@ function InstallningarTab({
   const [portalUrl,     setPortalUrl]     = useState<string | null>(null);
   const [copied,        setCopied]        = useState(false);
   const generateToken = useGenerateInstructorPortalToken();
+  const sendMessage   = useSendMessage();
+  const sendPwReset   = useSendOrgUserPasswordReset();
+  const resendInvite  = useResendOrgUserInvitation();
+  const schoolName    = useSessionStore((st) => st.organization?.name) ?? 'Trafikskolan';
+  const [sendingVia, setSendingVia] = useState<'email' | 'sms' | null>(null);
 
   function handleGenerateLink() {
     generateToken.mutate(instructorId, {
       onSuccess: (result) => setPortalUrl(result.url),
     });
+  }
+
+  // Samma länk återanvänds: en ny länk ogiltigförklarar tidigare länkar, så vi
+  // skapar bara en ny om ingen finns i den här vyn ännu.
+  async function ensureLink(): Promise<string> {
+    if (portalUrl) return portalUrl;
+    const result = await generateToken.mutateAsync(instructorId);
+    setPortalUrl(result.url);
+    return result.url;
+  }
+
+  async function handleSendLink(channel: 'email' | 'sms') {
+    const address = channel === 'email' ? instructorEmail : instructorPhone;
+    if (!address) return;
+    setSendingVia(channel);
+    try {
+      const url = await ensureLink();
+      const body = channel === 'email'
+        ? `Hej ${instructorFirstName}!\n\nHär är din personliga inloggningslänk till lärarportalen hos ${schoolName}:\n${url}\n\nLänken gäller i 30 dagar. Dela den inte med någon annan.\n\nHälsningar\n${schoolName}`
+        : `Hej ${instructorFirstName}! Din inloggningslänk till lärarportalen hos ${schoolName}: ${url} (gäller i 30 dagar)`;
+      await sendMessage.mutateAsync({
+        channel,
+        recipient_type:    'instructor',
+        recipient_id:      instructorId,
+        recipient_address: address,
+        ...(channel === 'email' ? { subject: `Din inloggningslänk till lärarportalen – ${schoolName}` } : {}),
+        body,
+        metadata:          { type: 'instructor_portal_link' },
+      });
+      toast({ title: channel === 'email' ? 'Länken skickades via e-post' : 'Länken skickades via SMS', description: address });
+    } catch (e) {
+      toast({ title: 'Länken kunde inte skickas', description: e instanceof Error ? e.message : undefined, variant: 'destructive' });
+    } finally {
+      setSendingVia(null);
+    }
+  }
+
+  async function handlePasswordReset() {
+    if (!instructorUserId) return;
+    try {
+      await sendPwReset.mutateAsync(instructorUserId);
+      toast({ title: 'Länk för nytt lösenord skickad', description: instructorEmail ?? undefined });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      if (/not activated|resend invitation/i.test(msg)) {
+        // Kontot är inte aktiverat ännu — då är rätt åtgärd att skicka inbjudan igen.
+        try {
+          await resendInvite.mutateAsync(instructorUserId);
+          toast({ title: 'Ny inbjudan skickad', description: 'Läraren hade inte aktiverat sitt konto ännu. Via inbjudan väljer läraren sitt lösenord.' });
+        } catch (e2) {
+          toast({ title: 'Inbjudan kunde inte skickas', description: e2 instanceof Error ? e2.message : undefined, variant: 'destructive' });
+        }
+        return;
+      }
+      toast({ title: 'Kunde inte skicka länk för nytt lösenord', description: msg || undefined, variant: 'destructive' });
+    }
   }
 
   function handleCopy() {
@@ -1832,10 +2018,40 @@ function InstallningarTab({
     <>
       {/* Instructor portal link */}
       <SectionCard title="Lärarportal — Inloggningslänk">
-        <p className="text-sm text-gray-600 mb-4">
-          Generera en personlig inloggningslänk för lärarportalen. Länken är giltig i 30 dagar.
-          Skicka den till läraren via SMS eller e-post.
+        <p className="text-sm text-muted-foreground mb-4">
+          En personlig inloggningslänk till lärarportalen, giltig i 30 dagar. Skicka den direkt till läraren via e-post eller SMS.
+          Om du skapar en ny länk slutar den gamla att fungera.
         </p>
+
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleSendLink('email')}
+            disabled={!instructorEmail || sendingVia !== null}
+            title={instructorEmail ? `Skicka till ${instructorEmail}` : 'Läraren saknar e-postadress'}
+          >
+            {sendingVia === 'email' ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <Mail className="w-4 h-4 mr-1.5" />}
+            Skicka via e-post
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleSendLink('sms')}
+            disabled={!instructorPhone || sendingVia !== null}
+            title={instructorPhone ? `Skicka till ${instructorPhone}` : 'Läraren saknar mobilnummer'}
+          >
+            {sendingVia === 'sms' ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <MessageSquare className="w-4 h-4 mr-1.5" />}
+            Skicka via SMS
+          </Button>
+        </div>
+        {(!instructorEmail || !instructorPhone) && (
+          <p className="text-xs text-muted-foreground -mt-2 mb-4">
+            {!instructorEmail && !instructorPhone
+              ? 'Läraren saknar både e-postadress och mobilnummer — lägg till dem under Översikt.'
+              : !instructorEmail ? 'Läraren saknar e-postadress.' : 'Läraren saknar mobilnummer.'}
+          </p>
+        )}
 
         {portalUrl ? (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
@@ -1892,14 +2108,34 @@ function InstallningarTab({
           look up which auth account, if any, belongs to this instructor, so
           it points there rather than duplicating a control it can't back. */}
       <SectionCard title="Lösenord">
-        <p className="text-sm text-gray-600">
-          Om den här läraren även har ett personalkonto för inloggning i Trafikcloud hanteras
-          lösenord under{' '}
-          <Link to="/settings/users" className="text-blue-600 hover:underline font-medium">
-            Inställningar → Användare
-          </Link>
-          .
-        </p>
+        {instructorUserId ? (
+          <>
+            <p className="text-sm text-muted-foreground mb-4">
+              Skicka en länk där läraren själv väljer ett nytt lösenord för sitt personalkonto i Trafikcloud.
+              Länken skickas till lärarens inloggningsadress{instructorEmail ? ` (${instructorEmail})` : ''}.
+            </p>
+            <PermissionGate
+              permission={Permissions.ADMIN_USER_UPDATE}
+              fallback={<p className="text-xs text-muted-foreground">Du har inte behörighet att återställa lösenord.</p>}
+            >
+              <div className="flex justify-end">
+                <Button size="sm" onClick={() => void handlePasswordReset()} disabled={sendPwReset.isPending || resendInvite.isPending}>
+                  {(sendPwReset.isPending || resendInvite.isPending) && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
+                  Skicka länk för nytt lösenord
+                </Button>
+              </div>
+            </PermissionGate>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Läraren har inget eget personalkonto för inloggning i Trafikcloud (lärarportalen nås via länken ovan).
+            Bjud in läraren under{' '}
+            <Link to="/settings/users" className="text-primary hover:underline font-medium">
+              Inställningar → Användare
+            </Link>{' '}
+            om läraren ska kunna logga in med lösenord.
+          </p>
+        )}
       </SectionCard>
 
       {/* Block */}
@@ -2102,6 +2338,10 @@ export function InstructorDetailContent({ instructorId, onBack }: InstructorDeta
         <InstallningarTab
           instructorId={instructor.id}
           instructorName={fullName}
+          instructorFirstName={instructor.first_name}
+          instructorEmail={instructor.email ?? null}
+          instructorPhone={instructor.phone ?? null}
+          instructorUserId={instructor.user_id ?? null}
           onBlock={handleBlock}
           onDelete={handleDelete}
           blocking={blocking}

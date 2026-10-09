@@ -1,9 +1,13 @@
 import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import type FullCalendar from '@fullcalendar/react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Users } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { toast } from '@platform/ui';
+import {
+  toast,
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem,
+  DropdownMenuLabel, DropdownMenuSeparator,
+} from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
 import { useSession } from '@shared/hooks/useSession.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
@@ -52,6 +56,44 @@ function formatWeekTitle(weekStart: Date, numWeeks: number): string {
   return `${startFmt} – ${endFmt}`;
 }
 
+function isoWeekNumber(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+// ─── Veckosammanfattning + teckenförklaring ───────────────────────────────────
+// Samma färger som passkorten i MultiInstructorGrid (ledig = grön, bokad = lila,
+// blockerad = mörklila).
+
+function WeekSummaryBar({ slots, weekStart, numWeeks }: { slots: LessonSlot[]; weekStart: Date; numWeeks: number }) {
+  // The grid query reaches past the last shown day, so count only the days on screen.
+  const rangeStart = weekStart.getTime();
+  const rangeEnd   = addWeeks(weekStart, numWeeks).getTime();
+  const active  = slots.filter((s) => {
+    const t = new Date(s.starts_at).getTime();
+    return s.status !== 'cancelled' && t >= rangeStart && t < rangeEnd;
+  });
+  const blocked = active.filter((s) => s.status === 'blocked').length;
+  const booked  = active.filter((s) => s.status !== 'blocked' && (s.status === 'full' || s.status === 'in_progress' || s.current_bookings >= s.max_bookings)).length;
+  const free    = active.length - blocked - booked;
+  const week    = isoWeekNumber(weekStart);
+  const weekLabel = numWeeks > 1 ? `Vecka ${week}–${isoWeekNumber(addWeeks(weekStart, numWeeks - 1))}` : `Vecka ${week}`;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 pb-2 text-xs">
+      <span className="font-semibold text-foreground">{weekLabel}</span>
+      <span className="text-muted-foreground tabular-nums">{active.length} pass · {booked} bokade · {free} lediga{blocked > 0 ? ` · ${blocked} blockerade` : ''}</span>
+      <span className="flex items-center gap-3 ml-auto text-muted-foreground">
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-[#DFF4DF] border border-[#B7DDB7]" />Ledig</span>
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-[#E8DCFF] border border-[#C7AEFF]" />Bokad</span>
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-purple-500" />Blockerad</span>
+      </span>
+    </div>
+  );
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type SchemaTab  = 'bokningsschema' | 'resursschema';
@@ -65,9 +107,6 @@ function FilterRow({
   showWeekends,
   onFilterDateChange,
   onShowWeekendsChange,
-  instructors = [],
-  selectedInstructorId = '',
-  onInstructorChange,
   lessonTypes = [],
   selectedLessonTypeId = '',
   onLessonTypeChange,
@@ -81,9 +120,6 @@ function FilterRow({
   showWeekends:          boolean;
   onFilterDateChange:    (d: string) => void;
   onShowWeekendsChange:  (v: boolean) => void;
-  instructors?:          { id: string; first_name: string; last_name: string }[];
-  selectedInstructorId?: string;
-  onInstructorChange?:   (id: string) => void;
   lessonTypes?:          { id: string; name: string }[];
   selectedLessonTypeId?: string;
   onLessonTypeChange?:   (id: string) => void;
@@ -99,31 +135,15 @@ function FilterRow({
       {/* Row 2: group filters + date picker + checkboxes */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-border/40">
 
-        {/* Filtrera på personalgrupp */}
-        <div className="relative shrink-0">
-          <select
-            value={selectedInstructorId}
-            onChange={(e) => onInstructorChange?.(e.target.value)}
-            className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[168px]"
-          >
-            <option value="">Filtrera på personalgrupp</option>
-            {instructors.map((i) => (
-              <option key={i.id} value={i.id}>{i.first_name} {i.last_name}</option>
-            ))}
-          </select>
-          <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60">
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
-          </span>
-        </div>
-
-        {/* Filtrera på tidmallsgrupp */}
+        {/* Filtrera på lektionstyp */}
+        {onLessonTypeChange && (
         <div className="relative shrink-0">
           <select
             value={selectedLessonTypeId}
             onChange={(e) => onLessonTypeChange?.(e.target.value)}
             className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[180px]"
           >
-            <option value="">Filtrera på lektionstyp</option>
+            <option value="">Alla lektionstyper</option>
             {lessonTypes.map((lt) => (
               <option key={lt.id} value={lt.id}>{lt.name}</option>
             ))}
@@ -132,6 +152,7 @@ function FilterRow({
             <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
           </span>
         </div>
+        )}
 
         {/* Välj datum */}
         <div className="relative flex items-center gap-1.5 shrink-0">
@@ -160,6 +181,7 @@ function FilterRow({
 
         {/* Checkboxes (right) */}
         <div className="flex items-center gap-3 ml-auto shrink-0">
+          {onGroupByDayChange && (
           <label className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="checkbox"
@@ -169,6 +191,7 @@ function FilterRow({
             />
             <span className="text-[11px] text-muted-foreground whitespace-nowrap">Gruppera personal per dag</span>
           </label>
+          )}
           <label className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="checkbox"
@@ -182,6 +205,7 @@ function FilterRow({
       </div>
 
       {/* Row 3: resource search */}
+      {onVehicleChange && (
       <div className="flex items-center px-3 py-1.5">
         <div className="relative shrink-0">
           <select
@@ -189,7 +213,7 @@ function FilterRow({
             onChange={(e) => onVehicleChange?.(e.target.value)}
             className="h-7 text-[11px] border border-border rounded pl-2 pr-6 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 appearance-none cursor-pointer min-w-[152px]"
           >
-            <option value="">Sök efter resurs</option>
+            <option value="">Alla fordon</option>
             {vehicles.map((v) => (
               <option key={v.id} value={v.id}>{v.registration_number} · {v.make} {v.model}</option>
             ))}
@@ -199,7 +223,79 @@ function FilterRow({
           </span>
         </div>
       </div>
+      )}
     </div>
+  );
+}
+
+// ─── Lärarfilter (flera lärare) ───────────────────────────────────────────────
+
+const INSTRUCTOR_FILTER_STORAGE_KEY = 'tc.schema.instructorFilter';
+
+function InstructorFilterMenu({
+  instructors,
+  selectedIds,
+  onChange,
+}: {
+  instructors: { id: string; name: string }[];
+  selectedIds: string[];
+  onChange:    (ids: string[]) => void;
+}) {
+  const selected = new Set(selectedIds);
+  const label = selectedIds.length === 0
+    ? 'Alla lärare'
+    : selectedIds.length === 1
+      ? instructors.find((i) => i.id === selectedIds[0])?.name ?? '1 lärare'
+      : `${selectedIds.length} lärare`;
+
+  function toggle(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onChange(instructors.filter((i) => next.has(i.id)).map((i) => i.id));
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded border transition-colors max-w-[180px]',
+            selectedIds.length > 0
+              ? 'border-primary bg-primary/10 text-primary'
+              : 'border-border bg-background hover:bg-accent text-foreground',
+          )}
+          aria-label="Filtrera på lärare"
+        >
+          <Users className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+          <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-60 max-h-[60vh] overflow-y-auto">
+        <DropdownMenuLabel className="text-xs">Visa lärare</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem
+          checked={selectedIds.length === 0}
+          onSelect={(e) => e.preventDefault()}
+          onCheckedChange={() => onChange([])}
+          className="text-sm"
+        >
+          Alla lärare
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {instructors.map((i) => (
+          <DropdownMenuCheckboxItem
+            key={i.id}
+            checked={selected.has(i.id)}
+            onSelect={(e) => e.preventDefault()}
+            onCheckedChange={() => toggle(i.id)}
+            className="text-sm"
+          >
+            {i.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -213,6 +309,7 @@ function GridNavBar({
   onToday,
   onViewChange,
   onCreateSlot,
+  filter,
 }: {
   title:         string;
   view:          GridView;
@@ -221,6 +318,7 @@ function GridNavBar({
   onToday:       () => void;
   onViewChange:  (v: GridView) => void;
   onCreateSlot:  () => void;
+  filter?:       React.ReactNode;
 }) {
   const VIEWS: { value: GridView; label: string }[] = [
     { value: 'dag',     label: 'Dag'     },
@@ -229,9 +327,9 @@ function GridNavBar({
   ];
 
   return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border bg-card">
+    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border bg-card">
       {/* Left: nav */}
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1">
         <button
           onClick={onPrev}
           className="p-1 rounded hover:bg-accent transition-colors text-muted-foreground"
@@ -252,6 +350,7 @@ function GridNavBar({
         >
           <ChevronRight className="w-4 h-4" />
         </button>
+        {filter && <div className="ml-1">{filter}</div>}
         <span className="text-sm font-semibold text-foreground ml-2">{title}</span>
       </div>
 
@@ -334,7 +433,6 @@ export function SchedulingCalendarPage() {
   });
   const [showWeekends,             setShowWeekends]             = useState(true);
   const [filterDate,               setFilterDate]               = useState('');
-  const [selectedInstructorFilter, setSelectedInstructorFilter] = useState('');
   const [selectedLessonTypeFilter, setSelectedLessonTypeFilter] = useState('');
   const [selectedVehicleFilter,    setSelectedVehicleFilter]    = useState('');
   const [groupByDay,               setGroupByDay]               = useState(false);
@@ -362,7 +460,11 @@ export function SchedulingCalendarPage() {
     handleDatesSet,
   } = useCalendarView();
 
-  const selectedInstructorId = selectedInstructorIds[0] ?? null;
+  // Ett enda lärarfilter (flera val) för dag-, vecka- och 5-veckorsvyn.
+  // Tom lista = alla lärare. Valet sparas per webbläsare.
+  const selectedInstructorId = selectedInstructorIds.length === 1 ? selectedInstructorIds[0]! : null;
+  const selectedInstructorSet = useMemo(() => new Set(selectedInstructorIds), [selectedInstructorIds]);
+  const restoredInstructorFilter = useRef(false);
 
   // ── Lesson types ─────────────────────────────────────────────────────────────
   const { data: lessonTypes = [] } = useLessonTypes();
@@ -411,6 +513,24 @@ export function SchedulingCalendarPage() {
     [instructors],
   );
 
+  useEffect(() => {
+    if (restoredInstructorFilter.current || instructors.length === 0) return;
+    restoredInstructorFilter.current = true;
+    try {
+      const raw = window.localStorage.getItem(INSTRUCTOR_FILTER_STORAGE_KEY);
+      const ids = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(ids)) {
+        const valid = ids.filter((x): x is string => typeof x === 'string' && instructors.some((i) => i.id === x));
+        if (valid.length > 0) setSelectedInstructorIds(valid);
+      }
+    } catch { /* ignore unavailable storage */ }
+  }, [instructors, setSelectedInstructorIds]);
+
+  const handleInstructorFilterChange = useCallback((ids: string[]) => {
+    setSelectedInstructorIds(ids);
+    try { window.localStorage.setItem(INSTRUCTOR_FILTER_STORAGE_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+  }, [setSelectedInstructorIds]);
+
   // ── Grid date range ──────────────────────────────────────────────────────
   const numWeeks = gridView === '5veckor' ? 5 : 1;
 
@@ -453,8 +573,10 @@ export function SchedulingCalendarPage() {
   const updateSlotTiming = useUpdateSlotTiming();
 
   const fcEvents = useMemo(
-    () => (fcSlotsData?.data ?? []).map(slotToCalendarEvent),
-    [fcSlotsData],
+    () => (fcSlotsData?.data ?? [])
+      .filter((s) => selectedInstructorSet.size <= 1 || (s.instructor_id !== null && selectedInstructorSet.has(s.instructor_id)))
+      .map(slotToCalendarEvent),
+    [fcSlotsData, selectedInstructorSet],
   );
 
   const gridSlots = useMemo(
@@ -520,18 +642,26 @@ export function SchedulingCalendarPage() {
   );
 
   const filteredInstructors = useMemo(
-    () => selectedInstructorFilter
-      ? instructors.filter((i) => i.id === selectedInstructorFilter)
+    () => selectedInstructorSet.size > 0
+      ? instructors.filter((i) => selectedInstructorSet.has(i.id))
       : instructors,
-    [instructors, selectedInstructorFilter],
+    [instructors, selectedInstructorSet],
   );
 
   const filteredGridSlots = useMemo(() => {
     let result = gridSlots;
-    if (selectedInstructorFilter) result = result.filter((s) => s.instructor_id === selectedInstructorFilter);
+    if (selectedInstructorSet.size > 0) result = result.filter((s) => s.instructor_id !== null && selectedInstructorSet.has(s.instructor_id));
     if (selectedLessonTypeFilter) result = result.filter((s) => s.lesson_type_id === selectedLessonTypeFilter);
     return result;
-  }, [gridSlots, selectedInstructorFilter, selectedLessonTypeFilter]);
+  }, [gridSlots, selectedInstructorSet, selectedLessonTypeFilter]);
+
+  const instructorFilter = (
+    <InstructorFilterMenu
+      instructors={instructorFilterOptions}
+      selectedIds={selectedInstructorIds}
+      onChange={handleInstructorFilterChange}
+    />
+  );
 
   const filteredVehicles = useMemo(
     () => selectedVehicleFilter
@@ -641,9 +771,6 @@ export function SchedulingCalendarPage() {
                 }
               }}
               onShowWeekendsChange={setShowWeekends}
-              instructors={instructors}
-              selectedInstructorId={selectedInstructorFilter}
-              onInstructorChange={setSelectedInstructorFilter}
               lessonTypes={lessonTypes}
               selectedLessonTypeId={selectedLessonTypeFilter}
               onLessonTypeChange={setSelectedLessonTypeFilter}
@@ -660,6 +787,7 @@ export function SchedulingCalendarPage() {
               onToday={gridView === 'dag' ? handleFCToday : handleGridToday}
               onViewChange={handleGridViewChange}
               onCreateSlot={() => setCreateSlotOpen(true)}
+              filter={instructorFilter}
             />
 
             {/* Calendar content */}
@@ -668,37 +796,6 @@ export function SchedulingCalendarPage() {
               {gridView === 'dag' ? (
                 /* ── Day view: FullCalendar ──────────────────────────────── */
                 <div className="space-y-3">
-                  {/* Instructor pills */}
-                  {instructorFilterOptions.length > 0 && (
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
-                      <button
-                        onClick={() => setSelectedInstructorIds([])}
-                        className={cn(
-                          'shrink-0 px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
-                          !selectedInstructorId
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
-                        )}
-                      >
-                        Alla lärare
-                      </button>
-                      {instructorFilterOptions.map((i) => (
-                        <button
-                          key={i.id}
-                          onClick={() => setSelectedInstructorIds([i.id])}
-                          className={cn(
-                            'shrink-0 px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
-                            selectedInstructorId === i.id
-                              ? 'bg-primary text-primary-foreground border-primary'
-                              : 'border-input text-muted-foreground hover:text-foreground hover:bg-accent',
-                          )}
-                        >
-                          {i.name.split(' ').pop()}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
                   {fcError && (
                     <div className="flex items-center justify-between text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-4 py-3">
                       <span>Det gick inte att hämta schemat.</span>
@@ -729,6 +826,8 @@ export function SchedulingCalendarPage() {
                 </div>
               ) : (
                 /* ── Week / 5-week view: multi-instructor grid ───────────── */
+                <>
+                <WeekSummaryBar slots={filteredGridSlots} weekStart={weekStart} numWeeks={numWeeks} />
                 <div className="rounded-lg border border-border bg-card overflow-hidden">
                   <MultiInstructorGrid
                     slots={filteredGridSlots}
@@ -742,6 +841,7 @@ export function SchedulingCalendarPage() {
                     groupByDay={groupByDay}
                   />
                 </div>
+                </>
               )}
             </div>
           </div>
