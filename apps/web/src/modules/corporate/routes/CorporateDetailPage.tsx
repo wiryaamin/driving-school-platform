@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Building2, ChevronDown, ChevronUp, Upload, Trash2 } from 'lucide-react';
+import { Building2, ChevronDown, ChevronUp, Upload, Trash2, FileText, Download, Loader2 } from 'lucide-react';
 import {
   Form, FormField, FormItem, FormLabel, FormControl, FormMessage,
   Input, Button, Textarea,
@@ -11,7 +11,7 @@ import {
   Skeleton, toast,
 } from '@platform/ui';
 import { supabase } from '@core/api/supabase.js';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { CorporateContract } from '@platform/types';
 import {
   useCorporateCustomer,
@@ -24,19 +24,20 @@ import {
 } from '../hooks/useCorporateCustomers.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 import { cn } from '@/lib/utils.js';
+import { useSession } from '@shared/hooks/useSession.js';
+import { PermissionGate } from '@core/rbac/PermissionGate.js';
+import { Permissions } from '@core/rbac/permissions.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type DetailTab = 'foretaget' | 'dokument' | 'billecta' | 'aktiviteter' | 'avtal' | 'konto' | 'historik';
+type DetailTab = 'foretaget' | 'avtal' | 'fakturor' | 'konto' | 'dokument';
 
 const TABS: { key: DetailTab; label: string }[] = [
-  { key: 'foretaget',   label: 'Företaget'             },
-  { key: 'dokument',    label: 'Dokument'              },
-  { key: 'billecta',    label: 'Billecta'              },
-  { key: 'aktiviteter', label: 'Aktiviteter utan avtal' },
-  { key: 'avtal',       label: 'Avtal'                 },
-  { key: 'konto',       label: 'Konto'                 },
-  { key: 'historik',    label: 'Historik'              },
+  { key: 'foretaget', label: 'Företaget' },
+  { key: 'avtal',     label: 'Avtal'     },
+  { key: 'fakturor',  label: 'Fakturor'  },
+  { key: 'konto',     label: 'Konto'     },
+  { key: 'dokument',  label: 'Dokument'  },
 ];
 
 // ─── Form schema ──────────────────────────────────────────────────────────────
@@ -112,9 +113,9 @@ function ElevAccordion({ id }: { id: string }) {
             <ul className="space-y-1">
               {students.map(s => (
                 <li key={s.id} className="text-sm">
-                  <a href={`/students/${s.id}`} className="text-blue-600 hover:underline">
+                  <Link to={`/students/${s.id}`} className="text-blue-600 hover:underline">
                     {s.first_name} {s.last_name}
-                  </a>
+                  </Link>
                   {s.email && (
                     <span className="text-xs text-muted-foreground ml-2">{s.email}</span>
                   )}
@@ -425,176 +426,6 @@ function ForetagetTab({ id }: { id: string }) {
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-// ─── Tab: Dokument ────────────────────────────────────────────────────────────
-
-function DokumentTab() {
-  return (
-    <div className="p-5 space-y-4">
-      {/* Upload zone */}
-      <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-border rounded-lg py-8 cursor-pointer hover:bg-muted/20 transition-colors text-center">
-        <Upload className="w-5 h-5 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          Dra filer till det här fältet eller klicka här för att ladda upp filen.
-          Video- och ljudfiler kan inte laddas upp och filen måste vara mindre än 50 MB.
-        </p>
-        <input type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg" />
-      </label>
-
-      {/* File table */}
-      <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
-        <thead>
-          <tr className="border-b border-border bg-muted/10">
-            {['Filnamn', 'Uppladdad', 'Laddar upp', 'Typ', 'Storlek', 'Val'].map(h => (
-              <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
-              Inga dokument uppladdade.
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ─── Tab: Billecta ────────────────────────────────────────────────────────────
-
-function BillectaTab({ id }: { id: string }) {
-  const { data: customer } = useCorporateCustomer(id);
-  if (!customer) return null;
-
-  const rows: { label: string; value: string }[] = [
-    { label: 'Namn',        value: customer.company_name },
-    { label: 'Företagsnr.', value: customer.org_number ?? '—' },
-    { label: 'Adress',      value: [customer.address_line1, `${customer.postal_code ?? ''} ${customer.city ?? ''}`.trim()].filter(Boolean).join('\n') || '—' },
-    { label: 'E-post',      value: customer.contact_email ?? '—' },
-  ];
-
-  return (
-    <div className="p-5 space-y-5">
-      <div className="max-w-lg space-y-4">
-        <h2 className="font-semibold text-sm">Billecta</h2>
-        <p className="text-xs text-muted-foreground">
-          Informationen som lagras om företaget i Billecta visas nedan. Observera att vid sändning av fakturor kommer
-          företagets namn, adress och e-post (om sådan finns) att åsidosättas med information lagrad i TABS.
-          Eventuella ändringar av villkor och andra inställningar ska göras i Billecta.
-        </p>
-
-        <div className="border border-border rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-border bg-muted/10">
-            <span className="text-xs font-semibold text-muted-foreground">Allmän information</span>
-          </div>
-          <table className="w-full text-sm">
-            <tbody>
-              {rows.map(({ label, value }) => (
-                <tr key={label} className="border-b border-border last:border-0">
-                  <td className="px-4 py-2.5 text-xs font-medium text-muted-foreground w-32">{label}</td>
-                  <td className="px-4 py-2.5 text-sm whitespace-pre-line">{value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* E-faktura */}
-        <div className="border border-border rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-border bg-muted/10">
-            <span className="text-xs font-semibold text-muted-foreground">E-Faktura</span>
-          </div>
-          <div className="p-4 space-y-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">Intermediatör</label>
-              <select className="h-8 text-sm border border-input rounded-md px-2 bg-background">
-                <option value="">- Ingen vald -</option>
-                <option>Aksesspunkt Norge AS</option>
-                <option>Apix Messaging AB</option>
-                <option>Basware</option>
-                <option>CGI</option>
-                <option>Compello</option>
-                <option>Crediflow</option>
-                <option>Danske bank</option>
-                <option>Evry</option>
-                <option>Finvoice</option>
-                <option>Handelsbanken</option>
-                <option>InExchange</option>
-                <option>Liaison Technologies</option>
-                <option>Logiq AS</option>
-                <option>Nordea</option>
-                <option>OpusCapita</option>
-                <option>Pagero</option>
-                <option>Palette</option>
-                <option>PEPPOL</option>
-                <option>Readsoft/Lexmark</option>
-                <option>SEB</option>
-                <option>Strålfors</option>
-                <option>Svefaktura</option>
-                <option>Swedbank</option>
-                <option>Tietoevry</option>
-                <option>Visma</option>
-                <option>Volvofinans</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">GLN</label>
-              <input className="h-8 text-sm border border-input rounded-md px-2 bg-background" placeholder="" />
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" className="bg-[#1a2b4a] hover:bg-[#14213d] text-white">Spara information</Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Fakturainställningar */}
-        <div className="border border-border rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-border bg-muted/10">
-            <span className="text-xs font-semibold text-muted-foreground">Fakturainstallningar</span>
-          </div>
-          <table className="w-full text-sm">
-            <tbody>
-              {[
-                ['Leverera fakturor/krav med', 'E-post'],
-                ['Avtalad ränta', 'Över gällande referensränta: 8%'],
-                ['Betalningsvillkor i dagar', '30'],
-                ['Administrationsavgift (SEK)', '0'],
-                ['Betalningsvillkor för påminnelse i dagar', '10'],
-                ['Påminnelseavgift (SEK)', '0'],
-                ['Bifoga fakturan i e-post', 'Nej'],
-                ['Skicka fakturan på post om e-postmeddelandet inte lästs på ett bestämt antal dagar', 'Ja, efter 3 dag(ar)'],
-                ['Skicka automatiska påminnelser', 'Nej'],
-                ['Aktivera automatisk kravhantering', 'Ja'],
-                ['Börja krav med', 'Påminnelse'],
-                ['Antal påminnelser att skicka före inkassokrav', '1'],
-                ['Betalningsvillkor i dagar', '10'],
-              ].map(([label, value], i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  <td className="px-4 py-2 text-xs text-muted-foreground w-56">{label}</td>
-                  <td className="px-4 py-2 text-xs">{value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Tab: Aktiviteter utan avtal ──────────────────────────────────────────────
-
-function AktiviteterTab() {
-  return (
-    <div className="p-5">
-      <div className="border border-border rounded-md px-4 py-3 bg-muted/10 text-sm text-muted-foreground">
-        Det finns inga aktiviteter utan avtal.
-      </div>
-    </div>
   );
 }
 
@@ -910,21 +741,20 @@ function AvtalTab({ id }: { id: string }) {
           <thead>
             <tr className="border-b border-border bg-muted/10">
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Avtal</th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Försäljning</th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Betalning</th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Oanvänd betalning</th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Total kredit/skyldig</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Betalningsvillkor</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Kreditgräns per elev</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Status</th>
               <th className="w-10"></th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               [1, 2].map(i => (
-                <tr key={i}><td colSpan={6} className="px-4 py-2"><Skeleton className="h-8 w-full" /></td></tr>
+                <tr key={i}><td colSpan={5} className="px-4 py-2"><Skeleton className="h-8 w-full" /></td></tr>
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                <td colSpan={5} className="px-4 py-10 text-center text-sm text-muted-foreground">
                   Inga avtal hittade.
                 </td>
               </tr>
@@ -946,10 +776,9 @@ function AvtalTab({ id }: { id: string }) {
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums text-muted-foreground">–</td>
-                  <td className="px-4 py-3 text-right text-sm tabular-nums font-medium text-green-600">0,00</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground">{contract.payment_terms_days != null ? `${contract.payment_terms_days} dagar` : '—'}</td>
+                  <td className="px-4 py-3 text-sm text-muted-foreground tabular-nums">{contract.credit_limit_sek != null ? `${SEK.format(contract.credit_limit_sek)} kr` : '—'}</td>
+                  <td className="px-4 py-3 text-sm">{contract.is_active ? 'Aktivt' : 'Avslutat'}</td>
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"
@@ -977,46 +806,361 @@ function AvtalTab({ id }: { id: string }) {
   );
 }
 
-// ─── Tab: Konto ───────────────────────────────────────────────────────────────
+// ─── Tab: Dokument ────────────────────────────────────────────────────────────
 
-function KontoTab() {
+interface CorporateDocument {
+  id:              string;
+  file_name:       string;
+  storage_path:    string;
+  mime_type:       string | null;
+  file_size_bytes: number | null;
+  created_at:      string;
+}
+
+const CORP_DOC_BUCKET = 'corporate-documents';
+const CORP_DOC_MAX_BYTES = 50 * 1024 * 1024;
+const CORP_DOC_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp';
+
+function fmtBytes(n: number | null) {
+  if (n == null) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} kB`;
+  return `${(n / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`;
+}
+
+function DokumentTab({ id }: { id: string }) {
+  const { organization, user } = useSession();
+  const orgId = organization?.id;
+  const qc = useQueryClient();
+  const [dragOver, setDragOver] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<CorporateDocument | null>(null);
+  const queryKey = ['corporate-documents', id] as const;
+
+  const { data: docs = [], isLoading, isError } = useQuery({
+    queryKey,
+    queryFn: async (): Promise<CorporateDocument[]> => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('corporate_customer_documents')
+        .select('id, file_name, storage_path, mime_type, file_size_bytes, created_at')
+        .eq('corporate_customer_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as CorporateDocument[];
+    },
+    staleTime: 30_000,
+  });
+
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      if (!orgId || !user?.id) throw new Error('Du är inte inloggad.');
+      if (file.size > CORP_DOC_MAX_BYTES) throw new Error('Filen är större än 50 MB.');
+      const ext = file.name.includes('.') ? file.name.split('.').pop() : '';
+      const storagePath = `${orgId}/${id}/${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
+      const { error: upErr } = await supabase.storage.from(CORP_DOC_BUCKET).upload(storagePath, file, file.type ? { contentType: file.type } : {});
+      if (upErr) throw new Error(upErr.message.includes('mime') ? 'Filtypen stöds inte. Använd PDF, Word, Excel eller bild.' : upErr.message);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: dbErr } = await (supabase as unknown as any)
+        .from('corporate_customer_documents')
+        .insert({
+          organization_id:       orgId,
+          corporate_customer_id: id,
+          file_name:             file.name.slice(0, 255),
+          storage_path:          storagePath,
+          mime_type:             file.type || null,
+          file_size_bytes:       file.size,
+          uploaded_by:           user.id,
+        });
+      if (dbErr) throw new Error(dbErr.message);
+    },
+    onSuccess: () => { void qc.invalidateQueries({ queryKey }); },
+  });
+
+  const remove = useMutation({
+    mutationFn: async (doc: CorporateDocument) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as unknown as any)
+        .from('corporate_customer_documents')
+        .update({ deleted_at: new Date().toISOString(), deleted_by: user?.id ?? null })
+        .eq('id', doc.id);
+      if (error) throw new Error(error.message);
+    },
+    onSuccess: () => { void qc.invalidateQueries({ queryKey }); toast({ title: 'Dokumentet togs bort' }); },
+    onError: (e) => toast({ title: 'Kunde inte ta bort dokumentet', description: e instanceof Error ? e.message : '', variant: 'destructive' }),
+  });
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    let ok = 0;
+    for (const file of Array.from(files)) {
+      try {
+        await upload.mutateAsync(file);
+        ok += 1;
+      } catch (e) {
+        toast({ title: `Kunde inte ladda upp ${file.name}`, description: e instanceof Error ? e.message : '', variant: 'destructive' });
+      }
+    }
+    if (ok > 0) toast({ title: ok === 1 ? 'Dokumentet laddades upp' : `${ok} dokument laddades upp` });
+  }
+
+  async function handleOpen(doc: CorporateDocument) {
+    const { data, error } = await supabase.storage.from(CORP_DOC_BUCKET).createSignedUrl(doc.storage_path, 60);
+    if (error || !data) {
+      toast({ title: 'Kunde inte öppna dokumentet', description: error?.message ?? '', variant: 'destructive' });
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener');
+  }
+
   return (
     <div className="p-5 space-y-4">
-      <div className="flex items-center gap-2">
-        <select className="h-8 text-sm border border-input rounded-md px-2 bg-background appearance-none pr-7">
-          <option>Alla avtal</option>
-        </select>
-        <select className="h-8 text-sm border border-input rounded-md px-2 bg-background appearance-none pr-7">
-          <option>Se betalningar</option>
-        </select>
-        <div className="ml-auto">
-          <Button size="sm" variant="outline" className="h-8 text-xs">
-            Kontoutdrag med saldo
-          </Button>
-        </div>
-      </div>
+      <PermissionGate permission={Permissions.DOCUMENTS_CREATE}>
+        <label
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); void handleFiles(e.dataTransfer.files); }}
+          className={cn(
+            'flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-lg py-8 cursor-pointer transition-colors text-center px-4',
+            dragOver ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/20',
+            upload.isPending && 'opacity-60 pointer-events-none',
+          )}
+        >
+          {upload.isPending ? <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" /> : <Upload className="w-5 h-5 text-muted-foreground" />}
+          <p className="text-sm text-muted-foreground">
+            {upload.isPending ? 'Laddar upp…' : 'Dra filer hit eller klicka för att ladda upp. PDF, Word, Excel eller bild, högst 50 MB per fil.'}
+          </p>
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            accept={CORP_DOC_ACCEPT}
+            onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
+          />
+        </label>
+      </PermissionGate>
 
-      <div className="border border-border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="border border-border rounded-lg overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
           <thead>
             <tr className="border-b border-border bg-muted/10">
-              <th className="px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground w-12"></th>
-              <th className="px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">Datum</th>
-              <th className="px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">Artikel</th>
-              <th className="px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">Elev</th>
-              <th className="px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">Avtal</th>
-              <th className="px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground">Antal</th>
-              <th className="px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground">Betalning</th>
-              <th className="px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground">Försäljning</th>
-              <th className="px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground">Debiteras</th>
+              {['Filnamn', 'Uppladdad', 'Storlek', ''].map((h, i) => (
+                <th key={i} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                Inga kontotransaktioner hittades.
-              </td>
+            {isLoading ? (
+              [1, 2].map((i) => <tr key={i}><td colSpan={4} className="px-4 py-2"><Skeleton className="h-7 w-full" /></td></tr>)
+            ) : isError ? (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-destructive">Dokumenten kunde inte hämtas.</td></tr>
+            ) : docs.length === 0 ? (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-sm text-muted-foreground">Inga dokument uppladdade.</td></tr>
+            ) : (
+              docs.map((d) => (
+                <tr key={d.id} className="border-b border-border last:border-0 hover:bg-muted/10">
+                  <td className="px-4 py-2.5">
+                    <button type="button" onClick={() => void handleOpen(d)} className="flex items-center gap-2 text-left text-blue-600 hover:underline">
+                      <FileText className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{d.file_name}</span>
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{fmtDate(d.created_at)}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">{fmtBytes(d.file_size_bytes)}</td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button type="button" onClick={() => void handleOpen(d)} title="Öppna" className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                    <PermissionGate permission={Permissions.DOCUMENTS_DELETE}>
+                      <button type="button" onClick={() => setConfirmDelete(d)} title="Ta bort" className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-950/30 text-muted-foreground hover:text-red-600">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </PermissionGate>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <Dialog open={confirmDelete !== null} onOpenChange={(v) => { if (!v) setConfirmDelete(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Ta bort dokument</DialogTitle>
+            <DialogDescription>
+              Vill du ta bort <strong>{confirmDelete?.file_name}</strong>? Dokumentet försvinner från företagets lista.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Avbryt</Button>
+            <Button
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() => { if (confirmDelete) remove.mutate(confirmDelete, { onSettled: () => setConfirmDelete(null) }); }}
+            >
+              {remove.isPending ? 'Tar bort…' : 'Ta bort'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ─── Fakturadata (Fakturor + Konto) ───────────────────────────────────────────
+
+interface InvoiceRow {
+  id:                    string;
+  invoice_number:        string | null;
+  status:                string;
+  issued_at:             string | null;
+  due_date:              string | null;
+  created_at:            string;
+  void_at:               string | null;
+  total_amount:          number;
+  paid_amount:           number;
+  outstanding_amount:    number;
+  student_id:            string;
+  corporate_customer_id: string | null;
+}
+
+function statusLabel(s: string) {
+  const map: Record<string, string> = {
+    paid: 'Betald', issued: 'Skickad – väntar på betalning', overdue: 'Förfallen',
+    draft: 'Utkast – ej skickad', partially_paid: 'Delvis betald', void: 'Makulerad',
+  };
+  return map[s] ?? s;
+}
+
+const STATUS_CLS: Record<string, string> = {
+  paid:           'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  issued:         'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  overdue:        'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  partially_paid: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  draft:          'bg-muted text-muted-foreground',
+  void:           'bg-muted text-muted-foreground line-through',
+};
+
+/** Fakturor som avser företaget: fakturerade företaget, eller utställda på företagets elever. */
+function useCorporateInvoices(id: string) {
+  const { data: studentData, isLoading: studentsLoading } = useStudentList({ corporate_customer_id: id, per_page: 100 });
+  const students   = studentData?.data ?? [];
+  const studentIds = students.map((s) => s.id);
+  const studentMap = Object.fromEntries(students.map((s) => [s.id, `${s.first_name} ${s.last_name}`]));
+
+  const invoicesQuery = useQuery({
+    queryKey: ['corp-invoices', id, studentIds.join(',')],
+    queryFn: async (): Promise<InvoiceRow[]> => {
+      const filter = studentIds.length > 0
+        ? `corporate_customer_id.eq.${id},student_id.in.(${studentIds.join(',')})`
+        : `corporate_customer_id.eq.${id}`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as unknown as any)
+        .from('invoices')
+        .select('id, invoice_number, status, issued_at, due_date, created_at, void_at, total_amount, paid_amount, outstanding_amount, student_id, corporate_customer_id')
+        .or(filter)
+        .order('created_at', { ascending: false })
+        .limit(300);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as InvoiceRow[];
+    },
+    enabled: !studentsLoading,
+    staleTime: 60_000,
+  });
+
+  return {
+    invoices:  invoicesQuery.data ?? [],
+    isLoading: studentsLoading || invoicesQuery.isLoading,
+    isError:   invoicesQuery.isError,
+    studentMap,
+  };
+}
+
+// ─── Tab: Fakturor ────────────────────────────────────────────────────────────
+
+function FakturorTab({ id }: { id: string }) {
+  const { invoices, isLoading, isError, studentMap } = useCorporateInvoices(id);
+  const [filter, setFilter] = useState<'foretaget' | 'alla'>('foretaget');
+  const shown = filter === 'foretaget' ? invoices.filter((i) => i.corporate_customer_id === id) : invoices;
+  const billed = invoices.filter((i) => i.corporate_customer_id === id && i.status !== 'draft' && i.status !== 'void');
+  const outstanding = billed.reduce((s, i) => s + i.outstanding_amount, 0);
+  const overdue = billed.filter((i) => i.status === 'overdue').reduce((s, i) => s + i.outstanding_amount, 0);
+  const drafts = invoices.filter((i) => i.corporate_customer_id === id && i.status === 'draft').length;
+
+  return (
+    <div className="p-5 space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-lg border border-border px-4 py-3">
+          <p className="text-xs text-muted-foreground">Obetalt</p>
+          <p className="text-lg font-bold tabular-nums">{SEK.format(outstanding)} kr</p>
+        </div>
+        <div className={cn('rounded-lg border px-4 py-3', overdue > 0 ? 'border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-900' : 'border-border')}>
+          <p className="text-xs text-muted-foreground">Varav förfallet</p>
+          <p className="text-lg font-bold tabular-nums">{SEK.format(overdue)} kr</p>
+        </div>
+        <div className="rounded-lg border border-border px-4 py-3">
+          <p className="text-xs text-muted-foreground">Ej skickade utkast</p>
+          <p className="text-lg font-bold tabular-nums">{drafts}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="relative">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as 'foretaget' | 'alla')}
+            className="h-9 text-sm border border-input rounded-md pl-3 pr-8 bg-background appearance-none cursor-pointer"
+          >
+            <option value="foretaget">Fakturerade företaget</option>
+            <option value="alla">Alla fakturor för företagets elever</option>
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+        </div>
+        <p className="text-xs text-muted-foreground">Öppna en faktura för att skicka, registrera betalning eller makulera den.</p>
+      </div>
+
+      <div className="border border-border rounded-lg overflow-x-auto">
+        <table className="w-full text-sm min-w-[760px]">
+          <thead>
+            <tr className="border-b border-border bg-muted/10">
+              {['Nr', 'Elev', 'Betalas av', 'Datum', 'Förfaller', 'Belopp', 'Kvar att betala', 'Status', ''].map((h, i) => (
+                <th key={i} className={cn('px-4 py-2.5 text-xs font-semibold text-muted-foreground', i === 5 || i === 6 ? 'text-right' : 'text-left')}>{h}</th>
+              ))}
             </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              [1, 2, 3].map((i) => <tr key={i}><td colSpan={9} className="px-4 py-2"><Skeleton className="h-6 w-full" /></td></tr>)
+            ) : isError ? (
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-destructive">Fakturorna kunde inte hämtas.</td></tr>
+            ) : shown.length === 0 ? (
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                {filter === 'foretaget' ? 'Inga fakturor är ställda till företaget ännu.' : 'Inga fakturor för företagets elever.'}
+              </td></tr>
+            ) : (
+              shown.map((inv) => (
+                <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
+                  <td className="px-4 py-2.5 text-xs font-medium tabular-nums">{inv.invoice_number ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-xs">{studentMap[inv.student_id] ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{inv.corporate_customer_id === id ? 'Företaget' : 'Eleven'}</td>
+                  <td className="px-4 py-2.5 text-xs tabular-nums">{fmtDate(inv.issued_at ?? inv.created_at)}</td>
+                  <td className="px-4 py-2.5 text-xs tabular-nums">{fmtDate(inv.due_date)}</td>
+                  <td className="px-4 py-2.5 text-xs tabular-nums text-right font-medium">{SEK.format(inv.total_amount)}</td>
+                  <td className="px-4 py-2.5 text-xs tabular-nums text-right">{inv.status === 'void' || inv.status === 'draft' ? '—' : SEK.format(inv.outstanding_amount)}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap', STATUS_CLS[inv.status] ?? 'bg-muted text-muted-foreground')}>
+                      {statusLabel(inv.status)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <Link to={`/finance/invoices/${inv.id}`} className="text-xs font-medium text-primary hover:underline">
+                      {inv.status === 'draft' ? 'Öppna och skicka' : 'Öppna'}
+                    </Link>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -1024,118 +1168,114 @@ function KontoTab() {
   );
 }
 
-// ─── Tab: Historik ────────────────────────────────────────────────────────────
+// ─── Tab: Konto ───────────────────────────────────────────────────────────────
 
-interface InvoiceRow {
+const PAYMENT_METHOD_SV: Record<string, string> = {
+  manual: 'Kontant/manuell', card: 'Kort', bank_transfer: 'Bankgiro/överföring', swish: 'Swish',
+  stripe: 'Kort online', invoice_credit: 'Kreditering', other: 'Övrigt',
+};
+
+interface PaymentRow {
   id:             string;
-  invoice_number: string | null;
+  invoice_id:     string;
+  amount:         number;
   status:         string;
-  issued_at:      string | null;
-  due_date:       string | null;
+  payment_method: string;
+  paid_at:        string | null;
+  confirmed_at:   string | null;
   created_at:     string;
-  total_amount:   number;
-  student_id:     string;
+  refund_amount:  number | null;
+  refunded_at:    string | null;
 }
 
-function statusLabel(s: string) {
-  const map: Record<string, string> = {
-    paid: 'Betalt', issued: 'Väntar på betalning', overdue: 'Försenad',
-    draft: 'Utkast', partially_paid: 'Delvis betalt', void: 'Makulerad',
-  };
-  return map[s] ?? s;
-}
+/** Kontoutdrag för företaget: fakturor ställda till företaget (debet) och betalningar på dem (kredit). */
+function KontoTab({ id }: { id: string }) {
+  const { invoices, isLoading: invLoading, studentMap } = useCorporateInvoices(id);
+  const billed = invoices.filter((i) => i.corporate_customer_id === id && i.status !== 'draft');
+  const billedIds = billed.map((i) => i.id);
 
-function HistorikTab({ id }: { id: string }) {
-  // Step 1: resolve students linked to this company via the corporate_customer_id FK.
-  // This is the authoritative scope — only these students' invoices belong to this company.
-  const { data: studentData, isLoading: studentsLoading } = useStudentList(
-    { corporate_customer_id: id, per_page: 100 },
-  );
-  const students   = studentData?.data ?? [];
-  const studentIds = students.map(s => s.id);
-  const studentMap = Object.fromEntries(
-    students.map(s => [s.id, `${s.first_name} ${s.last_name}`]),
-  );
-
-  // Step 2: fetch invoices scoped to exactly those students — enforces per-company isolation.
-  const { data: invoices = [], isLoading: invLoading } = useQuery({
-    queryKey: ['corp-historik-invoices', id, studentIds.join(',')],
-    queryFn: async (): Promise<InvoiceRow[]> => {
+  const { data: payments = [], isLoading: payLoading } = useQuery({
+    queryKey: ['corp-payments', id, billedIds.join(',')],
+    queryFn: async (): Promise<PaymentRow[]> => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (supabase as unknown as any)
-        .from('invoices')
-        .select('id, invoice_number, status, issued_at, due_date, created_at, total_amount, student_id')
-        .is('deleted_at', null)
-        .in('student_id', studentIds)
-        .order('created_at', { ascending: false })
-        .limit(200);
-      return (data ?? []) as InvoiceRow[];
+      const { data, error } = await (supabase as unknown as any)
+        .from('payments')
+        .select('id, invoice_id, amount, status, payment_method, paid_at, confirmed_at, created_at, refund_amount, refunded_at')
+        .in('invoice_id', billedIds)
+        .limit(500);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as PaymentRow[];
     },
-    // Don't run until students are loaded; skip entirely if no students are linked.
-    enabled: !studentsLoading && studentIds.length > 0,
+    enabled: !invLoading && billedIds.length > 0,
     staleTime: 60_000,
   });
 
-  const isLoading  = studentsLoading || invLoading;
-  const noStudents = !studentsLoading && studentIds.length === 0;
-  const totalSEK   = invoices.reduce((sum, inv) => sum + inv.total_amount, 0);
+  const rows = (() => {
+    const invById = Object.fromEntries(billed.map((i) => [i.id, i]));
+    const items: { id: string; at: string; text: string; elev: string; debit: number; credit: number }[] = [];
+    for (const inv of billed) {
+      const nr = inv.invoice_number ? `nr ${inv.invoice_number}` : '';
+      const elev = studentMap[inv.student_id] ?? '—';
+      items.push({ id: `inv-${inv.id}`, at: inv.issued_at ?? inv.created_at, text: `Faktura ${nr}`.trim(), elev, debit: inv.total_amount, credit: 0 });
+      if (inv.status === 'void' && inv.void_at) {
+        items.push({ id: `void-${inv.id}`, at: inv.void_at, text: `Makulering av faktura ${nr}`.trim(), elev, debit: 0, credit: inv.total_amount });
+      }
+    }
+    for (const p of payments) {
+      if (p.status !== 'confirmed' && p.status !== 'refunded' && p.status !== 'partially_refunded') continue;
+      const inv = invById[p.invoice_id];
+      const nr = inv?.invoice_number ? ` (faktura ${inv.invoice_number})` : '';
+      const elev = inv ? studentMap[inv.student_id] ?? '—' : '—';
+      items.push({ id: `pay-${p.id}`, at: p.paid_at ?? p.confirmed_at ?? p.created_at, text: `Betalning – ${PAYMENT_METHOD_SV[p.payment_method] ?? 'Övrigt'}${nr}`, elev, debit: 0, credit: p.amount });
+      if (p.refund_amount && p.refund_amount > 0) {
+        items.push({ id: `ref-${p.id}`, at: p.refunded_at ?? p.created_at, text: `Återbetalning${nr}`, elev, debit: p.refund_amount, credit: 0 });
+      }
+    }
+    items.sort((a, b) => a.at.localeCompare(b.at));
+    let saldo = 0;
+    return items.map((r) => { saldo += r.debit - r.credit; return { ...r, saldo }; });
+  })();
+
+  const isLoading = invLoading || (billedIds.length > 0 && payLoading);
+  const saldo = rows.length > 0 ? rows[rows.length - 1]!.saldo : 0;
 
   return (
-    <div className="p-5 space-y-3">
-      {/* Summary bar — shown only when invoices are present */}
-      {!isLoading && !noStudents && invoices.length > 0 && (
-        <div className="flex gap-6 text-sm text-muted-foreground">
-          <span>{invoices.length} faktura{invoices.length !== 1 ? 'r' : ''}</span>
-          <span className="font-medium text-foreground">{SEK.format(totalSEK)} SEK totalt</span>
-        </div>
-      )}
+    <div className="p-5 space-y-4">
+      <div className={cn('rounded-lg border px-4 py-3 max-w-xs', saldo > 0.005 ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800' : 'border-border')}>
+        <p className="text-xs text-muted-foreground">{saldo < -0.005 ? 'Företaget har tillgodo' : 'Företaget är skyldigt'}</p>
+        <p className="text-xl font-bold tabular-nums">{SEK.format(Math.abs(saldo))} kr</p>
+      </div>
 
-      <div className="border border-border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="border border-border rounded-lg overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="border-b border-border bg-muted/10">
-              {['Nr.', 'Typ', 'Tillhör', 'Avtal', 'Datum', 'Förfallodatum', 'Skickat', 'Belopp', 'Betalningsstatus'].map(h => (
-                <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">{h}</th>
+              {['Datum', 'Händelse', 'Elev', 'Debet', 'Kredit', 'Saldo'].map((h, i) => (
+                <th key={h} className={cn('px-4 py-2.5 text-xs font-semibold text-muted-foreground', i >= 3 ? 'text-right' : 'text-left')}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              [1, 2, 3].map(i => (
-                <tr key={i}><td colSpan={9} className="px-4 py-2"><Skeleton className="h-6 w-full" /></td></tr>
-              ))
-            ) : noStudents ? (
-              <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Inga elever kopplade till företaget — inga fakturor att visa.
-                </td>
-              </tr>
-            ) : invoices.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  Inga fakturor kopplade till företagets elever.
-                </td>
-              </tr>
+              [1, 2, 3].map((i) => <tr key={i}><td colSpan={6} className="px-4 py-2"><Skeleton className="h-6 w-full" /></td></tr>)
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">Inga fakturor eller betalningar för företaget ännu.</td></tr>
             ) : (
-              invoices.map(inv => (
-                <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
-                  <td className="px-4 py-2.5 text-xs font-medium text-blue-600">{inv.invoice_number ?? '—'}</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">Faktura</td>
-                  <td className="px-4 py-2.5 text-xs">{studentMap[inv.student_id] ?? '—'}</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">—</td>
-                  <td className="px-4 py-2.5 text-xs">{fmtDate(inv.issued_at ?? inv.created_at)}</td>
-                  <td className="px-4 py-2.5 text-xs">{fmtDate(inv.due_date)}</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{inv.issued_at ? fmtDate(inv.issued_at) : '—'}</td>
-                  <td className="px-4 py-2.5 text-xs tabular-nums font-medium text-right">
-                    {SEK.format(inv.total_amount)}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs">{statusLabel(inv.status)}</td>
+              [...rows].reverse().map((r) => (
+                <tr key={r.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums whitespace-nowrap">{fmtDate(r.at)}</td>
+                  <td className="px-4 py-2.5 text-sm">{r.text}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.elev}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{r.debit ? SEK.format(r.debit) : ''}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-green-700 dark:text-green-400">{r.credit ? SEK.format(r.credit) : ''}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-medium">{SEK.format(r.saldo)}</td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
       </div>
+      <p className="text-[11px] text-muted-foreground">Bara fakturor som är ställda till företaget räknas. Utkast räknas inte.</p>
     </div>
   );
 }
@@ -1178,7 +1318,7 @@ export function CorporateDetailPage() {
       </div>
 
       {/* Tab nav */}
-      <div className="flex border-b border-border">
+      <div className="flex border-b border-border overflow-x-auto">
         {TABS.map(t => (
           <button
             key={t.key}
@@ -1197,13 +1337,11 @@ export function CorporateDetailPage() {
 
       {/* Tab content */}
       <div className="bg-card border border-t-0 border-border rounded-b-lg">
-        {activeTab === 'foretaget'   && id && <ForetagetTab   id={id} />}
-        {activeTab === 'dokument'    &&        <DokumentTab />}
-        {activeTab === 'billecta'    && id && <BillectaTab    id={id} />}
-        {activeTab === 'aktiviteter' &&        <AktiviteterTab />}
-        {activeTab === 'avtal'       && id && <AvtalTab id={id} />}
-        {activeTab === 'konto'       &&        <KontoTab />}
-        {activeTab === 'historik'    && id && <HistorikTab    id={id} />}
+        {activeTab === 'foretaget' && id && <ForetagetTab id={id} />}
+        {activeTab === 'avtal'     && id && <AvtalTab     id={id} />}
+        {activeTab === 'fakturor'  && id && <FakturorTab  id={id} />}
+        {activeTab === 'konto'     && id && <KontoTab     id={id} />}
+        {activeTab === 'dokument'  && id && <DokumentTab  id={id} />}
       </div>
     </div>
   );
