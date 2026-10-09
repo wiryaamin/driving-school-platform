@@ -677,6 +677,15 @@ Deno.serve((req: Request) => serveCors(req, async () => {
       let providerId: string | null = null;
       let errorMsg:   string | null = null;
 
+      // A message on a channel the school has switched off used to be stored
+      // as 'queued' and answered 201 — the UI said "skickat" but nothing ever
+      // drains it. Record it as failed with the reason instead, and tell the
+      // caller.
+      if (!isScheduled && !cfg?.enabled) {
+        dispatchStatus = 'failed';
+        errorMsg       = 'Kanalen är avstängd för skolan';
+      }
+
       if (!isScheduled && cfg?.enabled) {
         const limitExceeded = await isDailyLimitExceeded(supabase, orgId, body.channel, cfg.daily_limit ?? 500);
         if (limitExceeded) return err(ctx, `Daily send limit reached for ${body.channel}`, 429, 'DAILY_LIMIT_EXCEEDED');
@@ -719,6 +728,14 @@ Deno.serve((req: Request) => serveCors(req, async () => {
         .single();
 
       if (insertErr) throw insertErr;
+      // Never report a failed send as sent. The message stays in the log as
+      // failed (with the reason) so it can be retried or explained.
+      if (dispatchStatus === 'failed') {
+        const channelSv = { sms: 'SMS', email: 'E-post', whatsapp: 'WhatsApp', push: 'Appnotiser', voice: 'Röstsamtal' }[body.channel] ?? body.channel;
+        return !cfg?.enabled
+          ? err(ctx, `${channelSv} är avstängt för skolan. Slå på kanalen under Kommunikation → Kanaler.`, 409, 'CHANNEL_DISABLED')
+          : err(ctx, 'Meddelandet kunde inte skickas. Försök igen om en stund eller kontakta Trafikclouds support om felet kvarstår.', 502, 'DELIVERY_FAILED');
+      }
       return json({ data: msg }, 201);
     }
 

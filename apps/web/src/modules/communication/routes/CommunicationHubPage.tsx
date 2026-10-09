@@ -9,13 +9,14 @@ import {
 import { cn } from '@/lib/utils.js';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { Button, toast } from '@platform/ui';
-import { humanizeIdentifier } from '@platform/utils';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
-import { useChannelConfigs, useCommAnalytics, useMessageList, useQueueHealth, useUpdateChannelConfig, useNotificationRules, useUpdateRule } from '../hooks/useCommunication.js';
+import { useSessionStore } from '@core/store/session.store.js';
+import { TRIGGER_EVENTS, UNDISPATCHED_EVENTS, eventLabel } from '../lib/eventLabels.js';
+import { useChannelConfigs, useCommAnalytics, useMessageList, useQueueHealth, useUpdateChannelConfig, useNotificationRules } from '../hooks/useCommunication.js';
 import { ChannelBadge, StatusBadge, CHANNEL_META } from '../components/ChannelIcon.js';
-import type { CommChannel, ChannelConfig, NotificationRule } from '../hooks/useCommunication.js';
+import type { CommChannel, ChannelConfig } from '../hooks/useCommunication.js';
 
 // ─── Channel status card ──────────────────────────────────────────────────────
 
@@ -57,9 +58,7 @@ function ChannelCard({ config, onToggle }: {
         <p className="text-sm font-semibold text-foreground">{meta.label}</p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {config.enabled
-            ? config.provider
-              ? `Via ${config.provider}`
-              : 'Aktiverad — konfigurera leverantör'
+            ? (config.provider === 'smtp' ? 'Aktiverad · skolans egen e-postserver' : 'Aktiverad')
             : 'Inaktiverad'}
         </p>
         {config.from_address && (
@@ -210,11 +209,9 @@ function StatsBar({ total, sent, failed }: {
 function AutomationHealthCard({
   analytics,
   enabledRuleCount,
-  totalRuleCount,
 }: {
   analytics:        Array<{ total: number; sent: number; failed: number; delivery_rate: number }>;
   enabledRuleCount: number;
-  totalRuleCount:   number;
 }) {
   const weekTotal    = analytics.reduce((s, r) => s + r.total, 0);
   const weekSent     = analytics.reduce((s, r) => s + r.sent,  0);
@@ -237,8 +234,8 @@ function AutomationHealthCard({
           <p className="text-sm font-semibold text-foreground">Automationsstatus</p>
           <p className="text-xs text-muted-foreground">
             {enabledRuleCount > 0
-              ? `${enabledRuleCount} av ${totalRuleCount} regler aktiva · event-worker körs varje minut`
-              : 'Inga aktiva regler — aktivera i Notisregler'}
+              ? `${enabledRuleCount} automatiska utskick påslagna`
+              : 'Inga automatiska utskick är påslagna'}
           </p>
         </div>
       </div>
@@ -269,46 +266,25 @@ function AutomationHealthCard({
 
 // ─── Automation rules panel ───────────────────────────────────────────────────
 
-const EVENT_LABELS: Record<string, { label: string; description: string }> = {
-  booking_confirmed:         { label: 'Bokningsbekräftelse',    description: 'Skickas direkt när en bokning bekräftas' },
-  booking_cancelled:         { label: 'Avbokningsnotis',        description: 'Skickas när en bokning avbokas' },
-  booking_rescheduled:       { label: 'Ombokningsnotis',        description: 'Skickas när en lektion ombokas' },
-  booking_reminder_24h:      { label: 'Påminnelse 24 tim',      description: 'Skickas 24 timmar före lektionen' },
-  booking_reminder_same_day: { label: 'Påminnelse samma dag',   description: 'Skickas på morgonen av lektionsdagen' },
-  instructor_schedule_daily: { label: 'Dagsschemapåminnelse',   description: 'Instruktörens schema skickas varje morgon' },
-  waitlist_promoted:         { label: 'Väntelistepromovering',  description: 'Skickas när en plats frigörs och eleven befordras' },
-  invoice_issued:            { label: 'Faktura skapad',         description: 'Skickas när en ny faktura utfärdas' },
-  invoice_overdue:           { label: 'Faktura försenad',       description: 'Skickas när en faktura passerar förfallodatum' },
-  lead_created:              { label: 'Ny lead mottagen',       description: 'Skickas till kontoägaren när ett nytt lead kommer in via bokningsformuläret' },
-  enrollment_request_created: { label: 'Ny anmälan mottagen',   description: 'Skickas till kontoägaren när en ny anmälan kommer in via kurskatalogen' },
-};
-
 function AutomationRulesPanel() {
   const { data: rules = [], isLoading } = useNotificationRules();
-  const updateRule = useUpdateRule();
-
-  function handleToggle(rule: NotificationRule) {
-    updateRule.mutate(
-      { id: rule.id, enabled: !rule.enabled },
-      {
-        onSuccess: () => toast({ title: rule.enabled ? 'Regel inaktiverad' : 'Regel aktiverad' }),
-        onError:   () => toast({ title: 'Kunde inte uppdatera regel', variant: 'destructive' }),
-      }
-    );
-  }
+  // One row per message the student receives — the per-channel/per-recipient
+  // rule rows are managed on the Utskick page.
+  const studentEvents = TRIGGER_EVENTS.map((t) => t.value).filter((ev) =>
+    !UNDISPATCHED_EVENTS.has(ev) && rules.some((r) => r.recipient_type === 'student' && r.trigger_event === ev));
 
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <Bell className="w-4 h-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold text-foreground">Automatiska notifieringar</h2>
+          <h2 className="text-sm font-semibold text-foreground">Automatiska utskick till eleven</h2>
         </div>
         <Link
           to="/communication/rules"
           className="text-xs text-primary hover:underline flex items-center gap-0.5"
         >
-          Hantera regler <ChevronRight className="w-3 h-3" />
+          Hantera utskick <ChevronRight className="w-3 h-3" />
         </Link>
       </div>
 
@@ -333,55 +309,16 @@ function AutomationRulesPanel() {
         </div>
       ) : (
         <div className="divide-y divide-border">
-          {rules.map((rule) => {
-            const eventMeta = EVENT_LABELS[rule.trigger_event];
+          {studentEvents.map((ev) => {
+            const on = rules.filter((r) => r.recipient_type === 'student' && r.trigger_event === ev && r.enabled);
             return (
-              <div key={rule.id} className="flex items-center gap-3 px-4 py-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground">
-                    {eventMeta?.label ?? humanizeIdentifier(rule.trigger_event)}
-                  </p>
-                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                    {eventMeta && (
-                      <p className="text-xs text-muted-foreground">{eventMeta.description}</p>
-                    )}
-                    <ChannelBadge channel={rule.channel} />
-                  </div>
+              <div key={ev} className="flex items-center gap-3 px-4 py-3">
+                <p className="flex-1 min-w-0 text-sm text-foreground">{eventLabel(ev)}</p>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {on.length === 0 ? (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-muted text-muted-foreground/70">Av</span>
+                  ) : on.map((r) => <ChannelBadge key={r.id} channel={r.channel} />)}
                 </div>
-                <PermissionGate
-                  permission={Permissions.COMMUNICATIONS_CREATE}
-                  fallback={
-                    <span
-                      className={cn(
-                        'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0',
-                        rule.enabled
-                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400'
-                          : 'bg-muted text-muted-foreground/60',
-                      )}
-                    >
-                      {rule.enabled ? 'Aktiv' : 'Inaktiv'}
-                    </span>
-                  }
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleToggle(rule)}
-                    disabled={updateRule.isPending}
-                    className={cn(
-                      'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent',
-                      'transition-colors focus:outline-none disabled:opacity-50',
-                      rule.enabled ? 'bg-primary' : 'bg-muted',
-                    )}
-                    role="switch"
-                    aria-checked={rule.enabled}
-                    aria-label={`${eventMeta?.label ?? humanizeIdentifier(rule.trigger_event)} ${rule.enabled ? 'aktiv' : 'inaktiv'}`}
-                  >
-                    <span className={cn(
-                      'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform',
-                      rule.enabled ? 'translate-x-4' : 'translate-x-0',
-                    )} />
-                  </button>
-                </PermissionGate>
               </div>
             );
           })}
@@ -396,6 +333,7 @@ function AutomationRulesPanel() {
 const ALL_CHANNELS: CommChannel[] = ['sms', 'email', 'whatsapp', 'push', 'voice'];
 
 export function CommunicationHubPage() {
+  const isPlatformAdmin = useSessionStore((st) => st.user?.is_platform_admin === true);
   const navigate    = useNavigate();
   const { data: configs = [], isLoading } = useChannelConfigs();
   const updateCfg   = useUpdateChannelConfig();
@@ -457,10 +395,12 @@ export function CommunicationHubPage() {
             <Settings className="w-4 h-4 mr-1.5" />
             Mallar
           </Button>
-          <Button variant="outline" onClick={() => navigate('/communication/queue')}>
-            <ChartBar className="w-4 h-4 mr-1.5" />
-            Kömonitor
-          </Button>
+          {isPlatformAdmin && (
+            <Button variant="outline" onClick={() => navigate('/communication/queue')}>
+              <ChartBar className="w-4 h-4 mr-1.5" />
+              Kömonitor
+            </Button>
+          )}
           <Button variant="outline" onClick={() => navigate('/communication/notification-log')}>
             <Bell className="w-4 h-4 mr-1.5" />
             Notifikationslogg
@@ -476,7 +416,7 @@ export function CommunicationHubPage() {
         </div>
 
         {/* Queue health alert */}
-        {(queueHealth?.total_retryable ?? 0) > 0 && (
+        {isPlatformAdmin && (queueHealth?.total_retryable ?? 0) > 0 && (
           <button
             type="button"
             onClick={() => navigate('/communication/queue')}
@@ -517,7 +457,6 @@ export function CommunicationHubPage() {
         <AutomationHealthCard
           analytics={analytics7d}
           enabledRuleCount={enabledRuleCount}
-          totalRuleCount={allRules.length}
         />
 
         {/* Recent messages */}
@@ -542,28 +481,6 @@ export function CommunicationHubPage() {
           </div>
           <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
         </Link>
-
-        {/* Feature info */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Kommunikationsmotorn</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {[
-              { icon: Send,         title: 'Händelsedriven', desc: 'Automatiska påminnelser vid bokningar, avbokningar och examinationer' },
-              { icon: Settings,     title: 'Leverantörsoberoende', desc: 'Twilio, SendGrid, Vonage, Firebase — byt leverantör utan kodändringar' },
-              { icon: ChartBar,    title: 'Full spårning', desc: 'Leveransstatus, retries och kvittenser per meddelande' },
-            ].map(({ icon: Icon, title, desc }) => (
-              <div key={title} className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <Icon className="w-4 h-4 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">{title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
 
       </SubscriptionGate>
       </PageContent>

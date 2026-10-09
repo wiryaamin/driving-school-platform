@@ -68,7 +68,7 @@ export interface NotificationRule {
   trigger_event:   string;
   channel:         CommChannel;
   template_id:     string;
-  recipient_type:  'student' | 'instructor' | 'admin';
+  recipient_type:  'student' | 'instructor' | 'admin' | 'guardian';
   enabled:         boolean;
   created_at:      string;
   updated_at:      string;
@@ -569,11 +569,11 @@ export function useSeedDefaults() {
   });
 }
 
-export function useStudentMessages(studentId: string | null, enabled = true) {
+export function useStudentMessages(studentId: string | null, enabled = true, perPage = 20) {
   return useQuery({
-    queryKey: [...commKeys.all, 'student-messages', studentId] as const,
+    queryKey: [...commKeys.all, 'student-messages', studentId, perPage] as const,
     queryFn:  () => invoke<{ data: OutboundMessage[]; meta: { total: number; page: number; per_page: number } }>(
-      `communications?recipient_id=${encodeURIComponent(studentId!)}&per_page=20`,
+      `communications?recipient_id=${encodeURIComponent(studentId!)}&per_page=${perPage}`,
       { method: 'GET' },
     ),
     enabled:   enabled && Boolean(studentId),

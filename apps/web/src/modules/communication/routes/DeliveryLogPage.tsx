@@ -113,9 +113,7 @@ function MessageRow({
               </div>
               <div>
                 <p className="font-semibold text-muted-foreground uppercase tracking-wide mb-1">Detaljer</p>
-                <p className="text-muted-foreground">Leverantör: {msg.provider ?? '—'}</p>
-                <p className="text-muted-foreground">Leverantörs-ID: {msg.provider_message_id ?? '—'}</p>
-                <p className="text-muted-foreground">Retries: {msg.retry_count}/{msg.max_retries}</p>
+                <p className="text-muted-foreground">Sändningsförsök: {msg.retry_count + 1}</p>
                 {msg.sent_at && <p className="text-muted-foreground">Skickat: {formatDateTime(msg.sent_at)}</p>}
                 {msg.delivered_at && <p className="text-muted-foreground">Levererat: {formatDateTime(msg.delivered_at)}</p>}
                 {msg.scheduled_at && <p className="text-muted-foreground">Schemalagt: {formatDateTime(msg.scheduled_at)}</p>}
@@ -162,7 +160,7 @@ export function DeliveryLogPage() {
   function handleRetry(id: string) {
     retry.mutate(id, {
       onSuccess: () => { toast({ title: 'Nytt försök skickat' }); },
-      onError:   () => { toast({ title: 'Retry misslyckades', variant: 'destructive' }); },
+      onError:   () => { toast({ title: 'Kunde inte skicka om meddelandet', variant: 'destructive' }); },
     });
   }
 

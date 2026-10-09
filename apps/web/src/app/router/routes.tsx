@@ -997,10 +997,13 @@ export const routes: RouteObject[] = [
           },
           {
             path: 'communication/queue',
+            // Queue/outbox monitoring is platform operations, not a school setting.
             element: (
-              <Suspense fallback={<LoadingScreen />}>
-                <QueueMonitorPage />
-              </Suspense>
+              <PlatformAdminRoute>
+                <Suspense fallback={<LoadingScreen />}>
+                  <QueueMonitorPage />
+                </Suspense>
+              </PlatformAdminRoute>
             ),
           },
           {

@@ -191,6 +191,13 @@ export async function provisionBusinessConfiguration(
         { onConflict: 'organization_id,channel' },
       );
     }
+    // SMS/e-mail start enabled for every new school (seed_org_communication);
+    // an explicit opt-out during setup must win over that default.
+    for (const ch of ['sms', 'email'] as const) {
+      if (answers.channels[ch] === false) {
+        await db.from('channel_configs').update({ enabled: false }).eq('organization_id', orgId).eq('channel', ch);
+      }
+    }
     if (answers.channels.whatsapp) {
       await db.from('channel_configs').upsert(
         { organization_id: orgId, channel: 'whatsapp', enabled: true, provider: 'meta', metadata: { setup_preference: true, platform_pilot_configuration: true, platform_account_note: 'Meta test number — delivery limited to pre-approved recipients' } },

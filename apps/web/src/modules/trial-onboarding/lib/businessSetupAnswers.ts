@@ -98,7 +98,9 @@ export const EMPTY_ANSWERS: Answers = {
   receptionists: 0, receptionist_entries: [],
   instructors: 1, instructor_entries: [newInstructorEntry()],
   working_hours_start: '08:00', working_hours_end: '17:00', weekend_schedule: 'closed',
-  channels: { email: true, sms: false, whatsapp: false, invoice_notifications: true },
+  // SMS on by default (Testing Remarks 2026-10-09): core lesson messages are
+  // automatic; a school that does not want SMS unticks it here.
+  channels: { email: true, sms: true, whatsapp: false, invoice_notifications: true },
   vat_period: 'quarterly', payment_methods: ['invoice'],
 };
 

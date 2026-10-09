@@ -249,7 +249,7 @@ export function CommAnalyticsPage() {
                 ? 'Utmärkt — nästan alla meddelanden levereras korrekt.'
                 : overallRate >= 80
                 ? 'Godkänd — kontrollera misslyckade meddelanden i leveransloggen.'
-                : 'Kritisk — hög felprocent. Kontrollera kanalernas leverantörskonfiguration.'}
+                : 'Kritisk — hög felprocent. Kontakta Trafikclouds support om felen fortsätter.'}
             </p>
           </div>
           <Link
@@ -485,8 +485,7 @@ export function CommAnalyticsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             { to: '/communication/log',      label: 'Leveranslogg',     desc: 'Granska skickade och misslyckade meddelanden'          },
-            { to: '/communication/queue',     label: 'Kömonitor',        desc: 'Se kömeddelandens status i realtid'                    },
-            { to: '/communication/settings',  label: 'Kanalinställningar', desc: 'Konfigurera leverantörer och testar kanaler'         },
+            { to: '/communication/settings',  label: 'Kanalinställningar', desc: 'Slå på och av kanaler och ange avsändare'         },
           ].map(({ to, label, desc }) => (
             <Link
               key={to}

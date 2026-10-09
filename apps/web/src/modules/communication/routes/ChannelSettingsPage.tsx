@@ -333,7 +333,7 @@ function ChannelForm({
               onChange={(e) => setProvider(e.target.value)}
               className="w-full h-9 text-sm px-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
             >
-              <option value="">TrafikskolaOS</option>
+              <option value="">Trafikcloud (standard)</option>
               <option value={EMAIL_TENANT_SMTP_PROVIDER}>Min SMTP-server</option>
             </select>
           ) : isPlatformManagedProvider ? (

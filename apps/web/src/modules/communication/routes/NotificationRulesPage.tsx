@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react';
-import { Plus, Pencil, Trash2, X, Check, Info, ToggleLeft, ToggleRight, CheckCircle2, AlertTriangle, Clock, Zap, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Plus, Pencil, X, Check, Info, CheckCircle2, AlertTriangle, Clock, Zap, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 import { Button, toast, Skeleton } from '@platform/ui';
-import { humanizeIdentifier } from '@platform/utils';
 import { PageLayout, PageHeader, PageContent } from '@shared/components/layout/PageLayout/PageLayout.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { SubscriptionGate } from '@core/rbac/SubscriptionGate.js';
@@ -12,46 +12,33 @@ import {
   useCommTemplates,
   useCreateRule,
   useUpdateRule,
-  useDeleteRule,
+  useChannelConfigs,
   useSeedDefaults,
   type NotificationRule,
   type CommChannel,
   type CreateRuleParams,
 } from '../hooks/useCommunication.js';
-import { ChannelBadge } from '../components/ChannelIcon.js';
+import { templateLabel } from '../lib/templateLabels.js';
+import { TRIGGER_EVENTS, UNDISPATCHED_EVENTS, CORE_STUDENT_EVENTS, type TriggerEvent } from '../lib/eventLabels.js';
 import { useBookingList } from '@modules/scheduling/hooks/useBookings.js';
 import { useStudentList } from '@modules/students/hooks/useStudents.js';
 
 // ─── Trigger event definitions ────────────────────────────────────────────────
 
-const TRIGGER_EVENTS = [
-  { value: 'booking_confirmed',          label: 'Bokning bekräftad' },
-  { value: 'booking_cancelled',          label: 'Bokning avbokad' },
-  { value: 'booking_rescheduled',        label: 'Bokning ombokad' },
-  { value: 'booking_reminder_24h',       label: 'Lektionspåminnelse (24 tim)' },
-  { value: 'booking_reminder_same_day',  label: 'Lektionspåminnelse (samma dag)' },
-  { value: 'instructor_schedule_daily',  label: 'Instruktörens dagsprogram' },
-  { value: 'waitlist_promoted',          label: 'Väntelistepromovering' },
-  { value: 'reservation_expired',        label: 'Reservation utgången' },
-  { value: 'invoice_issued',             label: 'Faktura skapad' },
-  { value: 'invoice_due',                label: 'Faktura förfaller' },
-  { value: 'invoice_overdue',            label: 'Faktura försenad' },
-  { value: 'refund_processed',           label: 'Återbetalning behandlad' },
-  { value: 'student_created',            label: 'Ny elev registrerad' },
-  { value: 'permit_expiring',            label: 'Tillstånd utgår snart' },
-  { value: 'exam_scheduled',             label: 'Prov bokat' },
-  { value: 'booking_reconciliation_reminder', label: 'Påminnelse: obekräftade lektioner (instruktör)' },
-  { value: 'lead_created',               label: 'Ny lead mottagen' },
-  { value: 'enrollment_request_created', label: 'Ny anmälan mottagen' },
-] as const;
-
-type TriggerEvent = (typeof TRIGGER_EVENTS)[number]['value'];
-
+const CHANNEL_LABELS: Record<CommChannel, string> = {
+  sms: 'SMS', email: 'E-post', whatsapp: 'WhatsApp', push: 'Appnotis', voice: 'Röstsamtal',
+};
 const CHANNEL_OPTS: CommChannel[] = ['sms', 'email', 'whatsapp', 'push', 'voice'];
 const RECIPIENT_OPTS: Array<{ value: 'student' | 'instructor' | 'admin'; label: string }> = [
   { value: 'student',    label: 'Elev' },
-  { value: 'instructor', label: 'Instruktör' },
+  { value: 'instructor', label: 'Lärare' },
   { value: 'admin',      label: 'Kontoägare' },
+];
+const RECIPIENT_GROUPS: Array<{ value: NotificationRule['recipient_type']; label: string; hint: string }> = [
+  { value: 'student',    label: 'Till eleven',          hint: 'Utskick som eleven får om sina lektioner och sin ekonomi.' },
+  { value: 'guardian',   label: 'Till vårdnadshavare',  hint: 'Kopior till vårdnadshavare som är kopplade till eleven.' },
+  { value: 'instructor', label: 'Till läraren',         hint: 'Besked till den lärare som har lektionen.' },
+  { value: 'admin',      label: 'Till kontoägaren',     hint: 'Aviseringar till skolans administratörer.' },
 ];
 
 // ─── Rule form ────────────────────────────────────────────────────────────────
@@ -70,7 +57,7 @@ function RuleForm({
   const [trigger,       setTrigger]       = useState<TriggerEvent>((initial?.trigger_event as TriggerEvent) ?? 'booking_confirmed');
   const [channel,       setChannel]       = useState<CommChannel>((initial?.channel as CommChannel) ?? 'sms');
   const [templateId,    setTemplateId]    = useState(initial?.template_id ?? '');
-  const [recipientType, setRecipientType] = useState<'student' | 'instructor' | 'admin'>(initial?.recipient_type ?? 'student');
+  const [recipientType, setRecipientType] = useState<NotificationRule['recipient_type']>(initial?.recipient_type ?? 'student');
   const [enabled,       setEnabled]       = useState(initial?.enabled ?? false);
 
   const { data: templates = [] } = useCommTemplates(channel);
@@ -78,7 +65,7 @@ function RuleForm({
 
   function handleSubmit() {
     if (!templateId) { toast({ title: 'Välj en mall', variant: 'destructive' }); return; }
-    onSave({ trigger_event: trigger, channel, template_id: templateId, recipient_type: recipientType, enabled });
+    onSave({ trigger_event: trigger, channel, template_id: templateId, recipient_type: recipientType === 'guardian' ? 'student' : recipientType, enabled });
   }
 
   return (
@@ -111,7 +98,7 @@ function RuleForm({
             className="w-full h-9 px-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none disabled:opacity-60"
           >
             {CHANNEL_OPTS.map((c) => (
-              <option key={c} value={c}>{c.toUpperCase()}</option>
+              <option key={c} value={c}>{CHANNEL_LABELS[c]}</option>
             ))}
           </select>
         </div>
@@ -125,11 +112,11 @@ function RuleForm({
           >
             <option value="">— Välj mall —</option>
             {availableTemplates.map((t) => (
-              <option key={t.id} value={t.id}>{t.key}</option>
+              <option key={t.id} value={t.id}>{templateLabel(t)}</option>
             ))}
           </select>
           {availableTemplates.length === 0 && (
-            <p className="text-[10px] text-amber-600">Inga aktiva mallar för {channel}. Skapa mall först.</p>
+            <p className="text-[10px] text-amber-600">Inga aktiva mallar för {CHANNEL_LABELS[channel]}. Skapa en mall först.</p>
           )}
         </div>
 
@@ -137,10 +124,11 @@ function RuleForm({
           <label className="text-xs font-medium text-foreground">Mottagartyp</label>
           <select
             value={recipientType}
-            onChange={(e) => setRecipientType(e.target.value as 'student' | 'instructor' | 'admin')}
+            onChange={(e) => setRecipientType(e.target.value as NotificationRule['recipient_type'])}
+            disabled={!isNew}
             className="w-full h-9 px-2 text-sm border border-border rounded-md bg-background text-foreground focus:outline-none"
           >
-            {RECIPIENT_OPTS.map((r) => (
+            {(recipientType === 'guardian' ? [...RECIPIENT_OPTS, { value: 'guardian' as const, label: 'Vårdnadshavare' }] : RECIPIENT_OPTS).map((r) => (
               <option key={r.value} value={r.value}>{r.label}</option>
             ))}
           </select>
@@ -180,86 +168,103 @@ function RuleForm({
   );
 }
 
-// ─── RuleRow ──────────────────────────────────────────────────────────────────
+// ─── EventRuleMatrix ──────────────────────────────────────────────────────────
+// One row per business event, one switch per channel. The same event used to be
+// listed once per channel × recipient, which read as duplicated rules.
 
-function RuleRow({
-  rule,
-  onEdit,
-  onDelete,
+const MATRIX_CHANNELS: CommChannel[] = ['sms', 'email', 'push'];
+
+function EventRuleMatrix({
+  rules,
+  recipient,
+  title,
+  hint,
   onToggle,
+  onEdit,
+  disabledChannels,
 }: {
-  rule:     NotificationRule;
-  onEdit:   (rule: NotificationRule) => void;
-  onDelete: (id: string) => void;
-  onToggle: (id: string, enabled: boolean) => void;
+  rules:            NotificationRule[];
+  recipient:        NotificationRule['recipient_type'];
+  title:            string;
+  hint:             string;
+  onToggle:         (id: string, enabled: boolean) => void;
+  onEdit:           (rule: NotificationRule) => void;
+  disabledChannels: Set<CommChannel>;
 }) {
-  const triggerLabel = TRIGGER_EVENTS.find((t) => t.value === rule.trigger_event)?.label ?? humanizeIdentifier(rule.trigger_event);
-  const recipientLabel = rule.recipient_type === 'student' ? 'Elev' : 'Instruktör';
+  const scoped = rules.filter((r) => r.recipient_type === recipient && !UNDISPATCHED_EVENTS.has(r.trigger_event));
+  if (scoped.length === 0) return null;
+  const events = TRIGGER_EVENTS.map((t) => t.value).filter((ev) => scoped.some((r) => r.trigger_event === ev));
+  const channels = MATRIX_CHANNELS.filter((ch) => scoped.some((r) => r.channel === ch))
+    .concat(scoped.some((r) => !MATRIX_CHANNELS.includes(r.channel)) ? (['whatsapp'] as CommChannel[]) : []);
 
   return (
-    <tr className="hover:bg-accent/10 transition-colors">
-      <td className="px-4 py-3">
-        <span className="text-xs font-medium text-foreground">{triggerLabel}</span>
-      </td>
-      <td className="px-4 py-3">
-        <ChannelBadge channel={rule.channel as CommChannel} />
-      </td>
-      <td className="px-4 py-3">
-        <span className="text-xs font-mono text-muted-foreground">
-          {rule.template?.key ?? rule.template_id.slice(0, 8)}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        <span className="text-xs text-muted-foreground">{recipientLabel}</span>
-      </td>
-      <td className="px-4 py-3">
-        <PermissionGate
-          permission={Permissions.COMMUNICATIONS_CREATE}
-          fallback={
-            <span className={cn('flex items-center gap-1.5 text-xs', rule.enabled ? 'text-primary' : 'text-muted-foreground')}>
-              {rule.enabled
-                ? <ToggleRight className="w-4 h-4 text-primary" />
-                : <ToggleLeft  className="w-4 h-4 text-muted-foreground" />}
-              {rule.enabled ? 'Aktiv' : 'Inaktiv'}
-            </span>
-          }
-        >
-          <button
-            type="button"
-            onClick={() => onToggle(rule.id, !rule.enabled)}
-            className="flex items-center gap-1.5 text-xs"
-            title={rule.enabled ? 'Inaktivera' : 'Aktivera'}
-          >
-            {rule.enabled
-              ? <ToggleRight className="w-4 h-4 text-primary" />
-              : <ToggleLeft  className="w-4 h-4 text-muted-foreground" />}
-            <span className={rule.enabled ? 'text-primary' : 'text-muted-foreground'}>
-              {rule.enabled ? 'Aktiv' : 'Inaktiv'}
-            </span>
-          </button>
-        </PermissionGate>
-      </td>
-      <td className="px-4 py-3 whitespace-nowrap">
-        <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => onEdit(rule)}
-              className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-              title="Redigera"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => onDelete(rule.id)}
-              className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-              title="Ta bort"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </PermissionGate>
-      </td>
-    </tr>
+    <section className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-4 py-3 border-b border-border">
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="border-b border-border bg-muted/30">
+              <th className="px-4 py-2 text-left text-xs font-semibold text-muted-foreground">Utskick</th>
+              {channels.map((ch) => (
+                <th key={ch} className="px-4 py-2 text-center text-xs font-semibold text-muted-foreground w-28">{CHANNEL_LABELS[ch]}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {events.map((ev) => {
+              const label = TRIGGER_EVENTS.find((t) => t.value === ev)?.label ?? ev;
+              return (
+                <tr key={ev} className="hover:bg-accent/10">
+                  <td className="px-4 py-2.5 text-xs font-medium text-foreground">{label}</td>
+                  {channels.map((ch) => {
+                    const rule = scoped.find((r) => r.trigger_event === ev && r.channel === ch);
+                    if (!rule) return <td key={ch} className="px-4 py-2.5 text-center text-xs text-muted-foreground/50">—</td>;
+                    const off = disabledChannels.has(ch);
+                    return (
+                      <td key={ch} className="px-4 py-2.5">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <PermissionGate
+                            permission={Permissions.COMMUNICATIONS_CREATE}
+                            fallback={<span className={cn('text-xs', rule.enabled ? 'text-primary' : 'text-muted-foreground')}>{rule.enabled ? 'På' : 'Av'}</span>}
+                          >
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={rule.enabled}
+                              aria-label={`${label} via ${CHANNEL_LABELS[ch]}`}
+                              onClick={() => onToggle(rule.id, !rule.enabled)}
+                              title={off ? `${CHANNEL_LABELS[ch]} är avstängt för skolan — inga ${CHANNEL_LABELS[ch]} skickas` : undefined}
+                              className={cn(
+                                'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                                rule.enabled ? (off ? 'bg-primary/40' : 'bg-primary') : 'bg-muted-foreground/30',
+                              )}
+                            >
+                              <span className={cn('pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transition-transform', rule.enabled ? 'translate-x-4' : 'translate-x-0')} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onEdit(rule)}
+                              className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent"
+                              title="Byt mall"
+                              aria-label={`Byt mall för ${label} via ${CHANNEL_LABELS[ch]}`}
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          </PermissionGate>
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -478,11 +483,10 @@ function SnabbstartBanner({ onSeeded }: { onSeeded: () => void }) {
           <Zap className="w-4.5 h-4.5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">Snabbstart — standardnotiser</p>
+          <p className="text-sm font-semibold text-foreground">Kom igång med automatiska utskick</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Skapar 15 fördefinierade notisregler (SMS + e-post) för bokningsbekräftelse, påminnelser,
-            fakturor och instruktörens dagsprogram. Alla regler skapas <strong>inaktiva</strong> — du aktiverar
-            dem manuellt när du konfigurerat en kanal.
+            Skapar skolans standardutskick för bokningar, påminnelser, fakturor och lärarens dagsschema.
+            Bekräftelser och påminnelser till eleven slås på direkt — övriga kan du slå på när du vill.
           </p>
         </div>
       </div>
@@ -492,10 +496,9 @@ function SnabbstartBanner({ onSeeded }: { onSeeded: () => void }) {
             {seedDefaults.isPending
               ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
               : <Zap className="w-3.5 h-3.5 mr-1.5" />}
-            {seedDefaults.isPending ? 'Skapar…' : 'Skapa standardregler'}
+            {seedDefaults.isPending ? 'Skapar…' : 'Skapa standardutskick'}
           </Button>
         </PermissionGate>
-        <p className="text-[10px] text-muted-foreground">Idempotent — säkert att köra flera gånger</p>
       </div>
     </div>
   );
@@ -510,7 +513,26 @@ export function NotificationRulesPage() {
   const { data: rules = [], isLoading, refetch } = useNotificationRules();
   const createRule = useCreateRule();
   const updateRule = useUpdateRule();
-  const deleteRule = useDeleteRule();
+  const { data: channelConfigs = [] } = useChannelConfigs();
+  const disabledChannels = useMemo(
+    () => new Set<CommChannel>(channelConfigs.filter((c) => !c.enabled && (c.channel === 'sms' || c.channel === 'email')).map((c) => c.channel)),
+    [channelConfigs],
+  );
+  const coreMissing = useMemo(
+    () => rules.filter((r) => r.recipient_type === 'student' && !r.enabled
+      && (r.channel === 'sms' || r.channel === 'email')
+      && (CORE_STUDENT_EVENTS as readonly string[]).includes(r.trigger_event)),
+    [rules],
+  );
+
+  async function handleEnableCore() {
+    try {
+      for (const r of coreMissing) await updateRule.mutateAsync({ id: r.id, enabled: true });
+      toast({ title: 'Rekommenderade utskick påslagna' });
+    } catch (e) {
+      toast({ title: 'Kunde inte slå på alla utskick', description: e instanceof Error ? e.message : undefined, variant: 'destructive' });
+    }
+  }
 
   function handleSave(params: CreateRuleParams) {
     if (isNew || !editing?.id) {
@@ -520,7 +542,9 @@ export function NotificationRulesPage() {
       });
     } else {
       updateRule.mutate(
-        { id: editing.id, template_id: params.template_id, recipient_type: params.recipient_type, enabled: params.enabled },
+        // Only the template and on/off change on edit — event, channel and
+        // recipient identify the rule and stay as they are.
+        { id: editing.id, template_id: params.template_id, enabled: params.enabled },
         {
           onSuccess: () => { toast({ title: 'Regel uppdaterad' }); setEditing(null); },
           onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
@@ -532,13 +556,6 @@ export function NotificationRulesPage() {
   function handleToggle(id: string, enabled: boolean) {
     updateRule.mutate({ id, enabled }, {
       onSuccess: () => toast({ title: enabled ? 'Regel aktiverad' : 'Regel inaktiverad' }),
-      onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
-    });
-  }
-
-  function handleDelete(id: string) {
-    deleteRule.mutate(id, {
-      onSuccess: () => toast({ title: 'Regel borttagen' }),
       onError:   (e) => toast({ title: 'Fel', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
     });
   }
@@ -575,73 +592,69 @@ export function NotificationRulesPage() {
           <SnabbstartBanner onSeeded={() => void refetch()} />
         )}
 
+        {/* Recommended core messages — on by default for new schools, one click for older ones */}
+        {!isLoading && coreMissing.length > 0 && (
+          <div className="rounded-xl border border-primary/20 bg-primary/5 dark:bg-primary/10 p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground">Rekommenderade utskick är inte påslagna</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Bekräftelse vid bokning, avbokning och flytt samt påminnelse dagen före lektionen — via SMS och e-post.
+                Du kan stänga av enskilda utskick när du vill.
+              </p>
+            </div>
+            <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
+              <Button size="sm" onClick={handleEnableCore} disabled={updateRule.isPending}>
+                <Zap className="w-3.5 h-3.5 mr-1.5" />
+                Slå på rekommenderade utskick
+              </Button>
+            </PermissionGate>
+          </div>
+        )}
+
+        {/* Channel switched off for the whole school → rules on that channel send nothing */}
+        {disabledChannels.size > 0 && rules.some((r) => r.enabled && disabledChannels.has(r.channel)) && (
+          <div className="flex items-start gap-2 text-xs rounded-lg border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/20 dark:text-amber-300 px-4 py-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              {[...disabledChannels].map((c) => CHANNEL_LABELS[c]).join(' och ')} är avstängt för skolan, så påslagna utskick via
+              {disabledChannels.size > 1 ? ' dessa kanaler' : ' den kanalen'} skickas inte. Slå på kanalen under{' '}
+              <Link to="/communication/settings" className="font-medium underline underline-offset-2">Kanaler</Link>.
+            </span>
+          </div>
+        )}
+
         {/* Actions */}
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-muted-foreground">
-            {rules.length} regler konfigurerade
-          </p>
+        <div className="flex items-center justify-end">
           <PermissionGate permission={Permissions.COMMUNICATIONS_CREATE}>
-            <Button
-              size="sm"
-              onClick={() => { setEditing({}); setIsNew(true); }}
-            >
+            <Button size="sm" variant="outline" onClick={() => { setEditing({}); setIsNew(true); }}>
               <Plus className="w-3.5 h-3.5 mr-1.5" />
-              Lägg till regel
+              Lägg till eget utskick
             </Button>
           </PermissionGate>
         </div>
 
-        {/* Table */}
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-border bg-muted/30">
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Utlösare</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Kanal</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Mall</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Mottagare</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Status</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {isLoading ? (
-                  Array.from({ length: 4 }, (_, i) => (
-                    <tr key={i}>
-                      {Array.from({ length: 6 }, (_, j) => (
-                        <td key={j} className="px-4 py-3">
-                          <div className="h-4 bg-muted rounded animate-pulse" />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
-                ) : rules.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-16 text-center text-sm text-muted-foreground">
-                      Inga notisregler konfigurerade ännu.
-                    </td>
-                  </tr>
-                ) : (
-                  rules.map((rule) => (
-                    <RuleRow
-                      key={rule.id}
-                      rule={rule}
-                      onEdit={(r) => { setEditing(r); setIsNew(false); }}
-                      onDelete={handleDelete}
-                      onToggle={handleToggle}
-                    />
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        {isLoading ? (
+          <div className="space-y-2">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div>
+        ) : rules.length === 0 ? null : (
+          RECIPIENT_GROUPS.map((g) => (
+            <EventRuleMatrix
+              key={g.value}
+              rules={rules}
+              recipient={g.value}
+              title={g.label}
+              hint={g.hint}
+              onToggle={handleToggle}
+              onEdit={(r) => { setEditing(r); setIsNew(false); }}
+              disabledChannels={disabledChannels}
+            />
+          ))
+        )}
 
         <div className="flex items-start gap-2 text-xs text-muted-foreground rounded-lg border border-border bg-muted/20 px-4 py-2.5">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>
-            Regler utlöses av <strong>communication-worker</strong> vid boknings- och fakturahändelser. Regler är inaktiva som standard — aktivera dem manuellt när kanalinställningar är konfigurerade.
+            Utskicken skickas automatiskt när något händer med en bokning eller faktura. Texterna ändrar du under{' '}
+            <Link to="/communication/templates" className="font-medium underline underline-offset-2">Mallar</Link>.
           </span>
         </div>
 
