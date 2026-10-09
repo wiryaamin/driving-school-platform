@@ -6,7 +6,7 @@ import {
   Calendar, BookOpen, ClipboardList, FileText, Tag,
   ExternalLink, Settings, ChevronDown, Pencil, Link2, Loader2,
   Upload, Trash2, Download, ShieldCheck, Eye,
-  Pin, PinOff, Lock, Search, CheckCircle2, Circle,
+  Pin, PinOff, Lock, Search, CheckCircle2, Circle, Send,
 } from 'lucide-react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import {
@@ -15,14 +15,18 @@ import {
 } from 'date-fns';
 import { sv } from 'date-fns/locale';
 import { supabase } from '@core/api/supabase.js';
+import { useSessionStore } from '@core/store/session.store.js';
 import { StudentFinancePanel } from '@modules/finance/components/StudentFinancePanel.js';
+import { useInvoiceList, usePaymentList } from '@modules/finance/index.js';
 import { StudentPackagePanel } from '@modules/packages/index.js';
 import { useInstructor } from '@modules/instructors/index.js';
 import { useStudentUpcomingBookings, useBookingList, BookingStatusBadge, StudentBookingDialog, CancelBookingDialog, RescheduleBookingDialog } from '@modules/scheduling/index.js';
 import { Button, Input, Skeleton, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@platform/ui';
 import { toast } from '@platform/ui';
-import { useSendMessage, useStudentMessages, useChannelConfigs, type CommChannel } from '@modules/communication/hooks/useCommunication.js';
+import { useSendMessage, useStudentMessages, useChannelConfigs, useCommTemplates, type CommChannel, type OutboundMessage } from '@modules/communication/hooks/useCommunication.js';
 import { StatusBadge, ChannelBadge } from '@modules/communication/index.js';
+import { eventLabel } from '@modules/communication/lib/eventLabels.js';
+import { templateLabel } from '@modules/communication/lib/templateLabels.js';
 import { PermissionGate } from '@core/rbac/PermissionGate.js';
 import { Permissions } from '@core/rbac/permissions.js';
 import { useFeatureAccess } from '@core/rbac/SubscriptionGate.js';
@@ -47,7 +51,7 @@ import {
 } from '../hooks/useStudentNotes.js';
 import { ContractSheet } from '../components/ContractSheet.js';
 import { StudentStatusBadge, PermitStageBadge, permitStageLabel } from '../components/StudentStatusBadge.js';
-import { StudentTrainingPlanPanel } from '@modules/curriculum/index.js';
+import { StudentTrainingPlanPanel, useStudentTrainingPlan, useStudentPlanSteps } from '@modules/curriculum/index.js';
 import { StudentForm } from '../components/StudentForm.js';
 import { useGeneratePortalToken } from '@modules/student-portal/index.js';
 import { stageIndex, STAGE_ORDER } from '@modules/student-portal/lib/permitStage.js';
@@ -63,10 +67,9 @@ import { useCorporateList } from '@modules/corporate/hooks/useCorporateCustomers
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DetailTab = 'meddelande' | 'sms' | 'whatsapp' | 'epost' | 'elevkort' | 'utbildning' | 'historik' | 'konto' | 'ovrigt' | 'avtal';
-type LogSubTab = 'bokningsloggar' | 'kommunikationsloggar' | 'aktivitetsloggar';
 type UtbildningSubTab = 'behorigheteter' | 'korprovsprotokoll' | 'lektionslogg' | 'korjournal' | 'utbildningskort' | 'utbildningsplan' | 'provresultat';
 type TeorimaterialSubTab = 'teorimaterial' | 'digital_teoribok' | 'ovriga_bocker' | 'fragestatistik' | 'provstatistik' | 'checklista';
-type HistorikSubTab = 'kvitto' | 'rutt';
+type HistorikSubTab = 'tidslinje' | 'bokningar' | 'rutt';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -974,13 +977,14 @@ export function StudentDetailPage() {
       <div className="px-4 md:px-6 py-5">
 
         {activeTab === 'meddelande' && (
-          <MeddelandeTab studentEmail={student.email ?? null} studentPhone={student.phone ?? null} />
+          <MeddelandeTab studentId={student.id} studentEmail={student.email ?? null} studentPhone={student.phone ?? null} />
         )}
 
         {activeTab === 'sms' && (
           <SmsTab
             studentId={student.id}
             studentName={fullName}
+            studentFirstName={student.first_name}
             studentPhone={student.phone ?? null}
           />
         )}
@@ -989,12 +993,13 @@ export function StudentDetailPage() {
           <WhatsAppTab
             studentId={student.id}
             studentName={fullName}
+            studentFirstName={student.first_name}
             studentPhone={student.phone ?? null}
           />
         )}
 
         {activeTab === 'epost' && (
-          <EpostTab studentId={student.id} studentEmail={student.email ?? null} />
+          <EpostTab studentId={student.id} studentFirstName={student.first_name} studentEmail={student.email ?? null} />
         )}
 
         {activeTab === 'elevkort' && (
@@ -1025,7 +1030,7 @@ export function StudentDetailPage() {
         )}
 
         {activeTab === 'historik' && (
-          <HistorikTab studentId={student.id} />
+          <HistorikTab student={student} />
         )}
 
         {activeTab === 'konto' && (
@@ -1482,28 +1487,37 @@ function PasswordResetCard({
 }) {
   const generateToken = useGeneratePortalToken();
   const sendMessage   = useSendMessage();
-  const [sending, setSending] = useState<'email' | 'sms' | null>(null);
+  const [sending, setSending] = useState<'email' | 'sms' | 'both' | null>(null);
+  // Generating a portal link revokes every earlier link for the student, so a
+  // second send must reuse the link already created here — otherwise the SMS
+  // sent first stops working the moment an e-mail is sent (Testing Remarks:
+  // "skicka länk genom sms verkar ej funka men genom mail funkar den").
+  const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const firstName = studentName.split(' ')[0];
 
-  async function handleSend(channel: 'email' | 'sms') {
-    const address = channel === 'email' ? email : phone;
-    if (!address) return;
-    setSending(channel);
+  async function handleSend(target: 'email' | 'sms' | 'both') {
+    const channels: Array<'email' | 'sms'> = target === 'both' ? ['sms', 'email'] : [target];
+    const usable = channels.filter((c) => (c === 'email' ? email : phone));
+    if (usable.length === 0) return;
+    setSending(target);
     try {
-      const result = await generateToken.mutateAsync(studentId);
-      const body = channel === 'email'
-        ? `Hej ${firstName},\n\nHär är din nya inloggningslänk till elevportalen:\n${result.url}\n\nLänken är giltig i 72 timmar.`
-        : `Hej ${firstName}! Din nya elevportallänk: ${result.url}`;
-      await sendMessage.mutateAsync({
-        channel,
-        recipient_type:    'student',
-        recipient_id:      studentId,
-        recipient_address: address,
-        body,
-        ...(channel === 'email' ? { subject: 'Din inloggningslänk till elevportalen' } : {}),
-        metadata: { type: 'portal_reset' },
-      });
-      toast({ title: channel === 'email' ? 'Inloggningslänk skickad via e-post' : 'Inloggningslänk skickad via SMS' });
+      const url = linkUrl ?? (await generateToken.mutateAsync(studentId)).url;
+      setLinkUrl(url);
+      for (const channel of usable) {
+        const body = channel === 'email'
+          ? `Hej ${firstName},\n\nHär är din inloggningslänk till elevportalen:\n${url}\n\nLänken är personlig och gäller i 30 dagar.`
+          : `Hej ${firstName}! Din inloggningslänk till elevportalen: ${url}`;
+        await sendMessage.mutateAsync({
+          channel,
+          recipient_type:    'student',
+          recipient_id:      studentId,
+          recipient_address: (channel === 'email' ? email : phone) ?? '',
+          body,
+          ...(channel === 'email' ? { subject: 'Din inloggningslänk till elevportalen' } : {}),
+          metadata: { type: 'portal_reset' },
+        });
+      }
+      toast({ title: usable.length === 2 ? 'Inloggningslänk skickad via SMS och e-post' : usable[0] === 'email' ? 'Inloggningslänk skickad via e-post' : 'Inloggningslänk skickad via SMS' });
     } catch (e) {
       toast({ title: 'Kunde inte skicka', description: e instanceof Error ? e.message : undefined, variant: 'destructive' });
     } finally {
@@ -1515,7 +1529,7 @@ function PasswordResetCard({
     <div className="space-y-3">
       <EkSubTitle title="Generera ny inloggningslänk" />
       <p className="text-xs text-muted-foreground -mt-1">
-        Systemet genererar en ny elevportallänk och skickar den till eleven via e-post eller SMS.
+        Skapar en ny personlig länk till elevportalen och skickar den till eleven. Länken gäller i 30 dagar och ersätter tidigare länkar.
       </p>
       <div className="grid grid-cols-2 gap-2">
         <EkButton
@@ -1536,7 +1550,21 @@ function PasswordResetCard({
           {sending === 'email' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
           {sending === 'email' ? 'Skickar…' : 'Skicka e-post'}
         </EkButton>
+        {phone && email && (
+          <EkButton
+            size="sm"
+            className="col-span-2"
+            onClick={() => void handleSend('both')}
+            disabled={sending !== null}
+          >
+            {sending === 'both' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            {sending === 'both' ? 'Skickar…' : 'Skicka via SMS och e-post'}
+          </EkButton>
+        )}
       </div>
+      {linkUrl && (
+        <p className="text-[11px] text-muted-foreground">Samma länk används om du skickar igen från den här sidan.</p>
+      )}
       {!phone && (
         <EkNotice tone="warning">Inget mobilnummer — SMS kan inte levereras.</EkNotice>
       )}
@@ -1721,6 +1749,7 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
   const queryClient = useQueryClient();
 
   const updateMut   = useUpdateGuardian();
+  const schoolName  = useSessionStore((st) => st.organization?.name) ?? 'Trafikskolan';
   const [showForm,        setShowForm]        = useState(false);
   const [notifyId,        setNotifyId]        = useState<string | null>(null);
   const [firstName,       setFirstName]       = useState('');
@@ -1835,31 +1864,47 @@ function VardnadshavareCard({ studentId, studentName }: { studentId: string; stu
   }
 
   function handleInviteAndNotify(g: Guardian) {
+    // Reuse a link already created on this page: generating a new one revokes
+    // the previous link, so "Länk" followed by "Bjud in" used to kill the
+    // link that had just been copied.
+    const send = (url: string) => sendMessage.mutate(
+      {
+        channel:           'email',
+        recipient_type:    'manual',
+        recipient_address: g.email,
+        subject:           `Föräldraskollen – följ ${studentName}s körkortsutbildning`,
+        body:              `Hej ${g.first_name}!
+
+Du har fått tillgång till Föräldraskollen för ${studentName}. Här kan du följa framsteg, se kommande lektioner och hålla koll på utbildningens gång.
+
+Klicka på länken nedan för att logga in:
+${url}
+
+Länken är giltig i 30 dagar och är personlig — dela den inte med andra.
+
+Med vänliga hälsningar
+${schoolName}`,
+      },
+      {
+        onSuccess: () => {
+          setInvitedId(g.id);
+          setTimeout(() => setInvitedId(null), 4000);
+          toast({ title: `Inbjudan skickad till ${g.email}` });
+        },
+        onError: () => {
+          toast({ title: 'Länk skapad – men e-posten kunde inte skickas. Kopiera länken manuellt.', variant: 'destructive' });
+        },
+      },
+    );
+    const existing = generatedUrls[g.id];
+    if (existing) { send(existing); return; }
     tokenMut.mutate(g.id, {
       onSuccess: (res) => {
         setGeneratedUrls((prev) => ({ ...prev, [g.id]: res.url }));
-        sendMessage.mutate(
-          {
-            channel:           'email',
-            recipient_type:    'manual',
-            recipient_address: g.email,
-            subject:           `Föräldraskollen – följ ${studentName}s körkortsutbildning`,
-            body:              `Hej ${g.first_name}!\n\nDu har fått tillgång till Föräldraskollen för ${studentName}. Här kan du följa framsteg, se kommande lektioner och hålla koll på utbildningens gång.\n\nKlicka på länken nedan för att logga in:\n${res.url}\n\nLänken är giltig i 30 dagar och är personlig — dela den inte med andra.\n\nMed vänliga hälsningar\nTrafikskolan`,
-          },
-          {
-            onSuccess: () => {
-              setInvitedId(g.id);
-              setTimeout(() => setInvitedId(null), 4000);
-              toast({ title: `Inbjudan skickad till ${g.email}` });
-            },
-            onError: () => {
-              toast({ title: 'Länk genererad – men e-post misslyckades. Kopiera länken manuellt.', variant: 'destructive' });
-            },
-          },
-        );
+        send(res.url);
       },
       onError: (e) => toast({
-        title:       'Kunde inte generera inbjudan',
+        title:       'Kunde inte skapa inbjudan',
         description: e instanceof Error ? e.message : undefined,
         variant:     'destructive',
       }),
@@ -3603,15 +3648,7 @@ function AdminUtbildningskortPanel({ studentId }: { studentId: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Aggregate: for each competency, pick the latest (most recent) status across all instructors
-  const aggregated = useMemo((): Record<string, string> => {
-    const result: Record<string, string> = {};
-    for (const a of assessments) {
-      for (const [k, v] of Object.entries(a.competencies)) {
-        if (!result[k] || v === 'mastered') result[k] = v;
-      }
-    }
-    return result;
-  }, [assessments]);
+  const aggregated = useMemo(() => latestCompetencyStatus(assessments), [assessments]);
 
   const aggregatedReadiness = useMemo((): Record<string, boolean> => {
     const result: Record<string, boolean> = {};
@@ -3879,6 +3916,134 @@ function ExamResultsPanel({ student }: { student: NonNullable<ReturnType<typeof 
   );
 }
 
+// ─── Körprocent ───────────────────────────────────────────────────────────────
+// Hur långt eleven kommit i utbildningen: andel klara moment i utbildningsplanen
+// och andel kompetenser som behärskas enligt utbildningskortet. Exporten öppnar
+// en utskriftsvänlig sammanställning (skriv ut eller spara som PDF).
+
+/** Senaste bedömningen per kompetens, oavsett instruktör. */
+function latestCompetencyStatus(assessments: StudentAssessment[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  const ordered = [...assessments].sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+  for (const a of ordered) {
+    for (const [k, v] of Object.entries(a.competencies)) result[k] = v;
+  }
+  return result;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
+}
+
+function KorprocentCard({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
+  const schoolName = useSessionStore((st) => st.organization?.name) ?? 'Trafikskolan';
+  const { data: plan, isLoading: planLoading } = useStudentTrainingPlan(student.id);
+  const { data: steps = [], isLoading: stepsLoading } = useStudentPlanSteps(plan?.id ?? null);
+  const { data: assessments = [], isLoading: assessLoading } = useStudentAssessments(student.id);
+
+  const competency = useMemo(() => latestCompetencyStatus(assessments), [assessments]);
+  const masteredCount = COMP_DEFS.filter((c) => competency[c.key] === 'mastered').length;
+  const compPct = Math.round((masteredCount / COMP_DEFS.length) * 100);
+
+  const countedSteps   = steps.filter((s) => s.status !== 'skipped');
+  const completedSteps = countedSteps.filter((s) => s.status === 'completed').length;
+  const planPct = countedSteps.length > 0 ? Math.round((completedSteps / countedSteps.length) * 100) : null;
+
+  const loading = planLoading || (Boolean(plan) && stepsLoading) || assessLoading;
+
+  function handleExport() {
+    const fullName = `${student.first_name} ${student.last_name}`;
+    const today = new Date().toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' });
+    const stepRows = [...steps]
+      .sort((a, b) => (a.step?.step_number ?? 0) - (b.step?.step_number ?? 0))
+      .map((s) => {
+        const status = s.status === 'completed' ? 'Klar' : s.status === 'in_progress' ? 'Pågår' : s.status === 'skipped' ? 'Hoppades över' : 'Ej påbörjad';
+        const date = s.completed_at ? new Date(s.completed_at).toLocaleDateString('sv-SE') : '';
+        return `<tr><td>${s.step?.step_number ?? ''}</td><td>${escapeHtml(s.step?.name_sv ?? '–')}</td><td>${status}</td><td>${date}</td></tr>`;
+      }).join('');
+    const compRows = COMP_DEFS.map((c) => {
+      const label = STATUS_CFG[competency[c.key] ?? 'not_started']?.label ?? 'Ej påbörjad';
+      return `<tr><td>${escapeHtml(c.label)}</td><td>${label}</td></tr>`;
+    }).join('');
+    const html = `<!doctype html><html lang="sv"><head><meta charset="utf-8"><title>Körprocent – ${escapeHtml(fullName)}</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1a1f2b;margin:32px;font-size:13px}
+  h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:24px 0 8px}
+  .muted{color:#5b6475} .kpis{display:flex;gap:16px;margin-top:16px}
+  .kpi{border:1px solid #d7dce5;border-radius:8px;padding:12px 16px;min-width:160px}
+  .kpi b{display:block;font-size:24px;font-variant-numeric:tabular-nums}
+  table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e3e7ee}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5b6475}
+  @media print{body{margin:12mm}}
+</style></head><body>
+<h1>Körprocent – ${escapeHtml(fullName)}</h1>
+<div class="muted">${escapeHtml(schoolName)} · Behörighet ${escapeHtml(student.target_licence_category ?? 'B')} · Utskriven ${today}</div>
+<div class="kpis">
+  <div class="kpi"><span class="muted">Utbildningsplan</span><b>${planPct === null ? '–' : `${planPct} %`}</b><span class="muted">${planPct === null ? 'Ingen plan tilldelad' : `${completedSteps} av ${countedSteps.length} moment klara`}</span></div>
+  <div class="kpi"><span class="muted">Utbildningskort</span><b>${compPct} %</b><span class="muted">${masteredCount} av ${COMP_DEFS.length} kompetenser behärskas</span></div>
+</div>
+${steps.length > 0 ? `<h2>Utbildningsplan${plan?.template?.name_sv ? ` – ${escapeHtml(plan.template.name_sv)}` : ''}</h2>
+<table><thead><tr><th>#</th><th>Moment</th><th>Status</th><th>Klart</th></tr></thead><tbody>${stepRows}</tbody></table>` : ''}
+<h2>Utbildningskort</h2>
+<table><thead><tr><th>Kompetens</th><th>Senaste bedömning</th></tr></thead><tbody>${compRows}</tbody></table>
+<script>window.addEventListener('load',function(){window.print();});</script>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) {
+      toast({ title: 'Kunde inte öppna exporten', description: 'Tillåt popup-fönster för Trafikcloud och försök igen.', variant: 'destructive' });
+      return;
+    }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 mb-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-foreground">Körprocent</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Hur stor del av utbildningen eleven har klarat.</p>
+        </div>
+        <BlueBtn onClick={handleExport} disabled={loading}>Exportera körprocent</BlueBtn>
+      </div>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+          <Skeleton className="h-16 rounded-lg" /><Skeleton className="h-16 rounded-lg" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+          <KorprocentMeter
+            label="Utbildningsplan"
+            pct={planPct}
+            detail={planPct === null ? 'Ingen utbildningsplan tilldelad' : `${completedSteps} av ${countedSteps.length} moment klara`}
+          />
+          <KorprocentMeter
+            label="Utbildningskort"
+            pct={compPct}
+            detail={assessments.length === 0 ? 'Ingen bedömning gjord ännu' : `${masteredCount} av ${COMP_DEFS.length} kompetenser behärskas`}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KorprocentMeter({ label, pct, detail }: { label: string; pct: number | null; detail: string }) {
+  return (
+    <div className="rounded-lg border border-border px-3 py-2.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-lg font-bold tabular-nums text-foreground">{pct === null ? '–' : `${pct} %`}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted mt-1.5 overflow-hidden">
+        <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${pct ?? 0}%` }} />
+      </div>
+      <p className="text-[11px] text-muted-foreground mt-1.5">{detail}</p>
+    </div>
+  );
+}
+
 // ─── Utbildning tab ───────────────────────────────────────────────────────────
 
 function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
@@ -3907,10 +4072,7 @@ function UtbildningTab({ student }: { student: NonNullable<ReturnType<typeof use
       {/* Progress stats */}
       <LessonProgressPanel studentId={student.id} />
 
-      {/* Top action */}
-      <div className="flex justify-end mb-4">
-        <BlueBtn>Exportera körprocent</BlueBtn>
-      </div>
+      <KorprocentCard student={student} />
 
       <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
 
@@ -4714,16 +4876,124 @@ function BokningRow({
 
 // ─── Ekonomi tab ──────────────────────────────────────────────────────────────
 
-function EkonomiTab({ studentId }: { studentId: string }) {
+type KontoSubTab = 'kontoutdrag' | 'fakturor' | 'paket';
+
+const PAYMENT_METHOD_SV: Record<string, string> = {
+  manual: 'Kontant/manuell', card: 'Kort', bank_transfer: 'Bankgiro/överföring', swish: 'Swish',
+  stripe: 'Kort online', invoice_credit: 'Kreditering', other: 'Övrigt',
+};
+
+type KontoRow = { id: string; at: string; text: string; debit: number; credit: number };
+
+/** Kontoutdrag i TABS-stil: alla fakturor (debet) och betalningar (kredit) i datumordning med löpande saldo. */
+function KontoutdragPanel({ studentId }: { studentId: string }) {
+  const invoiceQuery  = useInvoiceList({ student_id: studentId, status: 'all', per_page: 100 });
+  const paymentsQuery = usePaymentList({ student_id: studentId, per_page: 100 });
+  const SEK = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const rows = useMemo(() => {
+    const items: KontoRow[] = [];
+    for (const inv of invoiceQuery.data?.data ?? []) {
+      if (inv.status === 'draft') continue;
+      const nr = inv.invoice_number ? `nr ${inv.invoice_number}` : '';
+      items.push({ id: `inv-${inv.id}`, at: inv.issued_at ?? inv.created_at, text: `Faktura ${nr}`.trim(), debit: inv.total_amount, credit: 0 });
+      if (inv.status === 'void' && inv.void_at) {
+        items.push({ id: `void-${inv.id}`, at: inv.void_at, text: `Makulering av faktura ${nr}`.trim(), debit: 0, credit: inv.total_amount });
+      }
+    }
+    for (const p of paymentsQuery.data?.data ?? []) {
+      if (p.status !== 'confirmed' && p.status !== 'refunded' && p.status !== 'partially_refunded') continue;
+      items.push({ id: `pay-${p.id}`, at: p.paid_at ?? p.confirmed_at ?? p.created_at, text: `Betalning – ${PAYMENT_METHOD_SV[p.payment_method] ?? 'Övrigt'}`, debit: 0, credit: p.amount });
+      if (p.refund_amount && p.refund_amount > 0) {
+        items.push({ id: `ref-${p.id}`, at: p.refunded_at ?? p.updated_at, text: 'Återbetalning', debit: p.refund_amount, credit: 0 });
+      }
+    }
+    items.sort((a, b) => a.at.localeCompare(b.at));
+    let saldo = 0;
+    return items.map((r) => { saldo += r.debit - r.credit; return { ...r, saldo }; });
+  }, [invoiceQuery.data, paymentsQuery.data]);
+
+  const isLoading = invoiceQuery.isLoading || paymentsQuery.isLoading;
+  const saldo      = rows.length > 0 ? rows[rows.length - 1]!.saldo : 0;
+  const invoiced   = rows.reduce((s, r) => s + (r.id.startsWith('inv-') ? r.debit : 0), 0);
+  const paid       = rows.reduce((s, r) => s + (r.id.startsWith('pay-') ? r.credit : 0), 0);
+  const truncated  = (invoiceQuery.data?.meta.total ?? 0) > 100 || (paymentsQuery.data?.meta.total ?? 0) > 100;
+
+  if (isLoading) {
+    return <div className="space-y-2">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-10 w-full rounded-lg" />)}</div>;
+  }
+
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-sm font-semibold text-blue-600 mb-4">Paket &amp; krediter</h2>
-        <StudentPackagePanel studentId={studentId} />
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className={cn('rounded-lg border px-4 py-3', saldo > 0.005 ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800' : 'border-border bg-card')}>
+          <p className="text-xs text-muted-foreground">{saldo < -0.005 ? 'Tillgodo för eleven' : 'Att betala'}</p>
+          <p className="text-xl font-bold tabular-nums text-foreground">{SEK.format(Math.abs(saldo))} kr</p>
+        </div>
+        <div className="rounded-lg border border-border bg-card px-4 py-3">
+          <p className="text-xs text-muted-foreground">Fakturerat totalt</p>
+          <p className="text-xl font-bold tabular-nums text-foreground">{SEK.format(invoiced)} kr</p>
+        </div>
+        <div className="rounded-lg border border-border bg-card px-4 py-3">
+          <p className="text-xs text-muted-foreground">Betalt totalt</p>
+          <p className="text-xl font-bold tabular-nums text-foreground">{SEK.format(paid)} kr</p>
+        </div>
       </div>
-      <div>
-        <h2 className="text-sm font-semibold text-blue-600 mb-4">Ekonomi</h2>
-        <StudentFinancePanel studentId={studentId} />
+
+      {rows.length === 0 ? (
+        <LogEmptyState icon={FileText} text="Inga fakturor eller betalningar ännu." />
+      ) : (
+        <div className="bg-card border border-border rounded-lg overflow-x-auto">
+          <table className="w-full text-sm min-w-[560px]">
+            <thead>
+              <tr className="border-b border-border bg-muted/20">
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Datum</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Händelse</th>
+                <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Debet</th>
+                <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Kredit</th>
+                <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground">Saldo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...rows].reverse().map((r) => (
+                <tr key={r.id} className="border-b border-border/50 last:border-0">
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{new Date(r.at).toLocaleDateString('sv-SE')}</td>
+                  <td className="px-4 py-2.5 text-sm text-foreground">{r.text}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{r.debit ? SEK.format(r.debit) : ''}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-green-700 dark:text-green-400">{r.credit ? SEK.format(r.credit) : ''}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-medium">{SEK.format(r.saldo)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-[11px] text-muted-foreground">
+        Positivt saldo = eleven är skyldig skolan. Negativt saldo = eleven har pengar tillgodo. Utkast till fakturor räknas inte.
+        {truncated ? ' Visar de senaste 100 fakturorna och betalningarna.' : ''}
+      </p>
+    </div>
+  );
+}
+
+function EkonomiTab({ studentId }: { studentId: string }) {
+  const [subTab, setSubTab] = useState<KontoSubTab>('kontoutdrag');
+  const SUB_TABS: { key: KontoSubTab; label: string }[] = [
+    { key: 'kontoutdrag', label: 'Kontoutdrag' },
+    { key: 'fakturor',    label: 'Fakturor & betalningar' },
+    { key: 'paket',       label: 'Paket & krediter' },
+  ];
+  return (
+    <div className="space-y-4">
+      <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
+      <div className="pt-1">
+        {subTab === 'kontoutdrag' && (
+          <PermissionGate permission={Permissions.FINANCE_INVOICE_READ}>
+            <KontoutdragPanel studentId={studentId} />
+          </PermissionGate>
+        )}
+        {subTab === 'fakturor' && <StudentFinancePanel studentId={studentId} />}
+        {subTab === 'paket'    && <StudentPackagePanel studentId={studentId} />}
       </div>
     </div>
   );
@@ -4824,44 +5094,9 @@ function BokningsloggarPanel({ studentId }: { studentId: string }) {
   );
 }
 
-function KommunikationsloggarPanel({ studentId }: { studentId: string }) {
-  const { data: msgData, isLoading } = useStudentMessages(studentId);
-  const messages = msgData?.data ?? [];
-
-  if (isLoading) {
-    return <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>;
-  }
-  if (!messages.length) {
-    return <LogEmptyState icon={MessageSquare} text="Inga meddelanden skickade till denna elev." />;
-  }
-
-  return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-border bg-muted/20">
-        <p className="text-xs font-semibold text-muted-foreground">{messages.length} meddelanden totalt</p>
-      </div>
-      <div className="divide-y divide-border">
-        {messages.map((msg) => (
-          <div key={msg.id} className="px-4 py-3 flex items-start gap-3 hover:bg-muted/10 transition-colors">
-            <ChannelBadge channel={msg.channel} />
-            <div className="flex-1 min-w-0">
-              {msg.subject && <p className="text-xs font-medium text-foreground truncate">{msg.subject}</p>}
-              <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{msg.body}</p>
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {new Date(msg.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-              </p>
-            </div>
-            <StatusBadge status={msg.status} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ─── Timeline types + constants ───────────────────────────────────────────────
 
-type TimelineEventType = 'booking' | 'note' | 'document' | 'tag' | 'milestone' | 'status';
+type TimelineEventType = 'booking' | 'message' | 'note' | 'document' | 'tag' | 'milestone' | 'status';
 
 type TimelineEvent = {
   id:       string;
@@ -4874,6 +5109,7 @@ type TimelineEvent = {
 const TIMELINE_FILTERS: { key: TimelineEventType | 'all'; label: string }[] = [
   { key: 'all',       label: 'Alla' },
   { key: 'booking',   label: 'Lektioner' },
+  { key: 'message',   label: 'Meddelanden' },
   { key: 'note',      label: 'Anteckningar' },
   { key: 'document',  label: 'Dokument' },
   { key: 'tag',       label: 'Taggar' },
@@ -4883,6 +5119,7 @@ const TIMELINE_FILTERS: { key: TimelineEventType | 'all'; label: string }[] = [
 
 const TIMELINE_TYPE_COLOR: Record<TimelineEventType, string> = {
   booking:   'bg-blue-500',
+  message:   'bg-teal-500',
   note:      'bg-amber-500',
   document:  'bg-emerald-500',
   tag:       'bg-purple-500',
@@ -4892,6 +5129,7 @@ const TIMELINE_TYPE_COLOR: Record<TimelineEventType, string> = {
 
 const TIMELINE_TYPE_ICON: Record<TimelineEventType, React.ComponentType<{ className?: string }>> = {
   booking:   Calendar,
+  message:   Send,
   note:      MessageSquare,
   document:  FileText,
   tag:       Tag,
@@ -4999,6 +5237,7 @@ function StudentTimelinePanel({
   });
 
   const { data: milestones = [] } = useStudentMilestones(studentId);
+  const { data: messageData } = useStudentMessages(studentId, true, 200);
 
   const allEvents = useMemo<TimelineEvent[]>(() => {
     const items: TimelineEvent[] = [];
@@ -5075,6 +5314,20 @@ function StudentTimelinePanel({
       });
     }
 
+    const CHANNEL_SV: Record<string, string> = { sms: 'SMS', email: 'E-post', whatsapp: 'WhatsApp', push: 'Appnotis', voice: 'Röstsamtal' };
+    const MSG_STATUS_SV: Record<string, string> = {
+      queued: 'i kö', sending: 'skickas', sent: 'skickat', delivered: 'levererat', failed: 'misslyckades', bounced: 'studsade', cancelled: 'avbrutet',
+    };
+    for (const msg of messageData?.data ?? []) {
+      items.push({
+        id:       `message-${msg.id}`,
+        at:       msg.created_at,
+        type:     'message',
+        title:    `${CHANNEL_SV[msg.channel] ?? msg.channel} — ${messageTypeLabel(msg.metadata ?? {})}`,
+        subtitle: `Till ${msg.recipient_address} · ${MSG_STATUS_SV[msg.status] ?? msg.status}`,
+      });
+    }
+
     for (const m of milestones) {
       items.push({
         id:       `milestone-${m.id}`,
@@ -5086,7 +5339,7 @@ function StudentTimelinePanel({
     }
 
     return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  }, [student, studentId, bookingData, notes, docData, tagAssignments, milestones]);
+  }, [student, studentId, bookingData, notes, docData, tagAssignments, milestones, messageData]);
 
   const filtered = useMemo(() => {
     let items = allEvents;
@@ -5184,83 +5437,336 @@ function StudentTimelinePanel({
   );
 }
 
-function LoggarTab({
-  student,
-}: {
-  student: NonNullable<ReturnType<typeof useStudent>['data']>;
-}) {
-  const [subTab, setSubTab] = useState<LogSubTab>('bokningsloggar');
+// ─── Meddelande tab ───────────────────────────────────────────────────────────
 
-  const SUB_TABS: { key: LogSubTab; label: string }[] = [
-    { key: 'bokningsloggar',        label: 'Bokningsloggar' },
-    { key: 'kommunikationsloggar',  label: 'Kommunikationsloggar' },
-    { key: 'aktivitetsloggar',      label: 'Aktivitetsloggar' },
-  ];
+type MessageChannelFilter = 'all' | 'sms' | 'email' | 'whatsapp';
+
+const MESSAGE_FILTERS: { value: MessageChannelFilter; label: string }[] = [
+  { value: 'all',      label: 'Alla' },
+  { value: 'sms',      label: 'SMS' },
+  { value: 'email',    label: 'E-post' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+];
+
+const MESSAGE_TYPE_LABELS: Record<string, string> = {
+  portal_reset:     'Inloggningslänk till elevportalen',
+  contract:         'Utbildningsavtal',
+  booking_schedule: 'Bokningsschema',
+};
+
+/** Vad för slags utskick det var – i affärstermer, aldrig tekniska nycklar. */
+function messageTypeLabel(metadata: Record<string, unknown>): string {
+  const type = typeof metadata['type'] === 'string' ? metadata['type'] : null;
+  const typeLabel = type ? MESSAGE_TYPE_LABELS[type] : undefined;
+  if (typeLabel) return typeLabel;
+  const trigger = typeof metadata['trigger_event'] === 'string' ? metadata['trigger_event'] : null;
+  if (trigger) return `Automatiskt: ${eventLabel(trigger)}`;
+  if (metadata['source'] === 'admin-guardian-notify') return 'Inbjudan till vårdnadshavare';
+  if (metadata['manual']) return 'Manuellt meddelande';
+  return 'Meddelande';
+}
+
+/** Felorsak på svenska utan leverantörsnamn eller tekniska koder. */
+function messageFailureReason(error: string | null): string {
+  const e = (error ?? '').toLowerCase();
+  if (!e) return 'Utskicket misslyckades.';
+  if (e.includes('avstängd')) return error ?? '';
+  if (e.includes('opted out')) return 'Eleven har tackat nej till utskick i den här kanalen.';
+  if (e.includes('invalid') && (e.includes('phone') || e.includes('number'))) return 'Telefonnumret är ogiltigt. Kontrollera elevens kontaktuppgifter.';
+  if (e.includes('email') && (e.includes('invalid') || e.includes('bounce'))) return 'E-postadressen kunde inte ta emot meddelandet. Kontrollera adressen.';
+  if (e.includes('credit') || e.includes('balance') || e.includes('funds')) return 'Utskicket stoppades hos tjänsteleverantören. Kontakta Trafikclouds support.';
+  if (e.includes('401') || e.includes('403') || e.includes('auth') || e.includes('token')) return 'Kanalen är inte korrekt uppkopplad. Kontakta Trafikclouds support.';
+  return 'Utskicket misslyckades. Försök igen eller kontakta Trafikclouds support.';
+}
+
+function MeddelandeTab({ studentId, studentEmail, studentPhone }: {
+  studentId:    string;
+  studentEmail: string | null;
+  studentPhone: string | null;
+}) {
+  const [filter, setFilter] = useState<MessageChannelFilter>('all');
+  const [openId, setOpenId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useStudentMessages(studentId, true, 200);
+  const all = data?.data ?? [];
+  const total = data?.meta.total ?? 0;
+  const messages = filter === 'all' ? all : all.filter((m) => m.channel === filter);
+  const counts = {
+    sent:   all.filter((m) => m.status === 'sent' || m.status === 'delivered').length,
+    failed: all.filter((m) => m.status === 'failed' || m.status === 'bounced').length,
+    queued: all.filter((m) => m.status === 'queued' || m.status === 'sending').length,
+  };
+  const fmt = (iso: string) => new Date(iso).toLocaleString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div>
-      <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
-      <div className="pt-4">
-        {subTab === 'bokningsloggar'       && <BokningsloggarPanel studentId={student.id} />}
-        {subTab === 'kommunikationsloggar' && <KommunikationsloggarPanel studentId={student.id} />}
-        {subTab === 'aktivitetsloggar'     && <StudentTimelinePanel student={student} />}
+    <div className="space-y-4">
+      {!studentEmail && !studentPhone && (
+        <EkNotice tone="warning">
+          Eleven saknar e-postadress och telefonnummer. Lägg till kontaktuppgifter under ”Redigera” för att kunna skicka meddelanden.
+        </EkNotice>
+      )}
+
+      <EkCard>
+        <EkCardTitle title="Skickade meddelanden" />
+        <p className="text-xs text-muted-foreground -mt-1 mb-3">
+          Allt som skickats till eleven via SMS, e-post och WhatsApp – både manuella meddelanden och automatiska bekräftelser och påminnelser.
+        </p>
+
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          {MESSAGE_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setFilter(f.value)}
+              className={cn(
+                'px-3 py-1.5 rounded-full text-xs font-medium border transition-colors min-h-[32px]',
+                filter === f.value ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-foreground border-border hover:bg-muted/40',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+          {all.length > 0 && (
+            <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+              {counts.sent} skickade · {counts.failed} misslyckade{counts.queued > 0 ? ` · ${counts.queued} väntar` : ''}
+            </span>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}</div>
+        ) : isError ? (
+          <EkNotice tone="danger">Meddelandeloggen kunde inte hämtas. Ladda om sidan och försök igen.</EkNotice>
+        ) : messages.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-6 text-center">
+            {all.length === 0 ? 'Inga meddelanden har skickats till eleven ännu.' : 'Inga meddelanden i den här kanalen.'}
+          </p>
+        ) : (
+          <div className="border border-border rounded-lg divide-y divide-border overflow-hidden">
+            {messages.map((msg) => {
+              const failed = msg.status === 'failed' || msg.status === 'bounced';
+              const isOpen = openId === msg.id;
+              return (
+                <div key={msg.id} className={cn('px-3 py-3', failed && 'bg-red-50/50 dark:bg-red-950/20')}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenId(isOpen ? null : msg.id)}
+                    className="w-full flex items-start gap-3 text-left"
+                    aria-expanded={isOpen}
+                  >
+                    <ChannelBadge channel={msg.channel} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{messageTypeLabel(msg.metadata ?? {})}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {msg.subject ? `${msg.subject} · ` : ''}Till {msg.recipient_address}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
+                        {fmt(msg.created_at)}
+                        {msg.sent_at && !failed ? ` · skickat ${fmt(msg.sent_at)}` : ''}
+                        {msg.scheduled_at && msg.status === 'queued' ? ` · planerat ${fmt(msg.scheduled_at)}` : ''}
+                      </p>
+                      {failed && (
+                        <p className="text-xs text-red-700 dark:text-red-400 mt-1">{messageFailureReason(msg.error_message)}</p>
+                      )}
+                    </div>
+                    <StatusBadge status={msg.status} />
+                  </button>
+                  {isOpen && (
+                    <div className="mt-2 ml-9 rounded-md bg-muted/30 px-3 py-2 text-xs text-foreground whitespace-pre-wrap break-words">
+                      {msg.body}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {total > all.length && (
+          <p className="text-[11px] text-muted-foreground mt-2">Visar de senaste {all.length} av {total} meddelanden.</p>
+        )}
+      </EkCard>
+    </div>
+  );
+}
+
+// ─── Meddelandemallar (SMS / WhatsApp / E-post) ───────────────────────────────
+// Standardmallar för manuella utskick + skolans egna mallar från
+// Kommunikation → Mallar. Variabler som {förnamn} och {trafikskola} fylls i
+// automatiskt; övriga (t.ex. {datum}) måste fyllas i innan meddelandet kan skickas.
+
+type ManualTemplate = { id: string; label: string; subject: string | null; body: string; own: boolean };
+
+const BUILTIN_MANUAL_TEMPLATES: ManualTemplate[] = [
+  { id: 'std:reminder', own: false, label: 'Påminnelse om lektion',
+    subject: 'Påminnelse om din körlektion',
+    body: 'Hej {förnamn}! Påminnelse om din körlektion {datum} kl {tid}. Meddela oss så snart som möjligt om du får förhinder.\n\nHälsningar {trafikskola}' },
+  { id: 'std:cancelled', own: false, label: 'Lektionen är avbokad',
+    subject: 'Din körlektion är avbokad',
+    body: 'Hej {förnamn}! Din körlektion {datum} kl {tid} är avbokad. Hör av dig så bokar vi en ny tid.\n\nHälsningar {trafikskola}' },
+  { id: 'std:book_next', own: false, label: 'Dags att boka nästa lektion',
+    subject: 'Dags att boka nästa körlektion',
+    body: 'Hej {förnamn}! Det är dags att boka din nästa körlektion. Logga in i elevportalen eller kontakta oss så hjälper vi dig.\n\nHälsningar {trafikskola}' },
+  { id: 'std:welcome', own: false, label: 'Välkommen som elev',
+    subject: 'Välkommen till {trafikskola}',
+    body: 'Hej {förnamn}! Varmt välkommen som elev hos oss. Vi ser fram emot att hjälpa dig mot körkortet.\n\nHälsningar {trafikskola}' },
+  { id: 'std:payment', own: false, label: 'Betalningspåminnelse',
+    subject: 'Påminnelse om betalning',
+    body: 'Hej {förnamn}! Vi har ännu inte fått betalt för faktura {fakturanr} på {belopp} kr. Betala gärna snarast. Hör av dig om något är oklart.\n\nHälsningar {trafikskola}' },
+  { id: 'std:test', own: false, label: 'Inför uppkörning/kunskapsprov',
+    subject: 'Inför ditt prov',
+    body: 'Hej {förnamn}! Lycka till på ditt prov {datum} kl {tid}. Kom i god tid och glöm inte giltig legitimation.\n\nHälsningar {trafikskola}' },
+];
+
+const TEMPLATE_VAR_RE = /\{([a-zåäö_]+)\}/gi;
+
+function fillTemplate(text: string, vars: Record<string, string>): string {
+  return text.replace(TEMPLATE_VAR_RE, (m, k: string) => vars[k.toLowerCase()] ?? m);
+}
+
+function unresolvedVariables(...texts: string[]): string[] {
+  const found = new Set<string>();
+  for (const t of texts) for (const m of t.matchAll(TEMPLATE_VAR_RE)) found.add(m[0]);
+  return [...found];
+}
+
+function useManualTemplates(channel: 'sms' | 'email' | 'whatsapp'): ManualTemplate[] {
+  const { data } = useCommTemplates(channel);
+  return useMemo(() => {
+    // Skolans egna mallar. Mallar med {{tekniska}} variabler hör till automatiska
+    // utskick och kan inte fyllas i manuellt — de visas inte här.
+    const own = (data ?? [])
+      .filter((t) => t.organization_id && !t.body_text.includes('{{') && !(t.subject ?? '').includes('{{'))
+      .map<ManualTemplate>((t) => ({ id: t.id, label: templateLabel(t), subject: t.subject, body: t.body_text, own: true }));
+    return [...BUILTIN_MANUAL_TEMPLATES, ...own];
+  }, [data]);
+}
+
+function useTemplateVars(studentFirstName: string): Record<string, string> {
+  const schoolName = useSessionStore((st) => st.organization?.name) ?? 'Trafikskolan';
+  return useMemo(() => ({ förnamn: studentFirstName, trafikskola: schoolName }), [studentFirstName, schoolName]);
+}
+
+function TemplatePicker({ templates, value, onChange }: {
+  templates: ManualTemplate[];
+  value:     string;
+  onChange:  (template: ManualTemplate | null) => void;
+}) {
+  const builtin = templates.filter((t) => !t.own);
+  const own     = templates.filter((t) => t.own);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs text-muted-foreground">Meddelandemall</label>
+        <Link to="/communication/templates" className="text-xs text-primary hover:underline">Hantera mallar</Link>
+      </div>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(templates.find((t) => t.id === e.target.value) ?? null)}
+          className="w-full h-9 pl-2.5 pr-7 text-sm rounded border border-input bg-background appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
+        >
+          <option value="">Välj mall (valfritt)</option>
+          <optgroup label="Standardmallar">
+            {builtin.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </optgroup>
+          {own.length > 0 && (
+            <optgroup label="Skolans egna mallar">
+              {own.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </optgroup>
+          )}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
       </div>
     </div>
   );
 }
 
-// ─── Meddelande tab ───────────────────────────────────────────────────────────
-
-function MeddelandeTab({ studentEmail, studentPhone }: {
-  studentEmail: string | null;
-  studentPhone: string | null;
-}) {
-  const hasContactInfo = Boolean(studentEmail || studentPhone);
-  const message = hasContactInfo
-    ? 'Meddelandeöversikt är inte tillgänglig här ännu. Använd flikarna SMS eller E-post för att skicka meddelanden till eleven.'
-    : 'Det finns ingen e-postadress eller telefonnummer registrerat för den här eleven. Lägg till kontaktuppgifter under "Redigera" för att kunna skicka meddelanden.';
-
+function UnresolvedVariablesNotice({ vars }: { vars: string[] }) {
+  if (vars.length === 0) return null;
   return (
-    <div className="bg-muted/30 border border-border rounded-lg px-4 py-3 text-sm text-muted-foreground">
-      {message}
+    <p className="text-xs text-amber-700 dark:text-amber-400">
+      Ersätt {vars.join(', ')} med rätt uppgifter innan du skickar.
+    </p>
+  );
+}
+
+function ChannelHistory({ messages, isLoading, emptyText }: {
+  messages:  OutboundMessage[];
+  isLoading: boolean;
+  emptyText: string;
+}) {
+  return (
+    <div className="bg-card border border-border rounded-lg overflow-hidden">
+      <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meddelandehistorik</p>
+        {messages.length > 0 && (
+          <span className="text-[10px] text-muted-foreground">{messages.length} meddelanden</span>
+        )}
+      </div>
+      {isLoading ? (
+        <div className="p-4 space-y-2">
+          {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
+        </div>
+      ) : messages.length === 0 ? (
+        <div className="p-4 text-center py-12">
+          <p className="text-xs text-muted-foreground">{emptyText}</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {messages.map((msg) => {
+            const failed = msg.status === 'failed' || msg.status === 'bounced';
+            return (
+              <div key={msg.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
+                <ChannelBadge channel={msg.channel} />
+                <div className="flex-1 min-w-0">
+                  {msg.subject && <p className="text-xs font-medium text-foreground truncate">{msg.subject}</p>}
+                  <p className="text-xs text-foreground line-clamp-2">{msg.body}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {messageTypeLabel(msg.metadata ?? {})} ·{' '}
+                    {new Date(msg.created_at).toLocaleString('sv-SE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  {failed && <p className="text-[11px] text-red-700 dark:text-red-400 mt-0.5">{messageFailureReason(msg.error_message)}</p>}
+                </div>
+                <StatusBadge status={msg.status} />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── SMS tab ──────────────────────────────────────────────────────────────────
 
-const SMS_TEMPLATES = [
-  { value: '', label: 'Välj mall' },
-  { value: 'upcoming_lesson', label: 'Påminnelse om kommande lektion' },
-  { value: 'cancel',          label: 'Avbokningsbekräftelse' },
-  { value: 'welcome',         label: 'Välkommen som elev' },
-  { value: 'payment',         label: 'Betalningspåminnelse' },
-];
-
 const SMS_MAX = 1300;
 
-function SmsTab({ studentId, studentName, studentPhone }: {
-  studentId:    string;
-  studentName:  string;
-  studentPhone: string | null;
+function SmsTab({ studentId, studentName, studentFirstName, studentPhone }: {
+  studentId:        string;
+  studentName:      string;
+  studentFirstName: string;
+  studentPhone:     string | null;
 }) {
   const [selected,  setSelected]  = useState(true);
   const [template,  setTemplate]  = useState('');
   const [message,   setMessage]   = useState('');
 
-  const sender    = 'Trafikskolan';
+  const templates = useManualTemplates('sms');
+  const vars      = useTemplateVars(studentFirstName);
+  const sender    = vars['trafikskola'] ?? 'Trafikskolan';
   const signature = 'Detta SMS kan inte besvaras.';
   const remaining = SMS_MAX - message.length;
   const smsCount  = Math.ceil(Math.max(1, message.length) / 160);
+  const unresolved = unresolvedVariables(message);
 
   const sendMessage  = useSendMessage();
   const { data: messagesData, isLoading: historyLoading } = useStudentMessages(studentId);
-  const messages = messagesData?.data ?? [];
+  const messages = useMemo(() => (messagesData?.data ?? []).filter((m) => m.channel === 'sms'), [messagesData]);
   const { data: channels } = useChannelConfigs();
   const smsEnabled = channels?.find((c) => c.channel === 'sms')?.enabled ?? false;
+  const canSend = selected && Boolean(message.trim()) && Boolean(studentPhone) && smsEnabled && unresolved.length === 0;
 
   function handleSend() {
-    if (!selected || !message.trim() || !studentPhone || !smsEnabled) return;
+    if (!canSend || !studentPhone) return;
     const fullBody = message + '\n' + signature;
     sendMessage.mutate(
       {
@@ -5273,7 +5779,7 @@ function SmsTab({ studentId, studentName, studentPhone }: {
       },
       {
         onSuccess: () => {
-          toast({ title: 'SMS skickat' });
+          toast({ title: 'SMS skickat', description: 'Syns i fliken Meddelanden.' });
           setMessage('');
           setTemplate('');
         },
@@ -5286,15 +5792,9 @@ function SmsTab({ studentId, studentName, studentPhone }: {
     );
   }
 
-  function handleTemplate(val: string) {
-    setTemplate(val);
-    const MAP: Record<string, string> = {
-      upcoming_lesson: `Hej ${studentName}. Din körlektion är inbokad. Kontakta oss om du behöver avboka.`,
-      cancel:          `Hej ${studentName}. Din körlektion har avbokats. Kontakta oss för att boka om.`,
-      welcome:         `Hej ${studentName}, välkommen som ny elev!`,
-      payment:         `Hej ${studentName}. Du har en obetald faktura. Vänligen betala snarast.`,
-    };
-    setMessage(MAP[val] ?? '');
+  function handleTemplate(t: ManualTemplate | null) {
+    setTemplate(t?.id ?? '');
+    setMessage(t ? fillTemplate(t.body, vars) : '');
   }
 
   return (
@@ -5342,31 +5842,18 @@ function SmsTab({ studentId, studentName, studentPhone }: {
           />
         </div>
 
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Meddelandemall</label>
-          <div className="relative">
-            <select
-              value={template}
-              onChange={(e) => handleTemplate(e.target.value)}
-              className="w-full h-8 pl-2.5 pr-7 text-sm rounded border border-input bg-background appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {SMS_TEMPLATES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          </div>
-        </div>
+        <TemplatePicker templates={templates} value={template} onChange={handleTemplate} />
 
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Meddelande</label>
           <textarea
-            rows={5}
+            rows={6}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Ange ditt meddelande"
+            placeholder="Skriv ditt meddelande eller välj en mall"
             className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
+          <UnresolvedVariablesNotice vars={unresolved} />
         </div>
 
         <div className="space-y-1">
@@ -5390,7 +5877,7 @@ function SmsTab({ studentId, studentName, studentPhone }: {
           </button>
           <button
             onClick={handleSend}
-            disabled={!selected || !message.trim() || !studentPhone || !smsEnabled || sendMessage.isPending}
+            disabled={!canSend || sendMessage.isPending}
             className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {sendMessage.isPending ? 'Skickar...' : 'Skicka SMS'}
@@ -5401,85 +5888,45 @@ function SmsTab({ studentId, studentName, studentPhone }: {
         )}
         {!smsEnabled && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            SMS-kanalen är inte aktiverad för skolan. Aktivera den under Kommunikation → Kanaler för att kunna skicka SMS.
+            SMS är avstängt för skolan. Slå på det under <Link to="/communication/settings" className="underline">Kommunikation → Kanaler</Link>.
           </p>
         )}
       </div>
 
-      {/* Message history */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meddelandehistorik</p>
-          {messages.length > 0 && (
-            <span className="text-[10px] text-muted-foreground">{messages.length} meddelanden</span>
-          )}
-        </div>
-        {historyLoading ? (
-          <div className="p-4 space-y-2">
-            {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="p-4 text-center py-12">
-            <p className="text-xs text-muted-foreground">Inga meddelanden skickade till denna elev.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {messages.map((msg) => (
-              <div key={msg.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
-                <ChannelBadge channel={msg.channel} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-foreground line-clamp-2">{msg.body}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    {new Date(msg.created_at).toLocaleDateString('sv-SE', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                    })}
-                  </p>
-                </div>
-                <StatusBadge status={msg.status} />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
+      <ChannelHistory messages={messages} isLoading={historyLoading} emptyText="Inga SMS skickade till denna elev." />
     </div>
   );
 }
 
 // ─── WhatsApp tab ─────────────────────────────────────────────────────────────
-// Mirrors SmsTab — same phone-number recipient, same template/compose shape,
-// same useChannelConfigs() gating — WhatsApp is already a fully implemented
-// channel (Twilio/Meta providers in _shared/comm-providers.ts, configurable
-// under Kommunikation → Kanaler) that was simply missing from this page's
-// per-student tabs.
+// Samma upplägg som SMS. WhatsApp kräver att skolans WhatsApp-konto är
+// uppkopplat; misslyckade utskick visas med orsak i historiken (ingen falsk
+// "skickat"-bekräftelse — se communications/index.ts).
 
-const WHATSAPP_TEMPLATES = [
-  { value: '', label: 'Välj mall' },
-  { value: 'upcoming_lesson', label: 'Påminnelse om kommande lektion' },
-  { value: 'cancel',          label: 'Avbokningsbekräftelse' },
-  { value: 'welcome',         label: 'Välkommen som elev' },
-  { value: 'payment',         label: 'Betalningspåminnelse' },
-];
-
-function WhatsAppTab({ studentId, studentName, studentPhone }: {
-  studentId:    string;
-  studentName:  string;
-  studentPhone: string | null;
+function WhatsAppTab({ studentId, studentName, studentFirstName, studentPhone }: {
+  studentId:        string;
+  studentName:      string;
+  studentFirstName: string;
+  studentPhone:     string | null;
 }) {
   const [selected, setSelected] = useState(true);
   const [template, setTemplate] = useState('');
   const [message,  setMessage]  = useState('');
 
-  const sender = 'Trafikskolan';
+  const templates = useManualTemplates('whatsapp');
+  const vars      = useTemplateVars(studentFirstName);
+  const sender    = vars['trafikskola'] ?? 'Trafikskolan';
+  const unresolved = unresolvedVariables(message);
 
   const sendMessage = useSendMessage();
   const { data: messagesData, isLoading: historyLoading } = useStudentMessages(studentId);
   const messages = useMemo(() => (messagesData?.data ?? []).filter((m) => m.channel === 'whatsapp'), [messagesData]);
   const { data: channels } = useChannelConfigs();
   const whatsappEnabled = channels?.find((c) => c.channel === 'whatsapp')?.enabled ?? false;
+  const canSend = selected && Boolean(message.trim()) && Boolean(studentPhone) && whatsappEnabled && unresolved.length === 0;
 
   function handleSend() {
-    if (!selected || !message.trim() || !studentPhone || !whatsappEnabled) return;
+    if (!canSend || !studentPhone) return;
     sendMessage.mutate(
       {
         channel:           'whatsapp',
@@ -5491,7 +5938,7 @@ function WhatsAppTab({ studentId, studentName, studentPhone }: {
       },
       {
         onSuccess: () => {
-          toast({ title: 'WhatsApp-meddelande skickat' });
+          toast({ title: 'WhatsApp-meddelande skickat', description: 'Syns i fliken Meddelanden.' });
           setMessage('');
           setTemplate('');
         },
@@ -5504,169 +5951,135 @@ function WhatsAppTab({ studentId, studentName, studentPhone }: {
     );
   }
 
-  function handleTemplate(val: string) {
-    setTemplate(val);
-    const MAP: Record<string, string> = {
-      upcoming_lesson: `Hej ${studentName}. Din körlektion är inbokad. Kontakta oss om du behöver avboka.`,
-      cancel:          `Hej ${studentName}. Din körlektion har avbokats. Kontakta oss för att boka om.`,
-      welcome:         `Hej ${studentName}, välkommen som ny elev!`,
-      payment:         `Hej ${studentName}. Du har en obetald faktura. Vänligen betala snarast.`,
-    };
-    setMessage(MAP[val] ?? '');
+  function handleTemplate(t: ManualTemplate | null) {
+    setTemplate(t?.id ?? '');
+    setMessage(t ? fillTemplate(t.body, vars) : '');
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_1fr] gap-5 items-start">
+    <div className="space-y-4">
+      <EkNotice tone={whatsappEnabled ? 'neutral' : 'warning'}>
+        {whatsappEnabled
+          ? 'WhatsApp är påslaget för skolan. Om eleven inte har skrivit till skolan på WhatsApp de senaste 24 timmarna kan meddelandet stoppas av WhatsApp – använd då SMS i stället. Utfallet syns alltid i historiken.'
+          : 'WhatsApp är inte påslaget för skolan och kan inte användas just nu. Använd SMS eller e-post för att nå eleven.'}
+      </EkNotice>
 
-      {/* Recipient selector */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-3 py-2 border-b border-border bg-muted/20 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          Skicka till
-        </div>
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border">
-              <th className="px-2 py-2 w-8"></th>
-              <th className="px-2 py-2 text-left font-medium text-muted-foreground">Namn</th>
-              <th className="px-2 py-2 text-left font-medium text-muted-foreground">Mobilnummer</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="hover:bg-accent/20">
-              <td className="px-2 py-2">
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  onChange={(e) => setSelected(e.target.checked)}
-                  className="rounded accent-primary"
-                />
-              </td>
-              <td className="px-2 py-2 font-medium">{studentName}</td>
-              <td className="px-2 py-2 text-muted-foreground">{studentPhone ?? '—'}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_1fr] gap-5 items-start">
 
-      {/* Compose form */}
-      <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Avsändare</label>
-          <input
-            type="text"
-            value={sender}
-            readOnly
-            className="w-full h-8 px-2.5 text-sm rounded border border-input bg-muted/20 text-muted-foreground"
-          />
-        </div>
-
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Meddelandemall</label>
-          <div className="relative">
-            <select
-              value={template}
-              onChange={(e) => handleTemplate(e.target.value)}
-              className="w-full h-8 pl-2.5 pr-7 text-sm rounded border border-input bg-background appearance-none focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {WHATSAPP_TEMPLATES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+        {/* Recipient selector */}
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-border bg-muted/20 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Skicka till
           </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-2 py-2 w-8"></th>
+                <th className="px-2 py-2 text-left font-medium text-muted-foreground">Namn</th>
+                <th className="px-2 py-2 text-left font-medium text-muted-foreground">Mobilnummer</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="hover:bg-accent/20">
+                <td className="px-2 py-2">
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={(e) => setSelected(e.target.checked)}
+                    className="rounded accent-primary"
+                  />
+                </td>
+                <td className="px-2 py-2 font-medium">{studentName}</td>
+                <td className="px-2 py-2 text-muted-foreground">{studentPhone ?? '—'}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Meddelande</label>
-          <textarea
-            rows={5}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Ange ditt meddelande"
-            className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
-          />
-        </div>
+        {/* Compose form */}
+        <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Avsändare</label>
+            <input
+              type="text"
+              value={sender}
+              readOnly
+              className="w-full h-8 px-2.5 text-sm rounded border border-input bg-muted/20 text-muted-foreground"
+            />
+          </div>
 
-        <p className="text-xs text-muted-foreground">
-          Använda tecken: <span className="font-medium text-foreground">{message.length}</span>
-        </p>
+          <TemplatePicker templates={templates} value={template} onChange={handleTemplate} />
 
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            onClick={() => { setMessage(''); setTemplate(''); }}
-            className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background hover:bg-accent text-foreground transition-colors"
-          >
-            Återställ
-          </button>
-          <button
-            onClick={handleSend}
-            disabled={!selected || !message.trim() || !studentPhone || !whatsappEnabled || sendMessage.isPending}
-            className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {sendMessage.isPending ? 'Skickar...' : 'Skicka WhatsApp'}
-          </button>
-        </div>
-        {!studentPhone && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">Inget mobilnummer registrerat för denna elev.</p>
-        )}
-        {!whatsappEnabled && (
-          <p className="text-xs text-amber-600 dark:text-amber-400">
-            WhatsApp-kanalen är inte aktiverad för skolan. Aktivera den under Kommunikation → Kanaler för att kunna skicka WhatsApp-meddelanden.
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Meddelande</label>
+            <textarea
+              rows={6}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Skriv ditt meddelande eller välj en mall"
+              className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+            <UnresolvedVariablesNotice vars={unresolved} />
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Använda tecken: <span className="font-medium text-foreground">{message.length}</span>
           </p>
-        )}
-      </div>
 
-      {/* Message history */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Meddelandehistorik</p>
-          {messages.length > 0 && (
-            <span className="text-[10px] text-muted-foreground">{messages.length} meddelanden</span>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => { setMessage(''); setTemplate(''); }}
+              className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background hover:bg-accent text-foreground transition-colors"
+            >
+              Återställ
+            </button>
+            <button
+              onClick={handleSend}
+              disabled={!canSend || sendMessage.isPending}
+              className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {sendMessage.isPending ? 'Skickar...' : 'Skicka WhatsApp'}
+            </button>
+          </div>
+          {!studentPhone && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">Inget mobilnummer registrerat för denna elev.</p>
           )}
         </div>
-        {historyLoading ? (
-          <div className="p-4 space-y-2">
-            {[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="p-4 text-center py-12">
-            <p className="text-xs text-muted-foreground">Inga WhatsApp-meddelanden skickade till denna elev.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {messages.map((msg) => (
-              <div key={msg.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
-                <ChannelBadge channel={msg.channel} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-foreground line-clamp-2">{msg.body}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    {new Date(msg.created_at).toLocaleDateString('sv-SE', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                    })}
-                  </p>
-                </div>
-                <StatusBadge status={msg.status} />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
+        <ChannelHistory messages={messages} isLoading={historyLoading} emptyText="Inga WhatsApp-meddelanden skickade till denna elev." />
+      </div>
     </div>
   );
 }
 
 // ─── E-post tab ───────────────────────────────────────────────────────────────
 
-function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail: string | null }) {
-  const [subject, setSubject] = useState('');
-  const [message, setMessage] = useState('');
+function EpostTab({ studentId, studentFirstName, studentEmail }: {
+  studentId:        string;
+  studentFirstName: string;
+  studentEmail:     string | null;
+}) {
+  const [template, setTemplate] = useState('');
+  const [subject,  setSubject]  = useState('');
+  const [message,  setMessage]  = useState('');
+  const templates  = useManualTemplates('email');
+  const vars       = useTemplateVars(studentFirstName);
+  const unresolved = unresolvedVariables(subject, message);
   const sendMessage = useSendMessage();
   const { data: msgData, isLoading } = useStudentMessages(studentId);
   const emails = useMemo(() => (msgData?.data ?? []).filter((m) => m.channel === 'email'), [msgData]);
+  const { data: channels } = useChannelConfigs();
+  const emailEnabled = channels?.find((c) => c.channel === 'email')?.enabled ?? false;
+  const canSend = Boolean(studentEmail) && Boolean(message.trim()) && emailEnabled && unresolved.length === 0;
+
+  function handleTemplate(t: ManualTemplate | null) {
+    setTemplate(t?.id ?? '');
+    setSubject(t?.subject ? fillTemplate(t.subject, vars) : '');
+    setMessage(t ? fillTemplate(t.body, vars) : '');
+  }
 
   function handleSend() {
-    if (!studentEmail || !message.trim()) return;
+    if (!canSend || !studentEmail) return;
     sendMessage.mutate(
       {
         channel:           'email',
@@ -5679,9 +6092,10 @@ function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail
       },
       {
         onSuccess: () => {
-          toast({ title: 'E-post skickad' });
+          toast({ title: 'E-post skickad', description: 'Syns i fliken Meddelanden.' });
           setMessage('');
           setSubject('');
+          setTemplate('');
         },
         onError: (e) => toast({
           title:       'Kunde inte skicka e-post',
@@ -5707,6 +6121,7 @@ function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail
             className="w-full h-8 px-2.5 text-sm rounded border border-input bg-muted/20 text-muted-foreground"
           />
         </div>
+        <TemplatePicker templates={templates} value={template} onChange={handleTemplate} />
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Ämne</label>
           <input
@@ -5720,23 +6135,24 @@ function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Meddelande</label>
           <textarea
-            rows={6}
+            rows={8}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Skriv ditt meddelande..."
+            placeholder="Skriv ditt meddelande eller välj en mall"
             className="w-full px-2.5 py-1.5 text-sm rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-primary resize-none"
           />
+          <UnresolvedVariablesNotice vars={unresolved} />
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button
-            onClick={() => { setMessage(''); setSubject(''); }}
+            onClick={() => { setMessage(''); setSubject(''); setTemplate(''); }}
             className="px-3 py-1.5 text-xs font-medium rounded border border-border bg-background hover:bg-accent text-foreground transition-colors"
           >
             Återställ
           </button>
           <button
             onClick={handleSend}
-            disabled={!studentEmail || !message.trim() || sendMessage.isPending}
+            disabled={!canSend || sendMessage.isPending}
             className="px-4 py-1.5 text-xs font-medium rounded bg-action text-action-foreground hover:bg-action-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
             {sendMessage.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
@@ -5746,41 +6162,14 @@ function EpostTab({ studentId, studentEmail }: { studentId: string; studentEmail
         {!studentEmail && (
           <p className="text-xs text-amber-600 dark:text-amber-400">Ingen e-postadress registrerad för denna elev.</p>
         )}
-      </div>
-
-      {/* History */}
-      <div className="bg-card border border-border rounded-lg overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-border bg-muted/20 flex items-center justify-between">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">E-posthistorik</p>
-          {emails.length > 0 && <span className="text-[10px] text-muted-foreground">{emails.length} meddelanden</span>}
-        </div>
-        {isLoading ? (
-          <div className="p-4 space-y-2">{[1, 2, 3].map((i) => <div key={i} className="h-10 bg-muted rounded animate-pulse" />)}</div>
-        ) : emails.length === 0 ? (
-          <div className="py-12 text-center space-y-2">
-            <Mail className="w-8 h-8 text-muted-foreground/30 mx-auto" />
-            <p className="text-xs text-muted-foreground">Inga e-postmeddelanden skickade till denna elev.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {emails.map((msg) => (
-              <div key={msg.id} className="px-3 py-3 flex items-start gap-2.5 hover:bg-accent/10 transition-colors">
-                <Mail className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  {msg.subject && (
-                    <p className="text-xs font-medium text-foreground truncate">{msg.subject}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{msg.body}</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    {new Date(msg.created_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </div>
-                <StatusBadge status={msg.status} />
-              </div>
-            ))}
-          </div>
+        {!emailEnabled && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            E-post är avstängt för skolan. Slå på det under <Link to="/communication/settings" className="underline">Kommunikation → Kanaler</Link>.
+          </p>
         )}
       </div>
+
+      <ChannelHistory messages={emails} isLoading={isLoading} emptyText="Inga e-postmeddelanden skickade till denna elev." />
     </div>
   );
 }
@@ -5796,35 +6185,16 @@ type DrivingSession = {
   route_waypoints: Array<[number, number]> | null;
 };
 
-function HistorikTab({ studentId }: { studentId: string }) {
-  const [subTab, setSubTab]           = useState<HistorikSubTab>('kvitto');
+function HistorikTab({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
+  const studentId = student.id;
+  const [subTab, setSubTab]           = useState<HistorikSubTab>('tidslinje');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const SUB_TABS: { key: HistorikSubTab; label: string }[] = [
-    { key: 'kvitto', label: 'Kvitto' },
-    { key: 'rutt',   label: 'Rutt' },
+    { key: 'tidslinje', label: 'Tidslinje' },
+    { key: 'bokningar', label: 'Bokningslogg' },
+    { key: 'rutt',      label: 'Körrutter' },
   ];
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['student-invoices', studentId],
-    queryFn: async () => {
-      const { data: invoices } = await supabase
-        .from('invoices')
-        .select('id, invoice_number, status, issued_at, due_date, total_amount, created_at')
-        .eq('student_id', studentId)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      return (invoices ?? []) as Array<{
-        id: string;
-        invoice_number: number | null;
-        status: string;
-        issued_at: string | null;
-        due_date: string | null;
-        total_amount: number;
-        created_at: string;
-      }>;
-    },
-  });
 
   const { data: sessions, isLoading: sessionsLoading } = useQuery({
     queryKey: ['student-driving-sessions', studentId],
@@ -5841,67 +6211,16 @@ function HistorikTab({ studentId }: { studentId: string }) {
     enabled: subTab === 'rutt',
   });
 
-  const SEK = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const STATUS_LABEL: Record<string, string> = {
-    draft: 'Utkast', issued: 'Utskickad', paid: 'Betald',
-    partially_paid: 'Delvis betald', overdue: 'Förfallen', void: 'Makulerad',
-  };
-
   return (
     <div className="space-y-4">
       <TabBar tabs={SUB_TABS} active={subTab} onSelect={setSubTab} size="sm" />
 
-      {subTab === 'kvitto' && (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          {isLoading ? (
-            <div className="p-4 space-y-2">
-              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-10 w-full" />)}
-            </div>
-          ) : !data || data.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              Inga kvitton hittades för denna elev.
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/20">
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide w-16">Siffra</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Typ</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide w-20">Tillhör</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Datum</th>
-                  <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Skickat</th>
-                  <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wide">Belopp</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((inv) => (
-                  <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/10">
-                    <td className="px-4 py-2.5">
-                      <span className="text-blue-600 font-medium text-xs">
-                        {inv.invoice_number ?? '—'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-sm">Kontantfaktura</td>
-                    <td className="px-4 py-2.5 text-sm text-muted-foreground">—</td>
-                    <td className="px-4 py-2.5 text-sm">
-                      {inv.issued_at
-                        ? new Date(inv.issued_at).toLocaleDateString('sv-SE')
-                        : new Date(inv.created_at).toLocaleDateString('sv-SE')}
-                    </td>
-                    <td className="px-4 py-2.5 text-sm text-muted-foreground">
-                      {STATUS_LABEL[inv.status] ?? inv.status}
-                    </td>
-                    <td className="px-4 py-2.5 text-sm text-right tabular-nums font-medium">
-                      {SEK.format(inv.total_amount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+      <p className="text-xs text-muted-foreground">
+        Allt som hänt med eleven: lektioner, meddelanden, anteckningar, dokument, taggar och milstolpar. Ekonomi finns under Konto.
+      </p>
+
+      {subTab === 'tidslinje' && <StudentTimelinePanel student={student} />}
+      {subTab === 'bokningar' && <BokningsloggarPanel studentId={studentId} />}
 
       {subTab === 'rutt' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
@@ -6052,7 +6371,24 @@ function HistorikTab({ studentId }: { studentId: string }) {
 
 function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStudent>['data']> }) {
   const [contractOpen, setContractOpen] = useState(false);
-  const { data: msgData, isLoading, refetch } = useStudentMessages(student.id);
+  const { data: msgData, isLoading, refetch } = useStudentMessages(student.id, true, 200);
+
+  // Undertecknade avtal som laddats upp under Övrigt → Dokument (kategori Utbildningsavtal).
+  const { data: signedDocs = [] } = useQuery({
+    queryKey: ['student-signed-contracts', student.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('student_documents')
+        .select('id, file_name, created_at')
+        .eq('student_id', student.id)
+        .eq('category', 'enrollment_contract')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as { id: string; file_name: string; created_at: string }[];
+    },
+    staleTime: 0,
+  });
 
   const { data: termsData } = useQuery({
     queryKey: ['student-terms', student.id],
@@ -6077,12 +6413,19 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
 
   return (
     <div className="space-y-4">
+      <EkNotice>
+        <span className="font-semibold">Så fungerar avtal:</span>{' '}
+        <span className="font-medium">Utbildningsavtal</span> skapas med ”Nytt avtal”. Det fylls i med elevens uppgifter och skickas till eleven via e-post – statusen nedan visar om e-posten kom fram.
+        Digital signering (t.ex. med BankID) finns inte ännu. Låt eleven skriva under och ladda upp det undertecknade avtalet under Övrigt → Dokument med kategorin ”Utbildningsavtal”, så visas det här.
+        <span className="font-medium"> Villkor för elevportalen</span> godkänner eleven själv digitalt vid första inloggningen.
+      </EkNotice>
+
       {/* Portal T&C acceptance status */}
       <div className="border border-border rounded-lg p-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
           <div>
-            <p className="text-sm font-medium text-foreground">Villkorsgodkännande (elevportal)</p>
+            <p className="text-sm font-medium text-foreground">Villkor för elevportalen</p>
             {termsData ? (
               <p className="text-xs text-muted-foreground mt-0.5">
                 Accepterat {new Date(termsData.accepted_at).toLocaleDateString('sv-SE')} · Version {termsData.terms_version}
@@ -6102,8 +6445,27 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
         </span>
       </div>
 
+      <div className="border border-border rounded-lg p-4">
+        <div className="flex items-center gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-muted-foreground shrink-0" />
+          <p className="text-sm font-medium text-foreground">Undertecknade avtal</p>
+        </div>
+        {signedDocs.length === 0 ? (
+          <p className="text-xs text-muted-foreground mt-1.5">Inget undertecknat avtal uppladdat ännu.</p>
+        ) : (
+          <ul className="mt-2 space-y-1">
+            {signedDocs.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-foreground truncate">{d.file_name}</span>
+                <span className="text-muted-foreground tabular-nums shrink-0">Uppladdat {new Date(d.created_at).toLocaleDateString('sv-SE')}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">Avtal</h3>
+        <h3 className="text-sm font-semibold text-foreground">Skickade avtal</h3>
         <PermissionGate allOf={[Permissions.DOCUMENTS_CREATE, Permissions.STUDENTS_PII_READ]}>
           <Button size="sm" className="gap-1.5" onClick={() => setContractOpen(true)}>
             <Plus className="w-3.5 h-3.5" />
@@ -6150,7 +6512,7 @@ function AvtalTab({ student }: { student: NonNullable<ReturnType<typeof useStude
               <tr className="border-b border-border">
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Typ</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Skickat</th>
-                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">E-post</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide hidden sm:table-cell">Mottagare</th>
               </tr>
             </thead>
@@ -6576,7 +6938,7 @@ function DokumentAdminTab({ studentId, orgId }: { studentId: string; orgId: stri
 
 // ─── Övrigt tab (Bokningar + Anteckningar + Teorimaterial + Loggar + Dokument) ─
 
-type OvrigtSubTab = 'bokningar' | 'anteckningar' | 'teorimaterial' | 'loggar' | 'dokument';
+type OvrigtSubTab = 'bokningar' | 'anteckningar' | 'teorimaterial' | 'dokument';
 
 function OvrigtTab({
   student, fullName, upcomingBookings, onNewBooking, licenceCat,
@@ -6593,7 +6955,6 @@ function OvrigtTab({
     { key: 'bokningar',     label: 'Bokningar' },
     { key: 'anteckningar',  label: 'Anteckningar' },
     { key: 'teorimaterial', label: 'Teorimaterial' },
-    { key: 'loggar',        label: 'Loggar' },
     { key: 'dokument',      label: 'Dokument' },
   ];
 
@@ -6615,7 +6976,6 @@ function OvrigtTab({
         {subTab === 'teorimaterial' && (
           <TeorimaterialTab licenceCat={licenceCat} studentId={student.id} />
         )}
-        {subTab === 'loggar' && <LoggarTab student={student} />}
         {subTab === 'dokument' && (
           <DokumentAdminTab studentId={student.id} orgId={student.organization_id} />
         )}
