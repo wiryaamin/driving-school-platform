@@ -28,6 +28,7 @@ import { FinancialReportsPage } from './FinancialReportsPage.js';
 import { SIE4ExportsPage } from './SIE4ExportsPage.js';
 import { WalletAdminPage } from './WalletAdminPage.js';
 import { LedgerReplayPage } from './LedgerReplayPage.js';
+import { ArtiklarSettingsPage } from '@modules/settings/routes/ArtiklarSettingsPage.js';
 
 export function FinancePage() {
   return (
@@ -36,6 +37,7 @@ export function FinancePage() {
       <Route path="invoices"           element={<InvoiceListPage />} />
       <Route path="invoices/:id"       element={<InvoiceDetailPage />} />
       <Route path="payments"           element={<PaymentListPage />} />
+      <Route path="articles"           element={<ArtiklarSettingsPage />} />
       <Route path="cash"               element={<KassaPage />} />
       <Route path="requests"           element={<BetalningsbegäranPage />} />
       <Route path="orders"             element={<OrdrarPage />} />

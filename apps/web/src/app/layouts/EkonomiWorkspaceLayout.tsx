@@ -22,6 +22,7 @@ const EKONOMI_TABS: WorkspaceTab[] = [
   { label: 'Ordrar',          path: '/orders',            permission: 'orders:order:read'      as Permission },
   { label: 'Paket',           path: '/packages',          permission: 'finance:package:read'   as Permission },
   { label: 'Kampanjer',       path: '/campaigns',         permission: 'finance:campaign:read'  as Permission },
+  { label: 'Artikelregister', path: '/finance/articles',  permission: 'finance:package:read'   as Permission },
   { label: 'Fakturor',        path: '/finance/invoices',  permission: 'finance:invoice:read'   as Permission },
   { label: 'Betalningar',     path: '/finance/payments',  permission: 'finance:payment:read'   as Permission },
   { label: 'Kassa',           path: '/finance/cash',      permission: 'finance:payment:create' as Permission },

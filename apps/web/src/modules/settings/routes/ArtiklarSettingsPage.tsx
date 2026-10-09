@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Plus, Pencil } from 'lucide-react';
+import { ChevronRight, Plus, Pencil, Zap } from 'lucide-react';
 import {
   Button, Skeleton, Label, Input, Switch,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -25,6 +25,7 @@ interface Article {
   vat_percent:     number;
   article_type:    ArticleType;
   lesson_type:     string | null;
+  licence_category: string | null;
   is_active:       boolean;
   sort_order:      number;
 }
@@ -36,6 +37,7 @@ interface FormFields {
   vat_percent:    string;
   article_type:   ArticleType;
   lesson_type:    string;
+  licence_category: string;
   is_active:       boolean;
   sort_order:      number;
 }
@@ -45,7 +47,7 @@ const TYPE_LABELS: Record<ArticleType, string> = {
 };
 
 function emptyForm(): FormFields {
-  return { article_number: '', name: '', price_incl_vat: '', vat_percent: '25', article_type: 'product', lesson_type: '', is_active: true, sort_order: 0 };
+  return { article_number: '', name: '', price_incl_vat: '', vat_percent: '25', article_type: 'product', lesson_type: '', licence_category: '', is_active: true, sort_order: 0 };
 }
 
 function articleToForm(a: Article): FormFields {
@@ -53,8 +55,150 @@ function articleToForm(a: Article): FormFields {
     article_number: a.article_number, name: a.name,
     price_incl_vat: String(a.price_incl_vat), vat_percent: String(a.vat_percent),
     article_type: a.article_type, lesson_type: a.lesson_type ?? '',
+    licence_category: a.licence_category ?? '',
     is_active: a.is_active, sort_order: a.sort_order,
   };
+}
+
+// ─── Behörigheter + snabbskapande ─────────────────────────────────────────────
+
+const LICENCE_CATEGORIES = ['B', 'BE', 'B96', 'A', 'A2', 'A1', 'AM', 'C', 'CE', 'C1', 'D', 'D1'] as const;
+
+const VAT_OPTIONS = ['25', '12', '6', '0'];
+
+interface QuickTemplate { key: string; name: (cat: string) => string; type: ArticleType; vat: string; only?: readonly string[] }
+
+// Vanliga artiklar för en behörighet. Skapas utan pris — priset sätts sedan per artikel.
+// Momssatsen är ett förval och kan ändras före skapande.
+const QUICK_TEMPLATES: QuickTemplate[] = [
+  { key: 'lesson40',  name: (c) => `Körlektion ${c} (40 min)`,          type: 'service', vat: '25' },
+  { key: 'lesson80',  name: (c) => `Dubbellektion ${c} (80 min)`,       type: 'service', vat: '25' },
+  { key: 'test_car',  name: (c) => `Fordon vid uppkörning ${c}`,        type: 'service', vat: '25' },
+  { key: 'theory',    name: (c) => `Teorilektion ${c}`,                 type: 'service', vat: '25' },
+  { key: 'risk1',     name: (c) => (c.startsWith('A') ? 'Riskettan MC' : 'Riskettan'),   type: 'service', vat: '25', only: ['B', 'A', 'A2', 'A1'] },
+  { key: 'risk2',     name: (c) => (c.startsWith('A') ? 'Risktvåan MC' : 'Risktvåan (halkbana)'), type: 'service', vat: '25', only: ['B', 'A', 'A2', 'A1'] },
+  { key: 'book',      name: (c) => `Teoribok ${c}`,                     type: 'product', vat: '6' },
+  { key: 'admin_fee', name: () => 'Administrationsavgift',               type: 'fee',     vat: '25' },
+];
+
+function QuickCreateDialog({
+  open, onOpenChange, orgId, existing, onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  orgId: string | undefined;
+  existing: Article[];
+  onCreated: () => void;
+}) {
+  const [cat, setCat] = useState<string>('B');
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [vat, setVat] = useState<Record<string, string>>({});
+
+  const templates = QUICK_TEMPLATES.filter((t) => !t.only || t.only.includes(cat));
+  const existingNames = new Set(existing.map((a) => a.name.trim().toLowerCase()));
+  const rows = templates.map((t) => {
+    const name = t.name(cat);
+    return { t, name, exists: existingNames.has(name.toLowerCase()), on: checked[t.key] ?? true, vat: vat[t.key] ?? t.vat };
+  });
+  const toCreate = rows.filter((r) => r.on && !r.exists);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!orgId || toCreate.length === 0) return 0;
+      // Nästa lediga artikelnummer: högsta numeriska nummer + 1 (minst 1000).
+      const maxNum = existing.reduce((m, a) => {
+        const n = Number(a.article_number);
+        return Number.isInteger(n) && n > m ? n : m;
+      }, 999);
+      const maxSort = existing.reduce((m, a) => Math.max(m, a.sort_order), 0);
+      const payload = toCreate.map((r, i) => ({
+        organization_id:  orgId,
+        article_number:   String(maxNum + 1 + i),
+        name:             r.name,
+        price_incl_vat:   0,
+        vat_percent:      Number(r.vat),
+        article_type:     r.t.type,
+        licence_category: r.t.key === 'admin_fee' ? null : cat,
+        is_active:        true,
+        sort_order:       maxSort + 1 + i,
+      }));
+      const { error } = await supabase.from('articles').insert(payload as never);
+      if (error) throw error;
+      return payload.length;
+    },
+    onSuccess: (n) => {
+      onCreated();
+      onOpenChange(false);
+      setChecked({});
+      setVat({});
+      toast({ title: `${n} artiklar skapade`, description: 'Sätt pris på artiklarna innan de används.' });
+    },
+    onError: (e) => toast({ title: 'Artiklarna kunde inte skapas', description: e instanceof Error ? e.message : undefined, variant: 'destructive' }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-full sm:max-w-lg max-h-[85vh] flex flex-col overflow-hidden p-0">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border shrink-0 pr-12">
+          <DialogTitle>Snabbskapa artiklar</DialogTitle>
+          <DialogDescription>Välj behörighet och vilka artiklar som ska skapas. Artiklarna skapas utan pris.</DialogDescription>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          <div className="space-y-1.5">
+            <Label>Behörighet</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {LICENCE_CATEGORIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCat(c)}
+                  className={`min-w-[44px] px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
+                    cat === c ? 'bg-primary text-primary-foreground border-primary' : 'border-border hover:bg-accent/50'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border divide-y divide-border">
+            {rows.map((r) => (
+              <div key={r.t.key} className="flex items-center gap-3 px-3 py-2">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-primary"
+                  checked={r.on && !r.exists}
+                  disabled={r.exists}
+                  onChange={(e) => setChecked((c) => ({ ...c, [r.t.key]: e.target.checked }))}
+                  aria-label={r.name}
+                />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm ${r.exists ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{r.name}</p>
+                  <p className="text-[11px] text-muted-foreground">{TYPE_LABELS[r.t.type]}{r.exists ? ' · finns redan' : ''}</p>
+                </div>
+                <select
+                  value={r.vat}
+                  onChange={(e) => setVat((v) => ({ ...v, [r.t.key]: e.target.value }))}
+                  disabled={r.exists}
+                  className="h-8 text-sm border border-input rounded-md px-2 bg-background"
+                  aria-label={`Moms för ${r.name}`}
+                >
+                  {VAT_OPTIONS.map((o) => <option key={o} value={o}>{o} % moms</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Kontrollera momssatsen med er redovisningskonsult om ni är osäkra. Allt kan ändras i efterhand.</p>
+        </div>
+        <DialogFooter className="px-6 py-4 border-t border-border shrink-0 gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>Avbryt</Button>
+          <Button onClick={() => create.mutate()} disabled={create.isPending || toCreate.length === 0}>
+            {create.isPending ? 'Skapar…' : `Skapa ${toCreate.length} artiklar`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // ─── ArtiklarSettingsPage ─────────────────────────────────────────────────────
@@ -70,6 +214,10 @@ export function ArtiklarSettingsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form,      setForm]      = useState<FormFields>(emptyForm);
   const [errors,    setErrors]    = useState<Record<string, string>>({});
+  const [catFilter, setCatFilter] = useState('');
+  const [quickOpen, setQuickOpen] = useState(false);
+  const { pathname } = useLocation();
+  const inSettings = pathname.startsWith('/settings');
 
   const { data: articles = [], isLoading } = useQuery<Article[]>({
     queryKey: ['settings-articles', orgId],
@@ -77,7 +225,7 @@ export function ArtiklarSettingsPage() {
       if (!orgId) return [];
       const { data, error } = await supabase
         .from('articles')
-        .select('id, article_number, name, price_incl_vat, vat_percent, article_type, lesson_type, is_active, sort_order')
+        .select('id, article_number, name, price_incl_vat, vat_percent, article_type, lesson_type, licence_category, is_active, sort_order')
         .eq('organization_id', orgId)
         .order('sort_order', { ascending: true });
       if (error) throw error;
@@ -90,6 +238,7 @@ export function ArtiklarSettingsPage() {
   const visible = articles.filter(a => {
     if (tab === 'active'   && !a.is_active) return false;
     if (tab === 'inactive' &&  a.is_active) return false;
+    if (catFilter && a.licence_category !== catFilter) return false;
     const q = search.toLowerCase();
     if (q && !a.name.toLowerCase().includes(q) && !a.article_number.toLowerCase().includes(q)) return false;
     return true;
@@ -110,13 +259,14 @@ export function ArtiklarSettingsPage() {
         vat_percent:     Number(form.vat_percent) || 0,
         article_type:    form.article_type,
         lesson_type:     form.lesson_type.trim() || null,
+        licence_category: form.licence_category || null,
         is_active:       form.is_active,
         sort_order:      form.sort_order,
       } as never);
       if (error) throw error;
     },
     onSuccess: () => { invalidate(); setSheetOpen(false); toast({ title: 'Artikel skapad' }); },
-    onError: () => toast({ title: 'Fel vid skapande', variant: 'destructive' }),
+    onError: (e) => toast({ title: 'Artikeln kunde inte skapas', description: e instanceof Error && /articles_org_number_uniq/.test(e.message) ? 'Artikelnumret används redan.' : undefined, variant: 'destructive' }),
   });
 
   const updateArticle = useMutation({
@@ -129,13 +279,14 @@ export function ArtiklarSettingsPage() {
         vat_percent:     Number(form.vat_percent) || 0,
         article_type:    form.article_type,
         lesson_type:     form.lesson_type.trim() || null,
+        licence_category: form.licence_category || null,
         is_active:       form.is_active,
         sort_order:      form.sort_order,
       } as never).eq('id', editingId).eq('organization_id', orgId);
       if (error) throw error;
     },
     onSuccess: () => { invalidate(); setSheetOpen(false); toast({ title: 'Artikel uppdaterad' }); },
-    onError: () => toast({ title: 'Fel vid uppdatering', variant: 'destructive' }),
+    onError: (e) => toast({ title: 'Artikeln kunde inte sparas', description: e instanceof Error && /articles_org_number_uniq/.test(e.message) ? 'Artikelnumret används redan.' : undefined, variant: 'destructive' }),
   });
 
   function openCreate() { setForm(emptyForm()); setErrors({}); setEditingId(null); setSheetOpen(true); }
@@ -156,19 +307,32 @@ export function ArtiklarSettingsPage() {
     <PermissionGate permission={Permissions.FINANCE_PACKAGE_READ}>
     <div className="max-w-4xl space-y-4">
       {/* Breadcrumb + action */}
-      <div className="flex items-center justify-between">
-        <nav className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Link to="/settings" className="hover:text-foreground">Inställningar</Link>
-          <ChevronRight className="w-3 h-3" />
-          <Link to="/settings/finance/accounts" className="hover:text-foreground">Ekonomi</Link>
-          <ChevronRight className="w-3 h-3" />
-          <span className="text-foreground">Artiklar</span>
-        </nav>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {inSettings ? (
+          <nav className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Link to="/settings" className="hover:text-foreground">Inställningar</Link>
+            <ChevronRight className="w-3 h-3" />
+            <Link to="/settings/finance/accounts" className="hover:text-foreground">Ekonomi</Link>
+            <ChevronRight className="w-3 h-3" />
+            <span className="text-foreground">Artiklar</span>
+          </nav>
+        ) : (
+          <div>
+            <h1 className="text-lg font-semibold text-foreground">Artikelregister</h1>
+            <p className="text-xs text-muted-foreground">Allt skolan säljer: lektioner, utbildningar, varor och avgifter.</p>
+          </div>
+        )}
         <PermissionGate permission={Permissions.FINANCE_PACKAGE_CREATE}>
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="w-4 h-4 mr-1.5" />
-            Skapa artikel
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => setQuickOpen(true)}>
+              <Zap className="w-4 h-4 mr-1.5" />
+              Snabbskapa per behörighet
+            </Button>
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="w-4 h-4 mr-1.5" />
+              Skapa artikel
+            </Button>
+          </div>
         </PermissionGate>
       </div>
 
@@ -188,14 +352,25 @@ export function ArtiklarSettingsPage() {
         ))}
       </div>
 
-      {/* Search */}
-      <input
-        type="text"
-        placeholder="Sök efter namn eller artikelnummer"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-      />
+      {/* Search + behörighet */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          type="text"
+          placeholder="Sök efter namn eller artikelnummer"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="flex-1 rounded-lg border border-border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <select
+          value={catFilter}
+          onChange={(e) => setCatFilter(e.target.value)}
+          className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          aria-label="Filtrera på behörighet"
+        >
+          <option value="">Alla behörigheter</option>
+          {LICENCE_CATEGORIES.map((c) => <option key={c} value={c}>Behörighet {c}</option>)}
+        </select>
+      </div>
 
       {/* Table */}
       {isLoading ? (
@@ -203,11 +378,11 @@ export function ArtiklarSettingsPage() {
           {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}
         </div>
       ) : (
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="rounded-xl border border-border bg-card overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
             <thead>
               <tr className="border-b border-border bg-muted/30">
-                {['Artikelnummer', 'Internt namn', 'Pris inkl. moms', 'Moms (%)', 'Artikeltyp', 'Lektionstyp', ''].map(h => (
+                {['Artikelnummer', 'Namn', 'Behörighet', 'Pris inkl. moms', 'Moms (%)', 'Artikeltyp', ''].map(h => (
                   <th key={h} className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -224,10 +399,12 @@ export function ArtiklarSettingsPage() {
                   <tr key={a.id} className="hover:bg-accent/20 transition-colors">
                     <td className="px-4 py-2.5 font-mono">{a.article_number}</td>
                     <td className="px-4 py-2.5 font-medium text-foreground">{a.name}</td>
-                    <td className="px-4 py-2.5">{fmtPrice(a.price_incl_vat)}</td>
-                    <td className="px-4 py-2.5">{a.vat_percent} %</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{a.licence_category ?? 'Alla'}</td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {a.price_incl_vat > 0 ? fmtPrice(a.price_incl_vat) : <span className="text-amber-700 dark:text-amber-400">Pris saknas</span>}
+                    </td>
+                    <td className="px-4 py-2.5 tabular-nums">{a.vat_percent} %</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{TYPE_LABELS[a.article_type]}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground truncate max-w-[160px]">{a.lesson_type ?? ''}</td>
                     <td className="px-4 py-2.5 text-right">
                       <button type="button" title="Redigera" onClick={() => openEdit(a)} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
                         <Pencil className="w-3.5 h-3.5" />
@@ -240,6 +417,14 @@ export function ArtiklarSettingsPage() {
           </table>
         </div>
       )}
+
+      <QuickCreateDialog
+        open={quickOpen}
+        onOpenChange={setQuickOpen}
+        orgId={orgId}
+        existing={articles}
+        onCreated={invalidate}
+      />
 
       {/* Create / Edit Dialog */}
       <Dialog open={sheetOpen} onOpenChange={setSheetOpen}>
@@ -283,6 +468,18 @@ export function ArtiklarSettingsPage() {
                 <Label htmlFor="art_vat">Moms (%)</Label>
                 <Input id="art_vat" type="number" min={0} max={100} value={form.vat_percent} onChange={e => setForm(f => ({ ...f, vat_percent: e.target.value }))} />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="art_cat">Behörighet</Label>
+              <select
+                id="art_cat"
+                value={form.licence_category}
+                onChange={(e) => setForm(f => ({ ...f, licence_category: e.target.value }))}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">Alla behörigheter</option>
+                {LICENCE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="art_lesson">Lektionstyp (valfri anteckning)</Label>

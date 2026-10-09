@@ -100,9 +100,6 @@ export function VehicleEntryCard({ index, entry, onChange }: { index: number; en
           </select>
         </Field>
       </div>
-      <Field label="Antal säten *">
-        <Input type="number" min={2} max={9} value={entry.seats} onChange={(e) => onChange({ seats: Number(e.target.value) || 5 })} className="max-w-[120px]" />
-      </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Registrering giltig t.o.m. *"><Input type="date" value={entry.registration_expires_at} onChange={(e) => onChange({ registration_expires_at: e.target.value })} /></Field>
         <Field label="Försäkring giltig t.o.m. *"><Input type="date" value={entry.insurance_expires_at} onChange={(e) => onChange({ insurance_expires_at: e.target.value })} /></Field>

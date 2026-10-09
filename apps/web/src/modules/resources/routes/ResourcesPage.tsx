@@ -420,10 +420,8 @@ function VehicleFormSheet({
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Antal säten" required>
-                <input className={inputCls} type="number" min={2} max={9}
-                  value={form.seats} onChange={(e) => set('seats', Number(e.target.value))} required />
-              </Field>
+              {/* Antal säten används inte av någon funktion i Trafikcloud och efterfrågas inte längre
+                  (värdet behålls oförändrat i databasen, standard 5). */}
               <Field label="Ägandeform" required>
                 <div className="relative">
                   <select className={selectCls} value={form.ownership_type}
